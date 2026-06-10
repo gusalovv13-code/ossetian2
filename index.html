@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Осетинский Маркет</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="phone">
+    <header class="topbar">
+      <button class="ghost" onclick="goBack()">Закрыть</button>
+      <div>
+        <h3 id="pageTitle">Осетинский Маркет</h3>
+        <p>мини-приложение</p>
+      </div>
+      <button class="circle">⋯</button>
+    </header>
+
+    <section id="home" class="page active">
+      <h1>Добро пожаловать!</h1>
+      <p class="muted">Что вы хотите сделать?</p>
+
+      <div class="menu">
+        <button onclick="showPage('catalog')" class="menu-card purple">
+          <span>🔍</span>
+          <div><b>Найти товар</b><small>Поиск по всем объявлениям</small></div>
+        </button>
+
+        <button onclick="showPage('create1')" class="menu-card blue">
+          <span>＋</span>
+          <div><b>Разместить объявление</b><small>Добавьте свой товар</small></div>
+        </button>
+
+        <button onclick="showPage('myAds')" class="menu-card cyan">
+          <span>📦</span>
+          <div><b>Мои объявления</b><small>Управление товарами</small></div>
+        </button>
+
+        <button onclick="showPage('favorites')" class="menu-card red">
+          <span>♡</span>
+          <div><b>Избранное</b><small>Сохранённые товары</small></div>
+        </button>
+      </div>
+    </section>
+
+    <section id="catalog" class="page">
+      <input class="search" placeholder="Поиск товаров..." />
+
+      <div class="categories">
+        <button class="active">Все</button>
+        <button>📱 Электроника</button>
+        <button>🚗 Авто</button>
+        <button>👕 Одежда</button>
+        <button>🏠 Дом</button>
+      </div>
+
+      <div id="productList" class="product-list"></div>
+    </section>
+
+    <section id="product" class="page">
+      <img id="productImage" class="hero-img" src="" alt="">
+      <h2 id="productName"></h2>
+      <h2 id="productPrice" class="price"></h2>
+      <p class="seller">👤 Владикавказ · 5 мин. назад</p>
+
+      <h4>Описание</h4>
+      <p id="productDesc" class="desc"></p>
+
+      <div class="actions">
+        <button onclick="alert('Открываем чат')" class="outline">💬 Написать</button>
+        <button onclick="alert('Звонок продавцу')" class="primary">📞 Позвонить</button>
+      </div>
+    </section>
+
+    <section id="create1" class="page">
+      <div class="steps"><b>1</b><span></span><b>2</b><span></span><b>3</b></div>
+
+      <label>Название товара</label>
+      <input id="adTitle" placeholder="Введите название" />
+
+      <label>Цена</label>
+      <input id="adPrice" placeholder="Укажите цену" />
+
+      <label>Категория</label>
+      <select id="adCategory">
+        <option>Электроника</option>
+        <option>Авто</option>
+        <option>Одежда</option>
+        <option>Дом</option>
+      </select>
+
+      <label>Описание</label>
+      <textarea id="adDesc" placeholder="Подробно опишите товар"></textarea>
+
+      <button class="primary wide" onclick="showPage('create2')">Продолжить</button>
+    </section>
+
+    <section id="create2" class="page">
+      <div class="steps"><b>✓</b><span></span><b>2</b><span></span><b>3</b></div>
+
+      <h3>Добавьте фото</h3>
+      <p class="muted">Максимум 5 фото</p>
+
+      <div class="photo-grid">
+        <button onclick="alert('Позже подключим загрузку фото')">📷<br>Добавить фото</button>
+        <div></div><div></div><div></div><div></div><div></div>
+      </div>
+
+      <button class="primary wide" onclick="showPage('create3')">Продолжить</button>
+    </section>
+
+    <section id="create3" class="page">
+      <div class="steps"><b>✓</b><span></span><b>✓</b><span></span><b>3</b></div>
+
+      <h3>Публикация</h3>
+
+      <label>Телефон</label>
+      <input placeholder="Ваш номер телефона" />
+
+      <div class="toggle-row">
+        <span>Разрешить сообщения в Telegram</span>
+        <input type="checkbox" checked />
+      </div>
+
+      <h4>Предпросмотр</h4>
+      <div id="previewCard" class="product-card"></div>
+
+      <button class="primary wide" onclick="publishAd()">Опубликовать объявление</button>
+    </section>
+
+    <section id="myAds" class="page">
+      <div class="tabs">
+        <button class="active">Активные</button>
+        <button>Проданные</button>
+        <button>Черновики</button>
+      </div>
+      <div id="myAdsList" class="product-list"></div>
+      <button class="primary wide fixed-btn" onclick="showPage('create1')">＋ Добавить объявление</button>
+    </section>
+
+    <section id="favorites" class="page">
+      <h2>Избранное</h2>
+      <p class="muted">Пока пусто. Сердечки ждут своего героя.</p>
+    </section>
+
+    <section id="chats" class="page">
+      <h2>Чаты</h2>
+      <p class="muted">Позже подключим Telegram-чаты.</p>
+    </section>
+
+    <section id="profile" class="page">
+      <div class="profile-card">
+        <div class="avatar">A</div>
+        <h3>Алан</h3>
+        <p>@alan_95</p>
+      </div>
+
+      <button onclick="showPage('myAds')" class="profile-row">📦 Мои объявления <b>5</b></button>
+      <button onclick="showPage('favorites')" class="profile-row">♡ Избранное <b>12</b></button>
+      <button onclick="showPage('chats')" class="profile-row">💬 Чаты</button>
+      <button class="profile-row">⚙️ Настройки</button>
+      <button class="profile-row">🛟 Поддержка</button>
+    </section>
+
+    <nav class="bottom-nav">
+      <button onclick="showPage('home')">⌂<small>Главная</small></button>
+      <button onclick="showPage('favorites')">♡<small>Избранное</small></button>
+      <button onclick="showPage('create1')" class="add-btn">＋</button>
+      <button onclick="showPage('chats')">💬<small>Чаты</small></button>
+      <button onclick="showPage('profile')">👤<small>Профиль</small></button>
+    </nav>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>

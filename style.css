@@ -1,0 +1,395 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #111;
+  font-family: Inter, Arial, sans-serif;
+  color: #1f2430;
+}
+
+.phone {
+  max-width: 430px;
+  min-height: 100vh;
+  margin: 0 auto;
+  background: #f7f8fc;
+  position: relative;
+  padding-bottom: 86px;
+  overflow: hidden;
+}
+
+.topbar {
+  height: 64px;
+  background: white;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid #edf0f5;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.topbar h3 {
+  margin: 0;
+  font-size: 15px;
+  text-align: center;
+}
+
+.topbar p {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: #9aa2b1;
+  text-align: center;
+}
+
+.ghost {
+  border: 0;
+  background: transparent;
+  color: #6d5dfc;
+}
+
+.circle {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid #dfe3ee;
+  background: white;
+}
+
+.page {
+  display: none;
+  padding: 22px 18px;
+  animation: fade .22s ease;
+}
+
+.page.active {
+  display: block;
+}
+
+@keyframes fade {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+h1 {
+  font-size: 28px;
+  margin-bottom: 4px;
+}
+
+.muted {
+  color: #8a93a5;
+  font-size: 14px;
+}
+
+.menu {
+  display: grid;
+  gap: 14px;
+  margin-top: 28px;
+}
+
+.menu-card {
+  border: 0;
+  background: white;
+  border-radius: 18px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  text-align: left;
+  box-shadow: 0 10px 25px rgba(35, 41, 60, .05);
+}
+
+.menu-card span {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  color: white;
+  font-size: 22px;
+}
+
+.menu-card small {
+  display: block;
+  color: #8a93a5;
+  margin-top: 3px;
+}
+
+.purple span { background: #6d5dfc; }
+.blue span { background: #4c7dff; }
+.cyan span { background: #31c4d9; }
+.red span { background: #ff5c7a; }
+
+.search,
+input,
+select,
+textarea {
+  width: 100%;
+  border: 0;
+  background: white;
+  border-radius: 14px;
+  padding: 15px;
+  margin: 8px 0 16px;
+  outline: none;
+  font-size: 14px;
+}
+
+textarea {
+  min-height: 120px;
+  resize: none;
+}
+
+label {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.categories,
+.tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 0 14px;
+}
+
+.categories button,
+.tabs button {
+  white-space: nowrap;
+  border: 0;
+  background: white;
+  padding: 10px 13px;
+  border-radius: 14px;
+  color: #596073;
+}
+
+.categories .active,
+.tabs .active {
+  background: #6d5dfc;
+  color: white;
+}
+
+.product-list {
+  display: grid;
+  gap: 12px;
+}
+
+.product-card {
+  background: white;
+  border-radius: 18px;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: 82px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  box-shadow: 0 10px 25px rgba(35, 41, 60, .05);
+}
+
+.product-card img {
+  width: 82px;
+  height: 82px;
+  border-radius: 14px;
+  object-fit: cover;
+  background: #e9ecf3;
+}
+
+.product-card h4 {
+  margin: 0 0 5px;
+  font-size: 15px;
+}
+
+.product-card b {
+  color: #222;
+}
+
+.product-card p {
+  margin: 4px 0;
+  color: #8a93a5;
+  font-size: 12px;
+}
+
+.heart {
+  border: 0;
+  background: transparent;
+  font-size: 22px;
+  color: #b5bdca;
+}
+
+.hero-img {
+  width: 100%;
+  height: 295px;
+  border-radius: 22px;
+  object-fit: cover;
+  background: #e6e9f2;
+}
+
+.price {
+  color: #6d5dfc;
+  margin-top: -5px;
+}
+
+.seller,
+.desc {
+  color: #687083;
+  line-height: 1.45;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  position: sticky;
+  bottom: 92px;
+}
+
+.primary,
+.outline {
+  border: 0;
+  border-radius: 15px;
+  padding: 15px;
+  font-weight: 700;
+}
+
+.primary {
+  background: linear-gradient(135deg, #7b61ff, #5f4af6);
+  color: white;
+}
+
+.outline {
+  background: white;
+  color: #6d5dfc;
+  border: 1px solid #d8d4ff;
+}
+
+.wide {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.steps {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.steps b {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #6d5dfc;
+  color: white;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+}
+
+.steps span {
+  flex: 1;
+  height: 2px;
+  background: #dfe3ee;
+}
+
+.photo-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 11px;
+}
+
+.photo-grid button,
+.photo-grid div {
+  aspect-ratio: 1;
+  border-radius: 16px;
+  border: 1px dashed #cbd2e1;
+  background: white;
+  color: #6d5dfc;
+}
+
+.toggle-row {
+  background: white;
+  padding: 15px;
+  border-radius: 16px;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.profile-card {
+  background: white;
+  border-radius: 22px;
+  text-align: center;
+  padding: 24px;
+  margin-bottom: 18px;
+}
+
+.avatar {
+  width: 72px;
+  height: 72px;
+  background: #edeaff;
+  color: #6d5dfc;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 32px;
+  font-weight: 800;
+  margin: auto;
+}
+
+.profile-row {
+  width: 100%;
+  border: 0;
+  background: white;
+  border-radius: 15px;
+  padding: 16px;
+  margin-bottom: 10px;
+  text-align: left;
+  display: flex;
+  justify-content: space-between;
+}
+
+.bottom-nav {
+  position: fixed;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  width: min(430px, 100%);
+  height: 72px;
+  background: white;
+  border-top: 1px solid #edf0f5;
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  z-index: 20;
+}
+
+.bottom-nav button {
+  border: 0;
+  background: transparent;
+  color: #8a93a5;
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+}
+
+.bottom-nav small {
+  font-size: 10px;
+  margin-top: 3px;
+}
+
+.add-btn {
+  width: 52px;
+  height: 52px;
+  border-radius: 18px !important;
+  background: #6d5dfc !important;
+  color: white !important;
+  font-size: 30px !important;
+  margin-top: -28px;
+  box-shadow: 0 10px 24px rgba(109, 93, 252, .35);
+}
+
+.fixed-btn {
+  position: sticky;
+  bottom: 90px;
+}
