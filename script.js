@@ -1,11 +1,13 @@
+
 // =====================
-// TELEGRAM USER
+// TELEGRAM INIT (FIXED FOR MOBILE + DESKTOP)
 // =====================
 let tgUser = null;
 
 function initTelegram() {
   if (window.Telegram && Telegram.WebApp) {
     Telegram.WebApp.ready();
+    Telegram.WebApp.expand();
 
     const user = Telegram.WebApp.initDataUnsafe?.user;
 
@@ -14,11 +16,19 @@ function initTelegram() {
         id: user.id,
         name: user.first_name,
         username: user.username || null,
-        photo: user.photo_url
+        photo: user.photo_url || null
       };
-
-      applyUserToUI();
+    } else {
+      // fallback (если открыт не через Telegram WebApp)
+      tgUser = {
+        id: "demo",
+        name: "Demo User",
+        username: "demo_user",
+        photo: null
+      };
     }
+
+    applyUserToUI();
   }
 }
 
@@ -80,7 +90,7 @@ function showPage(pageId) {
     profile: "Профиль"
   };
 
-  document.getElementById("pageTitle").innerText = titles[pageId];
+  document.getElementById("pageTitle").innerText = titles[pageId] || "Маркет";
 
   if (historyStack[historyStack.length - 1] !== pageId) {
     historyStack.push(pageId);
@@ -104,7 +114,8 @@ function goBack() {
 // =====================
 function getFilteredProducts() {
   return products.filter(p => {
-    const categoryMatch = currentCategory === "Все" || p.category === currentCategory;
+    const categoryMatch =
+      currentCategory === "Все" || p.category === currentCategory;
 
     const searchMatch =
       p.name.toLowerCase().includes(searchValue.toLowerCase()) ||
@@ -115,7 +126,7 @@ function getFilteredProducts() {
 }
 
 // =====================
-// MARKET
+// RENDER MARKET
 // =====================
 function renderProducts() {
   const list = document.getElementById("productList");
@@ -260,7 +271,8 @@ function openChat(username, productName) {
     `Привет! Интересует товар: ${productName}`
   );
 
-  window.open(`https://t.me/${username}?text=${text}`, "_blank");
+  // Telegram deep link (лучше чем https)
+  window.location.href = `https://t.me/${username}?text=${text}`;
 }
 
 // =====================
