@@ -9,16 +9,19 @@ body {
   color: #1f2430;
 }
 
+/* ===== APP CONTAINER ===== */
 .phone {
   max-width: 430px;
   min-height: 100vh;
   margin: 0 auto;
   background: #f7f8fc;
   position: relative;
-  padding-bottom: 86px;
+  padding-bottom: 110px;
   overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.4);
 }
 
+/* ===== TOP BAR ===== */
 .topbar {
   height: 64px;
   background: white;
@@ -59,10 +62,13 @@ body {
   background: white;
 }
 
+/* ===== PAGES ===== */
 .page {
   display: none;
   padding: 22px 18px;
   animation: fade .22s ease;
+  min-height: calc(100vh - 140px);
+  overflow-y: auto;
 }
 
 .page.active {
@@ -74,6 +80,7 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* ===== TEXT ===== */
 h1 {
   font-size: 28px;
   margin-bottom: 4px;
@@ -84,6 +91,7 @@ h1 {
   font-size: 14px;
 }
 
+/* ===== MENU ===== */
 .menu {
   display: grid;
   gap: 14px;
@@ -100,6 +108,11 @@ h1 {
   gap: 14px;
   text-align: left;
   box-shadow: 0 10px 25px rgba(35, 41, 60, .05);
+  transition: 0.2s;
+}
+
+.menu-card:active {
+  transform: scale(0.98);
 }
 
 .menu-card span {
@@ -123,6 +136,7 @@ h1 {
 .cyan span { background: #31c4d9; }
 .red span { background: #ff5c7a; }
 
+/* ===== INPUTS ===== */
 .search,
 input,
 select,
@@ -147,6 +161,7 @@ label {
   font-weight: 700;
 }
 
+/* ===== FILTERS ===== */
 .categories,
 .tabs {
   display: flex;
@@ -165,26 +180,33 @@ label {
   color: #596073;
 }
 
-.categories .active,
-.tabs .active {
+.categories button.active,
+.tabs button.active {
   background: #6d5dfc;
   color: white;
 }
 
+/* ===== PRODUCT LIST ===== */
 .product-list {
   display: grid;
   gap: 12px;
 }
 
+/* ===== PRODUCT CARD ===== */
 .product-card {
   background: white;
   border-radius: 18px;
   padding: 12px;
   display: grid;
-  grid-template-columns: 82px 1fr auto;
+  grid-template-columns: 82px minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
   box-shadow: 0 10px 25px rgba(35, 41, 60, .05);
+  transition: 0.2s;
+}
+
+.product-card:active {
+  transform: scale(0.98);
 }
 
 .product-card img {
@@ -195,9 +217,17 @@ label {
   background: #e9ecf3;
 }
 
+.product-card div {
+  min-width: 0;
+  overflow: hidden;
+}
+
 .product-card h4 {
   margin: 0 0 5px;
   font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .product-card b {
@@ -210,13 +240,21 @@ label {
   font-size: 12px;
 }
 
+/* ===== HEART ===== */
 .heart {
   border: 0;
   background: transparent;
   font-size: 22px;
   color: #b5bdca;
+  cursor: pointer;
+  transition: 0.2s;
 }
 
+.heart:active {
+  transform: scale(0.9);
+}
+
+/* ===== PRODUCT PAGE ===== */
 .hero-img {
   width: 100%;
   height: 295px;
@@ -236,6 +274,7 @@ label {
   line-height: 1.45;
 }
 
+/* ===== ACTIONS ===== */
 .actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -268,6 +307,7 @@ label {
   margin-top: 12px;
 }
 
+/* ===== STEPS ===== */
 .steps {
   display: flex;
   align-items: center;
@@ -292,6 +332,7 @@ label {
   background: #dfe3ee;
 }
 
+/* ===== PHOTO GRID ===== */
 .photo-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -307,6 +348,7 @@ label {
   color: #6d5dfc;
 }
 
+/* ===== TOGGLE ===== */
 .toggle-row {
   background: white;
   padding: 15px;
@@ -316,6 +358,7 @@ label {
   margin-bottom: 16px;
 }
 
+/* ===== PROFILE ===== */
 .profile-card {
   background: white;
   border-radius: 22px;
@@ -347,8 +390,14 @@ label {
   text-align: left;
   display: flex;
   justify-content: space-between;
+  transition: 0.2s;
 }
 
+.profile-row:active {
+  transform: scale(0.98);
+}
+
+/* ===== BOTTOM NAV ===== */
 .bottom-nav {
   position: fixed;
   left: 50%;
@@ -389,7 +438,26 @@ label {
   box-shadow: 0 10px 24px rgba(109, 93, 252, .35);
 }
 
+/* ===== FIX BUTTON POSITION ===== */
 .fixed-btn {
   position: sticky;
   bottom: 90px;
+}
+
+body {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+* {
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+html, body {
+  overflow-x: hidden;
 }
