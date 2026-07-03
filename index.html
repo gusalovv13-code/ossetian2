@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Осетинский Маркет</title>
-  <link rel="stylesheet" href="style.css?v=100" />
+  <link rel="stylesheet" href="style.css?v=101" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
@@ -64,14 +64,19 @@
       <h2 id="productName"></h2>
       <h2 id="productPrice" class="price"></h2>
       <p class="seller">👤 Владикавказ · 5 мин. назад</p>
+      <div class="seller-info">
+  <p id="productSeller">Продавец</p>
+  <p id="productLocation">Город</p>
+  <p id="productPhoneLine">Телефон</p>
+</div>
 
       <h4>Описание</h4>
       <p id="productDesc" class="desc"></p>
 
       <div class="actions">
-        <button onclick="alert('Открываем чат')" class="outline">💬 Написать</button>
-        <button onclick="alert('Звонок продавцу')" class="primary">📞 Позвонить</button>
-      </div>
+  <button id="messageBtn" class="outline">💬 Написать</button>
+  <button id="callBtn" class="primary">📞 Позвонить</button>
+</div>
     </section>
 
     <section id="create1" class="page">
@@ -116,12 +121,24 @@
 
       <h3>Публикация</h3>
 
-      <label>Телефон</label>
-      <input placeholder="Ваш номер телефона" />
+      <label>Город</label>
+<select id="adLocation">
+  <option>Владикавказ</option>
+  <option>Беслан</option>
+  <option>Алагир</option>
+  <option>Ардон</option>
+  <option>Дигора</option>
+  <option>Моздок</option>
+  <option>Чикола</option>
+  <option>Другое</option>
+</select>
+
+<label>Телефон</label>
+<input id="adPhone" placeholder="+7 999 123-45-67" />
 
       <div class="toggle-row">
         <span>Разрешить сообщения в Telegram</span>
-        <input type="checkbox" checked />
+        <input id="adAllowMessages" type="checkbox" checked />
       </div>
 
       <h4>Предпросмотр</h4>
@@ -173,6 +190,6 @@
     </nav>
   </main>
 
-  <script src="script.js?v=100"></script>
+  <script src="script.js?v=101"></script>
 </body>
 </html>

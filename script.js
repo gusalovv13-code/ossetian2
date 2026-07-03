@@ -440,6 +440,11 @@ async function openProduct(id) {
   const priceEl = document.getElementById("productPrice");
   const descEl = document.getElementById("productDesc");
   const sellerEl = document.querySelector("#product .seller");
+  const productSeller = document.getElementById("productSeller");
+const productLocation = document.getElementById("productLocation");
+const productPhoneLine = document.getElementById("productPhoneLine");
+const messageBtn = document.getElementById("messageBtn");
+const callBtn = document.getElementById("callBtn");
 
   if (imageEl) imageEl.src = product.image || DEFAULT_IMAGE;
   if (nameEl) nameEl.innerText = product.name;
@@ -449,6 +454,64 @@ async function openProduct(id) {
   if (sellerEl) {
     sellerEl.innerText = `📍 ${product.location || "Владикавказ"} · ${getTimeAgo(product.createdAt)} · 👁 ${product.views || 0}`;
   }
+
+  const sellerName = product.ownerName || "Продавец";
+const sellerUsername = product.ownerUsername || "";
+const sellerPhone = product.phone || "";
+const allowMessages = product.allowMessages !== false;
+
+if (productSeller) {
+  productSeller.innerText = sellerUsername
+    ? `👤 ${sellerName} · @${sellerUsername}`
+    : `👤 ${sellerName}`;
+}
+
+if (productLocation) {
+  productLocation.innerText = `📍 ${product.location || "Владикавказ"}`;
+}
+
+if (productPhoneLine) {
+  productPhoneLine.innerText = sellerPhone
+    ? `📞 ${sellerPhone}`
+    : "📞 Телефон не указан";
+}
+
+if (messageBtn) {
+  if (allowMessages && sellerUsername) {
+    messageBtn.disabled = false;
+    messageBtn.innerText = "💬 Написать";
+    messageBtn.onclick = () => {
+      const url = `https://t.me/${sellerUsername}`;
+
+      const webApp = window.Telegram?.WebApp;
+
+      if (webApp?.openTelegramLink) {
+        webApp.openTelegramLink(url);
+      } else {
+        window.open(url, "_blank");
+      }
+    };
+  } else {
+    messageBtn.disabled = true;
+    messageBtn.innerText = "💬 Недоступно";
+    messageBtn.onclick = null;
+  }
+}
+
+if (callBtn) {
+  if (sellerPhone) {
+    callBtn.disabled = false;
+    callBtn.innerText = "📞 Позвонить";
+    callBtn.onclick = () => {
+      const cleanPhone = sellerPhone.replace(/[^\d+]/g, "");
+      window.location.href = `tel:${cleanPhone}`;
+    };
+  } else {
+    callBtn.disabled = true;
+    callBtn.innerText = "📞 Нет номера";
+    callBtn.onclick = null;
+  }
+}
 
   showPage("product");
 }
@@ -462,7 +525,10 @@ function getAdFormData() {
     title: document.getElementById("adTitle")?.value.trim() || "",
     price: document.getElementById("adPrice")?.value.trim() || "",
     category: document.getElementById("adCategory")?.value || "Другое",
-    desc: document.getElementById("adDesc")?.value.trim() || ""
+    desc: document.getElementById("adDesc")?.value.trim() || "",
+    location: document.getElementById("adLocation")?.value || "Владикавказ",
+    phone: document.getElementById("adPhone")?.value.trim() || "",
+    allowMessages: document.getElementById("adAllowMessages")?.checked !== false
   };
 }
 
@@ -504,7 +570,7 @@ function updatePreviewCard() {
     <div>
       <h4>${ad.title || "Название товара"}</h4>
       <b>${formatPrice(ad.price) || ad.price || "Цена не указана"}</b>
-      <p>${ad.category}</p>
+      <p>${ad.category} · ${ad.location}</p>
     </div>
   `;
 }
@@ -538,16 +604,18 @@ async function publishAd() {
     const data = await apiRequest("/api/products", {
       method: "POST",
       body: JSON.stringify({
-        ownerId: state.telegramUser.id,
-        ownerName,
-        ownerUsername: state.telegramUser.username || "",
-        name: ad.title,
-        price: formatPrice(ad.price) || ad.price,
-        category: ad.category,
-        desc: ad.desc,
-        image: draftAd.image || DEFAULT_IMAGE,
-        location: "Владикавказ"
-      })
+  ownerId: state.telegramUser.id,
+  ownerName,
+  ownerUsername: state.telegramUser.username || "",
+  name: ad.title,
+  price: formatPrice(ad.price) || ad.price,
+  category: ad.category,
+  desc: ad.desc,
+  image: draftAd.image || DEFAULT_IMAGE,
+  location: ad.location,
+  phone: ad.phone,
+  allowMessages: ad.allowMessages
+})
     });
 
     state.products.unshift(data.product);
@@ -570,6 +638,9 @@ function clearCreateForm() {
   const category = document.getElementById("adCategory");
   const preview = document.getElementById("previewCard");
   const photoInput = document.getElementById("photoInput");
+  const location = document.getElementById("adLocation");
+const phone = document.getElementById("adPhone");
+const allowMessages = document.getElementById("adAllowMessages");
 
   if (title) title.value = "";
   if (price) price.value = "";
@@ -577,6 +648,9 @@ function clearCreateForm() {
   if (category) category.selectedIndex = 0;
   if (preview) preview.innerHTML = "";
   if (photoInput) photoInput.value = "";
+  if (location) location.selectedIndex = 0;
+if (phone) phone.value = "";
+if (allowMessages) allowMessages.checked = true;
 
   draftAd.image = "";
 

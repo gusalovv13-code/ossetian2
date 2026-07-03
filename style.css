@@ -460,3 +460,21 @@ textarea {
 
   display: block !important;
 }
+
+.seller-info {
+  background: white;
+  border-radius: 18px;
+  padding: 14px;
+  margin: 12px 0 16px;
+  box-shadow: 0 10px 25px rgba(35, 41, 60, .05);
+}
+
+.seller-info p {
+  margin: 6px 0;
+  color: #687083;
+  font-size: 14px;
+}
+
+.actions button:disabled {
+  opacity: 0.5;
+}
