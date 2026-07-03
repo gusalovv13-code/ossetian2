@@ -11,6 +11,7 @@ const state = {
   search: "",
   category: "Все",
   openedProductId: null,
+  telegramUser: null,
   products: JSON.parse(localStorage.getItem("products")) || [],
   favorites: JSON.parse(localStorage.getItem("favorites")) || []
 };
@@ -18,6 +19,10 @@ const state = {
 const draftAd = {
   image: ""
 };
+
+/* =======================
+   INIT DATA
+======================= */
 
 if (state.products.length === 0) {
   state.products = [
@@ -62,10 +67,18 @@ if (state.products.length === 0) {
   save();
 }
 
+/* =======================
+   SAVE
+======================= */
+
 function save() {
   localStorage.setItem("products", JSON.stringify(state.products));
   localStorage.setItem("favorites", JSON.stringify(state.favorites));
 }
+
+/* =======================
+   NAVIGATION
+======================= */
 
 function showPage(page, addToHistory = true) {
   if (addToHistory && state.page !== page) {
@@ -74,10 +87,14 @@ function showPage(page, addToHistory = true) {
 
   state.page = page;
 
-  document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
+  document.querySelectorAll(".page").forEach(pageEl => {
+    pageEl.classList.remove("active");
+  });
 
-  const el = document.getElementById(page);
-  if (el) el.classList.add("active");
+  const targetPage = document.getElementById(page);
+  if (targetPage) {
+    targetPage.classList.add("active");
+  }
 
   const titles = {
     home: "Осетинский Маркет",
@@ -93,11 +110,17 @@ function showPage(page, addToHistory = true) {
   };
 
   const titleEl = document.getElementById("pageTitle");
-  if (titleEl) titleEl.innerText = titles[page] || "Осетинский Маркет";
+  if (titleEl) {
+    titleEl.innerText = titles[page] || "Осетинский Маркет";
+  }
 
   updateBottomNav();
   render();
-  window.scrollTo({ top: 0, behavior: "smooth" });
+
+  window.scrollTo({
+    top: 0,
+    behavior: "smooth"
+  });
 }
 
 function goBack() {
@@ -113,22 +136,24 @@ function goBack() {
     return;
   }
 
-  if (tg) {
-    tg.close();
+  const webApp = window.Telegram?.WebApp;
+
+  if (webApp) {
+    webApp.close();
   }
 }
 
 function updateBottomNav() {
-  document.querySelectorAll(".bottom-nav button").forEach(btn => {
-    btn.classList.remove("active");
+  document.querySelectorAll(".bottom-nav button").forEach(button => {
+    button.classList.remove("active");
 
-    const action = btn.getAttribute("onclick") || "";
+    const action = button.getAttribute("onclick") || "";
 
     if (
       action.includes(`'${state.page}'`) ||
       action.includes(`"${state.page}"`)
     ) {
-      btn.classList.add("active");
+      button.classList.add("active");
     }
   });
 
@@ -136,6 +161,10 @@ function updateBottomNav() {
     document.querySelector(".add-btn")?.classList.add("active");
   }
 }
+
+/* =======================
+   HELPERS
+======================= */
 
 function formatPrice(value) {
   const onlyNums = String(value).replace(/[^\d]/g, "");
@@ -156,6 +185,7 @@ function getTimeAgo(timestamp) {
   if (minutes < 1) return "только что";
   if (minutes < 60) return `${minutes} мин. назад`;
   if (hours < 24) return `${hours} ч. назад`;
+
   return `${days} дн. назад`;
 }
 
@@ -175,6 +205,10 @@ function getFiltered() {
   });
 }
 
+/* =======================
+   RENDER
+======================= */
+
 function render() {
   renderProducts();
   renderMyAds();
@@ -183,13 +217,13 @@ function render() {
 }
 
 function renderProducts() {
-  const el = document.getElementById("productList");
-  if (!el || state.page !== "catalog") return;
+  const productList = document.getElementById("productList");
+  if (!productList || state.page !== "catalog") return;
 
-  const data = getFiltered();
+  const products = getFiltered();
 
-  if (data.length === 0) {
-    el.innerHTML = `
+  if (products.length === 0) {
+    productList.innerHTML = `
       <div class="empty-state">
         <h3>Ничего не найдено</h3>
         <p class="muted">Попробуйте изменить поиск или категорию.</p>
@@ -198,7 +232,9 @@ function renderProducts() {
     return;
   }
 
-  el.innerHTML = data.map(product => getProductCard(product)).join("");
+  productList.innerHTML = products
+    .map(product => getProductCard(product))
+    .join("");
 }
 
 function getProductCard(product, options = {}) {
@@ -211,7 +247,11 @@ function getProductCard(product, options = {}) {
         <h4>${product.name}</h4>
         <b>${product.price}</b>
         <p>${product.location || "Владикавказ"} · ${getTimeAgo(product.createdAt)}</p>
-        ${options.showStatus ? `<p>${product.status === "sold" ? "Продано" : "Активно"}</p>` : ""}
+        ${
+          options.showStatus
+            ? `<p>${product.status === "sold" ? "Продано" : "Активно"}</p>`
+            : ""
+        }
       </div>
       ${
         options.deleteButton
@@ -223,13 +263,13 @@ function getProductCard(product, options = {}) {
 }
 
 function renderMyAds() {
-  const el = document.getElementById("myAdsList");
-  if (!el || state.page !== "myAds") return;
+  const myAdsList = document.getElementById("myAdsList");
+  if (!myAdsList || state.page !== "myAds") return;
 
   const ads = state.products.filter(product => product.status !== "deleted");
 
   if (ads.length === 0) {
-    el.innerHTML = `
+    myAdsList.innerHTML = `
       <div class="empty-state">
         <h3>У вас пока нет объявлений</h3>
         <p class="muted">Добавьте первый товар на маркет.</p>
@@ -238,19 +278,26 @@ function renderMyAds() {
     return;
   }
 
-  el.innerHTML = ads
-    .map(product => getProductCard(product, { deleteButton: true, showStatus: true }))
+  myAdsList.innerHTML = ads
+    .map(product =>
+      getProductCard(product, {
+        deleteButton: true,
+        showStatus: true
+      })
+    )
     .join("");
 }
 
 function renderFavorites() {
-  const el = document.getElementById("favorites");
-  if (!el || state.page !== "favorites") return;
+  const favoritesPage = document.getElementById("favorites");
+  if (!favoritesPage || state.page !== "favorites") return;
 
-  const favs = state.products.filter(product => state.favorites.includes(product.id));
+  const favs = state.products.filter(product =>
+    state.favorites.includes(product.id)
+  );
 
   if (favs.length === 0) {
-    el.innerHTML = `
+    favoritesPage.innerHTML = `
       <h2>Избранное</h2>
       <div class="empty-state">
         <h3>Пока пусто</h3>
@@ -260,7 +307,7 @@ function renderFavorites() {
     return;
   }
 
-  el.innerHTML = `
+  favoritesPage.innerHTML = `
     <h2>Избранное</h2>
     <div class="product-list">
       ${favs.map(product => getProductCard(product)).join("")}
@@ -287,6 +334,10 @@ function renderProfileCounters() {
   });
 }
 
+/* =======================
+   FAVORITES
+======================= */
+
 function toggleFav(id) {
   if (state.favorites.includes(id)) {
     state.favorites = state.favorites.filter(favId => favId !== id);
@@ -297,6 +348,10 @@ function toggleFav(id) {
   save();
   render();
 }
+
+/* =======================
+   PRODUCT PAGE
+======================= */
 
 function openProduct(id) {
   const product = state.products.find(item => item.id === id);
@@ -324,6 +379,10 @@ function openProduct(id) {
   showPage("product");
 }
 
+/* =======================
+   CREATE AD
+======================= */
+
 function getAdFormData() {
   return {
     title: document.getElementById("adTitle")?.value.trim() || "",
@@ -336,9 +395,20 @@ function getAdFormData() {
 function goCreateStep2() {
   const ad = getAdFormData();
 
-  if (!ad.title) return alert("Введите название товара");
-  if (!ad.price) return alert("Укажите цену");
-  if (!ad.desc) return alert("Добавьте описание");
+  if (!ad.title) {
+    alert("Введите название товара");
+    return;
+  }
+
+  if (!ad.price) {
+    alert("Укажите цену");
+    return;
+  }
+
+  if (!ad.desc) {
+    alert("Добавьте описание");
+    return;
+  }
 
   showPage("create2");
 }
@@ -367,9 +437,20 @@ function updatePreviewCard() {
 function publishAd() {
   const ad = getAdFormData();
 
-  if (!ad.title) return alert("Введите название товара");
-  if (!ad.price) return alert("Укажите цену");
-  if (!ad.desc) return alert("Добавьте описание");
+  if (!ad.title) {
+    alert("Введите название товара");
+    return;
+  }
+
+  if (!ad.price) {
+    alert("Укажите цену");
+    return;
+  }
+
+  if (!ad.desc) {
+    alert("Добавьте описание");
+    return;
+  }
 
   const newProduct = {
     id: generateId(),
@@ -388,6 +469,7 @@ function publishAd() {
   save();
   clearCreateForm();
   showPage("myAds");
+
   alert("Объявление опубликовано");
 }
 
@@ -414,6 +496,10 @@ function clearCreateForm() {
   });
 }
 
+/* =======================
+   DELETE AD
+======================= */
+
 function deleteAd(id) {
   const ok = confirm("Удалить объявление?");
   if (!ok) return;
@@ -425,119 +511,138 @@ function deleteAd(id) {
   render();
 }
 
-document.getElementById("searchInput")?.addEventListener("input", event => {
-  state.search = event.target.value;
-  render();
-});
+/* =======================
+   EVENTS
+======================= */
 
-document.querySelectorAll(".categories button").forEach(button => {
-  button.addEventListener("click", () => {
-    document.querySelectorAll(".categories button").forEach(item => {
-      item.classList.remove("active");
-    });
+function initEvents() {
+  const searchInput =
+    document.getElementById("searchInput") || document.querySelector(".search");
 
-    button.classList.add("active");
-
-    state.category = button.innerText
-      .replace(/[📱🚗👕🏠]/g, "")
-      .trim();
-
+  searchInput?.addEventListener("input", event => {
+    state.search = event.target.value;
     render();
   });
-});
 
-document.getElementById("adPrice")?.addEventListener("blur", event => {
-  const formatted = formatPrice(event.target.value);
-  if (formatted) event.target.value = formatted;
-});
+  document.querySelectorAll(".categories button").forEach(button => {
+    button.addEventListener("click", () => {
+      document.querySelectorAll(".categories button").forEach(item => {
+        item.classList.remove("active");
+      });
 
-["adTitle", "adPrice", "adDesc", "adCategory"].forEach(id => {
-  document.getElementById(id)?.addEventListener("input", updatePreviewCard);
-  document.getElementById(id)?.addEventListener("change", updatePreviewCard);
-});
+      button.classList.add("active");
 
-document.getElementById("addPhotoBtn")?.addEventListener("click", () => {
-  document.getElementById("photoInput")?.click();
-});
+      state.category = button.innerText
+        .replace(/[📱🚗👕🏠]/g, "")
+        .trim();
 
-document.getElementById("photoInput")?.addEventListener("change", event => {
-  const file = event.target.files[0];
-  if (!file) return;
+      render();
+    });
+  });
 
-  if (!file.type.startsWith("image/")) {
-    alert("Выберите изображение");
+  document.getElementById("adPrice")?.addEventListener("blur", event => {
+    const formatted = formatPrice(event.target.value);
+    if (formatted) event.target.value = formatted;
+  });
+
+  ["adTitle", "adPrice", "adDesc", "adCategory"].forEach(id => {
+    document.getElementById(id)?.addEventListener("input", updatePreviewCard);
+    document.getElementById(id)?.addEventListener("change", updatePreviewCard);
+  });
+
+  document.getElementById("addPhotoBtn")?.addEventListener("click", () => {
+    document.getElementById("photoInput")?.click();
+  });
+
+  document.getElementById("photoInput")?.addEventListener("change", event => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      alert("Выберите изображение");
+      return;
+    }
+
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      draftAd.image = reader.result;
+
+      const firstCell = document.querySelector(".photo-grid div");
+
+      if (firstCell) {
+        firstCell.innerHTML = `<img src="${draftAd.image}" alt="Фото товара">`;
+        firstCell.classList.add("filled");
+      }
+
+      updatePreviewCard();
+    };
+
+    reader.readAsDataURL(file);
+  });
+}
+
+/* =======================
+   TELEGRAM USER SAFE
+======================= */
+
+function initTelegramUser() {
+  const webApp = window.Telegram?.WebApp;
+
+  const avatar = document.querySelector(".profile-card .avatar");
+  const name =
+    document.getElementById("profileName") ||
+    document.querySelector(".profile-card h3");
+  const nick =
+    document.getElementById("profileUsername") ||
+    document.querySelector(".profile-card p");
+
+  if (!webApp) {
+    if (avatar) avatar.innerText = "?";
+    if (name) name.innerText = "Пользователь";
+    if (nick) nick.innerText = "Откройте через Telegram";
     return;
   }
 
-  const reader = new FileReader();
+  webApp.ready();
+  webApp.expand();
 
-  reader.onload = () => {
-    draftAd.image = reader.result;
+  const user = webApp.initDataUnsafe?.user;
 
-    const firstCell = document.querySelector(".photo-grid div");
+  if (!user) {
+    if (avatar) avatar.innerText = "?";
+    if (name) name.innerText = "Пользователь";
+    if (nick) nick.innerText = "Telegram не передал профиль";
+    return;
+  }
 
-    if (firstCell) {
-      firstCell.innerHTML = `<img src="${draftAd.image}" alt="Фото товара">`;
-      firstCell.classList.add("filled");
-    }
+  const firstName = user.first_name || "Пользователь";
+  const lastName = user.last_name || "";
+  const username = user.username || "";
+  const fullName = `${firstName} ${lastName}`.trim();
 
-    updatePreviewCard();
+  state.telegramUser = {
+    id: user.id,
+    firstName,
+    lastName,
+    username,
+    photoUrl: user.photo_url || ""
   };
 
-  reader.readAsDataURL(file);
-});
+  if (avatar) avatar.innerText = firstName[0]?.toUpperCase() || "?";
+  if (name) name.innerText = fullName;
+  if (nick) nick.innerText = username ? `@${username}` : "без username";
+}
 
 /* =======================
-   TELEGRAM MINI APP
+   INIT
 ======================= */
 
-const tg = window.Telegram?.WebApp;
-
-function initTelegram() {
-  if (!tg) return;
-
-  tg.ready();
-  tg.expand();
-
-  const user = tg.initDataUnsafe?.user;
-
-  if (user) {
-    state.telegramUser = {
-      id: user.id,
-      firstName: user.first_name || "Пользователь",
-      lastName: user.last_name || "",
-      username: user.username || "",
-      photoUrl: user.photo_url || ""
-    };
-
-    renderTelegramProfile();
-  }
+function initApp() {
+  initEvents();
+  initTelegramUser();
+  render();
+  updateBottomNav();
 }
 
-function renderTelegramProfile() {
-  const user = state.telegramUser;
-  if (!user) return;
-
-  const avatar = document.querySelector(".profile-card .avatar");
-  const name = document.querySelector(".profile-card h3");
-  const username = document.querySelector(".profile-card p");
-
-  const fullName = `${user.firstName} ${user.lastName}`.trim();
-
-  if (avatar) {
-    avatar.innerText = user.firstName[0]?.toUpperCase() || "U";
-  }
-
-  if (name) {
-    name.innerText = fullName;
-  }
-
-  if (username) {
-    username.innerText = user.username ? `@${user.username}` : "Telegram-пользователь";
-  }
-}
-
-initTelegram();
-
-render();
-updateBottomNav();
+initApp();
