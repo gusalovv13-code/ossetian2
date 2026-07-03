@@ -102,19 +102,26 @@
       <button class="primary wide" onclick="showPage('create2')">Продолжить</button>
     </section>
 
-    <section id="create2" class="page">
-      <div class="steps"><b>✓</b><span></span><b>2</b><span></span><b>3</b></div>
+   <section id="create2" class="page">
+  <div class="steps">
+    <b>✓</b><span></span><b>2</b><span></span><b>3</b>
+  </div>
 
-      <h3>Добавьте фото</h3>
-      <p class="muted">Максимум 5 фото</p>
+  <h3>Фото объявления</h3>
+  <p class="muted">Добавьте фото товара. Так объявление будет выглядеть лучше.</p>
 
-      <div class="photo-grid">
-        <button onclick="alert('Позже подключим загрузку фото')">📷<br>Добавить фото</button>
-        <div></div><div></div><div></div><div></div><div></div>
-      </div>
+  <div class="photo-box" onclick="document.getElementById('photoInput').click()">
+    <input id="photoInput" type="file" accept="image/*" hidden>
 
-      <button class="primary wide" onclick="showPage('create3')">Продолжить</button>
-    </section>
+    <div id="photoPreview" class="photo-preview">
+      <div class="photo-plus">＋</div>
+      <p>Нажмите, чтобы добавить фото</p>
+    </div>
+  </div>
+
+  <button class="outline wide" onclick="goBack()">Назад</button>
+  <button class="primary wide" onclick="showPage('create3')">Далее</button>
+</section>
 
     <section id="create3" class="page">
       <div class="steps"><b>✓</b><span></span><b>✓</b><span></span><b>3</b></div>
@@ -190,6 +197,6 @@
     </nav>
   </main>
 
-  <script src="script.js?v=101"></script>
+  <script src="script.js?v=109"></script>
 </body>
 </html>

@@ -34,10 +34,16 @@ async function apiRequest(url, options = {}) {
     ...options
   });
 
-  const data = await response.json();
+  let data;
 
-  if (!data.ok) {
-    throw new Error(data.error || "Ошибка сервера");
+  try {
+    data = await response.json();
+  } catch (error) {
+    throw new Error(`Сервер вернул не JSON. Статус: ${response.status}`);
+  }
+
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || `Ошибка сервера: ${response.status}`);
   }
 
   return data;
@@ -139,6 +145,10 @@ function showPage(page, addToHistory = true) {
     loadFavorites();
   }
 
+  if (page === "create3") {
+    updatePreviewCard();
+  }
+
   render();
 
   window.scrollTo({
@@ -226,6 +236,49 @@ function getFiltered() {
       state.category === "Все" || product.category === state.category;
 
     return matchSearch && matchCategory && product.status !== "deleted";
+  });
+}
+
+function compressImage(file, maxWidth = 900, quality = 0.72) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = event => {
+      const img = new Image();
+
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxWidth) {
+          height = Math.round((height * maxWidth) / width);
+          width = maxWidth;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+
+        const compressedImage = canvas.toDataURL("image/jpeg", quality);
+        resolve(compressedImage);
+      };
+
+      img.onerror = () => {
+        reject(new Error("Не удалось обработать изображение"));
+      };
+
+      img.src = event.target.result;
+    };
+
+    reader.onerror = () => {
+      reject(new Error("Не удалось прочитать файл"));
+    };
+
+    reader.readAsDataURL(file);
   });
 }
 
@@ -418,7 +471,8 @@ async function toggleFav(id) {
 ======================= */
 
 async function openProduct(id) {
-  const product = state.products.find(item => item.id === id) ||
+  const product =
+    state.products.find(item => item.id === id) ||
     state.myProducts.find(item => item.id === id);
 
   if (!product) return;
@@ -441,10 +495,10 @@ async function openProduct(id) {
   const descEl = document.getElementById("productDesc");
   const sellerEl = document.querySelector("#product .seller");
   const productSeller = document.getElementById("productSeller");
-const productLocation = document.getElementById("productLocation");
-const productPhoneLine = document.getElementById("productPhoneLine");
-const messageBtn = document.getElementById("messageBtn");
-const callBtn = document.getElementById("callBtn");
+  const productLocation = document.getElementById("productLocation");
+  const productPhoneLine = document.getElementById("productPhoneLine");
+  const messageBtn = document.getElementById("messageBtn");
+  const callBtn = document.getElementById("callBtn");
 
   if (imageEl) imageEl.src = product.image || DEFAULT_IMAGE;
   if (nameEl) nameEl.innerText = product.name;
@@ -456,62 +510,61 @@ const callBtn = document.getElementById("callBtn");
   }
 
   const sellerName = product.ownerName || "Продавец";
-const sellerUsername = product.ownerUsername || "";
-const sellerPhone = product.phone || "";
-const allowMessages = product.allowMessages !== false;
+  const sellerUsername = product.ownerUsername || "";
+  const sellerPhone = product.phone || "";
+  const allowMessages = product.allowMessages !== false;
 
-if (productSeller) {
-  productSeller.innerText = sellerUsername
-    ? `👤 ${sellerName} · @${sellerUsername}`
-    : `👤 ${sellerName}`;
-}
-
-if (productLocation) {
-  productLocation.innerText = `📍 ${product.location || "Владикавказ"}`;
-}
-
-if (productPhoneLine) {
-  productPhoneLine.innerText = sellerPhone
-    ? `📞 ${sellerPhone}`
-    : "📞 Телефон не указан";
-}
-
-if (messageBtn) {
-  if (allowMessages && sellerUsername) {
-    messageBtn.disabled = false;
-    messageBtn.innerText = "💬 Написать";
-    messageBtn.onclick = () => {
-      const url = `https://t.me/${sellerUsername}`;
-
-      const webApp = window.Telegram?.WebApp;
-
-      if (webApp?.openTelegramLink) {
-        webApp.openTelegramLink(url);
-      } else {
-        window.open(url, "_blank");
-      }
-    };
-  } else {
-    messageBtn.disabled = true;
-    messageBtn.innerText = "💬 Недоступно";
-    messageBtn.onclick = null;
+  if (productSeller) {
+    productSeller.innerText = sellerUsername
+      ? `👤 ${sellerName} · @${sellerUsername}`
+      : `👤 ${sellerName}`;
   }
-}
 
-if (callBtn) {
-  if (sellerPhone) {
-    callBtn.disabled = false;
-    callBtn.innerText = "📞 Позвонить";
-    callBtn.onclick = () => {
-      const cleanPhone = sellerPhone.replace(/[^\d+]/g, "");
-      window.location.href = `tel:${cleanPhone}`;
-    };
-  } else {
-    callBtn.disabled = true;
-    callBtn.innerText = "📞 Нет номера";
-    callBtn.onclick = null;
+  if (productLocation) {
+    productLocation.innerText = `📍 ${product.location || "Владикавказ"}`;
   }
-}
+
+  if (productPhoneLine) {
+    productPhoneLine.innerText = sellerPhone
+      ? `📞 ${sellerPhone}`
+      : "📞 Телефон не указан";
+  }
+
+  if (messageBtn) {
+    if (allowMessages && sellerUsername) {
+      messageBtn.disabled = false;
+      messageBtn.innerText = "💬 Написать";
+      messageBtn.onclick = () => {
+        const url = `https://t.me/${sellerUsername}`;
+        const webApp = window.Telegram?.WebApp;
+
+        if (webApp?.openTelegramLink) {
+          webApp.openTelegramLink(url);
+        } else {
+          window.open(url, "_blank");
+        }
+      };
+    } else {
+      messageBtn.disabled = true;
+      messageBtn.innerText = "💬 Недоступно";
+      messageBtn.onclick = null;
+    }
+  }
+
+  if (callBtn) {
+    if (sellerPhone) {
+      callBtn.disabled = false;
+      callBtn.innerText = "📞 Позвонить";
+      callBtn.onclick = () => {
+        const cleanPhone = sellerPhone.replace(/[^\d+]/g, "");
+        window.location.href = `tel:${cleanPhone}`;
+      };
+    } else {
+      callBtn.disabled = true;
+      callBtn.innerText = "📞 Нет номера";
+      callBtn.onclick = null;
+    }
+  }
 
   showPage("product");
 }
@@ -604,18 +657,18 @@ async function publishAd() {
     const data = await apiRequest("/api/products", {
       method: "POST",
       body: JSON.stringify({
-  ownerId: state.telegramUser.id,
-  ownerName,
-  ownerUsername: state.telegramUser.username || "",
-  name: ad.title,
-  price: formatPrice(ad.price) || ad.price,
-  category: ad.category,
-  desc: ad.desc,
-  image: draftAd.image || DEFAULT_IMAGE,
-  location: ad.location,
-  phone: ad.phone,
-  allowMessages: ad.allowMessages
-})
+        ownerId: state.telegramUser.id,
+        ownerName,
+        ownerUsername: state.telegramUser.username || "",
+        name: ad.title,
+        price: formatPrice(ad.price) || ad.price,
+        category: ad.category,
+        desc: ad.desc,
+        image: draftAd.image || DEFAULT_IMAGE,
+        location: ad.location,
+        phone: ad.phone,
+        allowMessages: ad.allowMessages
+      })
     });
 
     state.products.unshift(data.product);
@@ -627,7 +680,7 @@ async function publishAd() {
     alert("Объявление опубликовано");
   } catch (error) {
     console.error("Не удалось опубликовать объявление:", error);
-    alert("Не удалось опубликовать объявление");
+    alert("Не удалось опубликовать объявление: " + error.message);
   }
 }
 
@@ -636,28 +689,31 @@ function clearCreateForm() {
   const price = document.getElementById("adPrice");
   const desc = document.getElementById("adDesc");
   const category = document.getElementById("adCategory");
+  const location = document.getElementById("adLocation");
+  const phone = document.getElementById("adPhone");
+  const allowMessages = document.getElementById("adAllowMessages");
   const preview = document.getElementById("previewCard");
   const photoInput = document.getElementById("photoInput");
-  const location = document.getElementById("adLocation");
-const phone = document.getElementById("adPhone");
-const allowMessages = document.getElementById("adAllowMessages");
+  const photoPreview = document.getElementById("photoPreview");
 
   if (title) title.value = "";
   if (price) price.value = "";
   if (desc) desc.value = "";
   if (category) category.selectedIndex = 0;
+  if (location) location.selectedIndex = 0;
+  if (phone) phone.value = "";
+  if (allowMessages) allowMessages.checked = true;
   if (preview) preview.innerHTML = "";
   if (photoInput) photoInput.value = "";
-  if (location) location.selectedIndex = 0;
-if (phone) phone.value = "";
-if (allowMessages) allowMessages.checked = true;
+
+  if (photoPreview) {
+    photoPreview.innerHTML = `
+      <div class="photo-plus">＋</div>
+      <p>Нажмите, чтобы добавить фото</p>
+    `;
+  }
 
   draftAd.image = "";
-
-  document.querySelectorAll(".photo-grid div").forEach(cell => {
-    cell.innerHTML = "";
-    cell.classList.remove("filled");
-  });
 }
 
 /* =======================
@@ -703,6 +759,39 @@ function initEvents() {
     render();
   });
 
+  const photoInput = document.getElementById("photoInput");
+
+  if (photoInput) {
+    photoInput.addEventListener("change", async event => {
+      const file = event.target.files?.[0];
+
+      if (!file) return;
+
+      if (!file.type.startsWith("image/")) {
+        alert("Можно загрузить только изображение");
+        event.target.value = "";
+        return;
+      }
+
+      try {
+        draftAd.image = await compressImage(file, 900, 0.72);
+
+        const photoPreview = document.getElementById("photoPreview");
+
+        if (photoPreview) {
+          photoPreview.innerHTML = `
+            <img src="${draftAd.image}" alt="Фото объявления">
+          `;
+        }
+
+        updatePreviewCard();
+      } catch (error) {
+        console.error("Ошибка обработки фото:", error);
+        alert("Не удалось загрузить фото");
+      }
+    });
+  }
+
   document.querySelectorAll(".categories button").forEach(button => {
     button.addEventListener("click", () => {
       document.querySelectorAll(".categories button").forEach(item => {
@@ -727,41 +816,9 @@ function initEvents() {
     }
   });
 
-  ["adTitle", "adPrice", "adDesc", "adCategory"].forEach(id => {
+  ["adTitle", "adPrice", "adDesc", "adCategory", "adLocation", "adPhone", "adAllowMessages"].forEach(id => {
     document.getElementById(id)?.addEventListener("input", updatePreviewCard);
     document.getElementById(id)?.addEventListener("change", updatePreviewCard);
-  });
-
-  document.getElementById("addPhotoBtn")?.addEventListener("click", () => {
-    document.getElementById("photoInput")?.click();
-  });
-
-  document.getElementById("photoInput")?.addEventListener("change", event => {
-    const file = event.target.files[0];
-
-    if (!file) return;
-
-    if (!file.type.startsWith("image/")) {
-      alert("Выберите изображение");
-      return;
-    }
-
-    const reader = new FileReader();
-
-    reader.onload = () => {
-      draftAd.image = reader.result;
-
-      const firstCell = document.querySelector(".photo-grid div");
-
-      if (firstCell) {
-        firstCell.innerHTML = `<img src="${draftAd.image}" alt="Фото товара">`;
-        firstCell.classList.add("filled");
-      }
-
-      updatePreviewCard();
-    };
-
-    reader.readAsDataURL(file);
   });
 }
 
