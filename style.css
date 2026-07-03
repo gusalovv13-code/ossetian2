@@ -433,3 +433,31 @@ textarea {
   display: block;
 }
 
+.profile-card .avatar {
+  width: 72px;
+  height: 72px;
+  min-width: 72px;
+  max-width: 72px;
+  min-height: 72px;
+  max-height: 72px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  margin: 0 auto;
+  background: #edeaff;
+  color: #6d5dfc;
+}
+
+.profile-card .avatar img {
+  width: 72px !important;
+  height: 72px !important;
+  max-width: 72px !important;
+  max-height: 72px !important;
+  min-width: 72px !important;
+  min-height: 72px !important;
+  border-radius: 50% !important;
+  object-fit: cover !important;
+  display: block !important;
+}
+

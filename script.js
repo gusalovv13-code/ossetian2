@@ -658,24 +658,50 @@ async function loadTelegramAvatar(userId, firstName, fullName) {
     const data = await response.json();
 
     if (!data.ok || !data.avatarUrl) {
+      avatar.innerHTML = "";
       avatar.innerText = firstName[0]?.toUpperCase() || "?";
       return;
     }
 
     const img = new Image();
+
     img.src = data.avatarUrl;
     img.alt = fullName || "Фото профиля";
 
+    img.style.width = "72px";
+    img.style.height = "72px";
+    img.style.maxWidth = "72px";
+    img.style.maxHeight = "72px";
+    img.style.minWidth = "72px";
+    img.style.minHeight = "72px";
+    img.style.borderRadius = "50%";
+    img.style.objectFit = "cover";
+    img.style.display = "block";
+
     img.onload = () => {
       avatar.innerHTML = "";
+      avatar.style.width = "72px";
+      avatar.style.height = "72px";
+      avatar.style.minWidth = "72px";
+      avatar.style.maxWidth = "72px";
+      avatar.style.minHeight = "72px";
+      avatar.style.maxHeight = "72px";
+      avatar.style.borderRadius = "50%";
+      avatar.style.overflow = "hidden";
+      avatar.style.display = "grid";
+      avatar.style.placeItems = "center";
+      avatar.style.margin = "0 auto";
+
       avatar.appendChild(img);
     };
 
     img.onerror = () => {
+      avatar.innerHTML = "";
       avatar.innerText = firstName[0]?.toUpperCase() || "?";
     };
   } catch (error) {
     console.error("Не удалось загрузить аватар:", error);
+    avatar.innerHTML = "";
     avatar.innerText = firstName[0]?.toUpperCase() || "?";
   }
 }
