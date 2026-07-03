@@ -598,9 +598,16 @@ function initTelegramUser() {
     document.querySelector(".profile-card p");
 
   if (!webApp) {
-    if (avatar) avatar.innerText = "?";
-    if (name) name.innerText = "Пользователь";
-    if (nick) nick.innerText = "Откройте через Telegram";
+    if (avatar) {
+  if (user.photo_url) {
+    avatar.innerHTML = `<img src="${user.photo_url}" alt="${fullName}">`;
+  } else {
+    avatar.innerText = firstName[0]?.toUpperCase() || "?";
+  }
+}
+
+if (name) name.innerText = fullName;
+if (nick) nick.innerText = username ? `@${username}` : "без username";
     return;
   }
 
