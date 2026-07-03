@@ -421,43 +421,42 @@ textarea {
   color: white !important;
 }
 
-.avatar {
-  overflow: hidden;
-}
-
-.avatar img {
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  object-fit: cover;
-  display: block;
-}
-
 .profile-card .avatar {
-  width: 72px;
-  height: 72px;
-  min-width: 72px;
-  max-width: 72px;
-  min-height: 72px;
-  max-height: 72px;
-  border-radius: 50%;
-  overflow: hidden;
-  display: grid;
-  place-items: center;
-  margin: 0 auto;
+  width: 72px !important;
+  height: 72px !important;
+  min-width: 72px !important;
+  max-width: 72px !important;
+  min-height: 72px !important;
+  max-height: 72px !important;
+
+  margin: 0 auto 12px !important;
+
+  border-radius: 50% !important;
+  overflow: hidden !important;
+
   background: #edeaff;
   color: #6d5dfc;
+
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+
+  font-size: 32px;
+  line-height: 1;
 }
 
 .profile-card .avatar img {
-  width: 72px !important;
-  height: 72px !important;
-  max-width: 72px !important;
-  max-height: 72px !important;
-  min-width: 72px !important;
-  min-height: 72px !important;
+  width: 100% !important;
+  height: 100% !important;
+
+  min-width: 100% !important;
+  min-height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+
   border-radius: 50% !important;
   object-fit: cover !important;
+  object-position: center center !important;
+
   display: block !important;
 }
-
