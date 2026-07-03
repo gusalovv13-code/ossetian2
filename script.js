@@ -92,6 +92,7 @@ function showPage(page, addToHistory = true) {
   });
 
   const targetPage = document.getElementById(page);
+
   if (targetPage) {
     targetPage.classList.add("active");
   }
@@ -110,6 +111,7 @@ function showPage(page, addToHistory = true) {
   };
 
   const titleEl = document.getElementById("pageTitle");
+
   if (titleEl) {
     titleEl.innerText = titles[page] || "Осетинский Маркет";
   }
@@ -218,6 +220,7 @@ function render() {
 
 function renderProducts() {
   const productList = document.getElementById("productList");
+
   if (!productList || state.page !== "catalog") return;
 
   const products = getFiltered();
@@ -264,6 +267,7 @@ function getProductCard(product, options = {}) {
 
 function renderMyAds() {
   const myAdsList = document.getElementById("myAdsList");
+
   if (!myAdsList || state.page !== "myAds") return;
 
   const ads = state.products.filter(product => product.status !== "deleted");
@@ -290,6 +294,7 @@ function renderMyAds() {
 
 function renderFavorites() {
   const favoritesPage = document.getElementById("favorites");
+
   if (!favoritesPage || state.page !== "favorites") return;
 
   const favs = state.products.filter(product =>
@@ -355,6 +360,7 @@ function toggleFav(id) {
 
 function openProduct(id) {
   const product = state.products.find(item => item.id === id);
+
   if (!product) return;
 
   product.views = (product.views || 0) + 1;
@@ -420,6 +426,7 @@ function goCreateStep3() {
 
 function updatePreviewCard() {
   const preview = document.getElementById("previewCard");
+
   if (!preview) return;
 
   const ad = getAdFormData();
@@ -502,6 +509,7 @@ function clearCreateForm() {
 
 function deleteAd(id) {
   const ok = confirm("Удалить объявление?");
+
   if (!ok) return;
 
   state.products = state.products.filter(product => product.id !== id);
@@ -542,7 +550,10 @@ function initEvents() {
 
   document.getElementById("adPrice")?.addEventListener("blur", event => {
     const formatted = formatPrice(event.target.value);
-    if (formatted) event.target.value = formatted;
+
+    if (formatted) {
+      event.target.value = formatted;
+    }
   });
 
   ["adTitle", "adPrice", "adDesc", "adCategory"].forEach(id => {
@@ -556,6 +567,7 @@ function initEvents() {
 
   document.getElementById("photoInput")?.addEventListener("change", event => {
     const file = event.target.files[0];
+
     if (!file) return;
 
     if (!file.type.startsWith("image/")) {
@@ -583,7 +595,7 @@ function initEvents() {
 }
 
 /* =======================
-   TELEGRAM USER SAFE
+   TELEGRAM USER + AVATAR
 ======================= */
 
 function initTelegramUser() {
@@ -598,35 +610,9 @@ function initTelegramUser() {
     document.querySelector(".profile-card p");
 
   if (!webApp) {
-    if (avatar) {
-  avatar.innerHTML = "";
-
-  if (user.photo_url) {
-    const img = new Image();
-    img.src = user.photo_url;
-    img.alt = fullName;
-
-    img.onload = () => {
-      avatar.innerHTML = "";
-      avatar.appendChild(img);
-    };
-
-    img.onerror = () => {
-      avatar.innerText = firstName[0]?.toUpperCase() || "?";
-    };
-  } else {
-    avatar.innerText = firstName[0]?.toUpperCase() || "?";
-  }
-}
-
-if (name) name.innerText = fullName;
-if (nick) {
-  nick.innerText = username
-    ? `@${username}`
-    : user.photo_url
-      ? "фото найдено"
-      : "Telegram не передал фото";
-}
+    if (avatar) avatar.innerText = "?";
+    if (name) name.innerText = "Пользователь";
+    if (nick) nick.innerText = "Откройте через Telegram";
     return;
   }
 
@@ -658,6 +644,40 @@ if (nick) {
   if (avatar) avatar.innerText = firstName[0]?.toUpperCase() || "?";
   if (name) name.innerText = fullName;
   if (nick) nick.innerText = username ? `@${username}` : "без username";
+
+  loadTelegramAvatar(user.id, firstName, fullName);
+}
+
+async function loadTelegramAvatar(userId, firstName, fullName) {
+  const avatar = document.querySelector(".profile-card .avatar");
+
+  if (!avatar || !userId) return;
+
+  try {
+    const response = await fetch(`/api/avatar/${userId}`);
+    const data = await response.json();
+
+    if (!data.ok || !data.avatarUrl) {
+      avatar.innerText = firstName[0]?.toUpperCase() || "?";
+      return;
+    }
+
+    const img = new Image();
+    img.src = data.avatarUrl;
+    img.alt = fullName || "Фото профиля";
+
+    img.onload = () => {
+      avatar.innerHTML = "";
+      avatar.appendChild(img);
+    };
+
+    img.onerror = () => {
+      avatar.innerText = firstName[0]?.toUpperCase() || "?";
+    };
+  } catch (error) {
+    console.error("Не удалось загрузить аватар:", error);
+    avatar.innerText = firstName[0]?.toUpperCase() || "?";
+  }
 }
 
 /* =======================
