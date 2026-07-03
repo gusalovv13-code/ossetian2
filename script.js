@@ -5,6 +5,8 @@ function generateId() {
 const DEFAULT_IMAGE =
   "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=500";
 
+const MAX_PHOTOS = 5;
+
 const state = {
   page: "home",
   history: [],
@@ -18,7 +20,7 @@ const state = {
 };
 
 const draftAd = {
-  image: ""
+  images: []
 };
 
 /* =======================
@@ -223,6 +225,18 @@ function getTimeAgo(timestamp) {
   return `${days} дн. назад`;
 }
 
+function getProductImages(product) {
+  if (Array.isArray(product.images) && product.images.length > 0) {
+    return product.images;
+  }
+
+  if (product.image) {
+    return [product.image];
+  }
+
+  return [DEFAULT_IMAGE];
+}
+
 function getFiltered() {
   return state.products.filter(product => {
     const search = state.search.toLowerCase();
@@ -317,10 +331,11 @@ function renderProducts() {
 
 function getProductCard(product, options = {}) {
   const isFav = state.favorites.includes(product.id);
+  const images = getProductImages(product);
 
   return `
     <div class="product-card" onclick="openProduct('${product.id}')">
-      <img src="${product.image || DEFAULT_IMAGE}" alt="${product.name}">
+      <img src="${images[0]}" alt="${product.name}">
       <div>
         <h4>${product.name}</h4>
         <b>${product.price}</b>
@@ -470,6 +485,25 @@ async function toggleFav(id) {
    PRODUCT PAGE
 ======================= */
 
+function showProductImage(index) {
+  const product =
+    state.products.find(item => item.id === state.openedProductId) ||
+    state.myProducts.find(item => item.id === state.openedProductId);
+
+  if (!product) return;
+
+  const images = getProductImages(product);
+  const imageEl = document.getElementById("productImage");
+
+  if (imageEl && images[index]) {
+    imageEl.src = images[index];
+  }
+
+  document.querySelectorAll(".product-thumbs img").forEach((img, i) => {
+    img.classList.toggle("active", i === index);
+  });
+}
+
 async function openProduct(id) {
   const product =
     state.products.find(item => item.id === id) ||
@@ -489,6 +523,8 @@ async function openProduct(id) {
     console.error("Не удалось обновить просмотры:", error);
   }
 
+  const images = getProductImages(product);
+
   const imageEl = document.getElementById("productImage");
   const nameEl = document.getElementById("productName");
   const priceEl = document.getElementById("productPrice");
@@ -500,7 +536,30 @@ async function openProduct(id) {
   const messageBtn = document.getElementById("messageBtn");
   const callBtn = document.getElementById("callBtn");
 
-  if (imageEl) imageEl.src = product.image || DEFAULT_IMAGE;
+  if (imageEl) {
+    imageEl.src = images[0] || DEFAULT_IMAGE;
+
+    let thumbs = document.getElementById("productThumbs");
+
+    if (!thumbs) {
+      thumbs = document.createElement("div");
+      thumbs.id = "productThumbs";
+      thumbs.className = "product-thumbs";
+      imageEl.insertAdjacentElement("afterend", thumbs);
+    }
+
+    thumbs.innerHTML = images
+      .map((src, index) => `
+        <img
+          src="${src}"
+          class="${index === 0 ? "active" : ""}"
+          onclick="showProductImage(${index})"
+          alt="Фото ${index + 1}"
+        >
+      `)
+      .join("");
+  }
+
   if (nameEl) nameEl.innerText = product.name;
   if (priceEl) priceEl.innerText = product.price;
   if (descEl) descEl.innerText = product.desc;
@@ -611,15 +670,62 @@ function goCreateStep3() {
   showPage("create3");
 }
 
+function renderPhotoPreview() {
+  const photoPreview = document.getElementById("photoPreview");
+
+  if (!photoPreview) return;
+
+  if (draftAd.images.length === 0) {
+    photoPreview.innerHTML = `
+      <div class="photo-empty">
+        <div class="photo-plus">＋</div>
+        <p>Нажмите “Добавить фото”</p>
+        <small>Можно добавить до ${MAX_PHOTOS} фото</small>
+      </div>
+    `;
+    return;
+  }
+
+  photoPreview.innerHTML = draftAd.images
+    .map((src, index) => `
+      <div class="photo-item">
+        <img src="${src}" alt="Фото ${index + 1}">
+        <button type="button" onclick="removeDraftPhoto(${index})">×</button>
+      </div>
+    `)
+    .join("");
+
+  if (draftAd.images.length < MAX_PHOTOS) {
+    photoPreview.insertAdjacentHTML(
+      "beforeend",
+      `
+        <div class="photo-add" onclick="document.getElementById('photoInput')?.click()">
+          ＋
+        </div>
+      `
+    );
+  }
+}
+
+function removeDraftPhoto(index) {
+  draftAd.images.splice(index, 1);
+  renderPhotoPreview();
+  updatePreviewCard();
+
+  const photoInput = document.getElementById("photoInput");
+  if (photoInput) photoInput.value = "";
+}
+
 function updatePreviewCard() {
   const preview = document.getElementById("previewCard");
 
   if (!preview) return;
 
   const ad = getAdFormData();
+  const previewImage = draftAd.images[0] || DEFAULT_IMAGE;
 
   preview.innerHTML = `
-    <img src="${draftAd.image || DEFAULT_IMAGE}" alt="Предпросмотр">
+    <img src="${previewImage}" alt="Предпросмотр">
     <div>
       <h4>${ad.title || "Название товара"}</h4>
       <b>${formatPrice(ad.price) || ad.price || "Цена не указана"}</b>
@@ -653,6 +759,8 @@ async function publishAd() {
 
   try {
     const ownerName = `${state.telegramUser.firstName || ""} ${state.telegramUser.lastName || ""}`.trim();
+    const images = draftAd.images.slice(0, MAX_PHOTOS);
+    const mainImage = images[0] || DEFAULT_IMAGE;
 
     const data = await apiRequest("/api/products", {
       method: "POST",
@@ -664,7 +772,8 @@ async function publishAd() {
         price: formatPrice(ad.price) || ad.price,
         category: ad.category,
         desc: ad.desc,
-        image: draftAd.image || DEFAULT_IMAGE,
+        image: mainImage,
+        images,
         location: ad.location,
         phone: ad.phone,
         allowMessages: ad.allowMessages
@@ -694,7 +803,6 @@ function clearCreateForm() {
   const allowMessages = document.getElementById("adAllowMessages");
   const preview = document.getElementById("previewCard");
   const photoInput = document.getElementById("photoInput");
-  const photoPreview = document.getElementById("photoPreview");
 
   if (title) title.value = "";
   if (price) price.value = "";
@@ -706,14 +814,8 @@ function clearCreateForm() {
   if (preview) preview.innerHTML = "";
   if (photoInput) photoInput.value = "";
 
-  if (photoPreview) {
-    photoPreview.innerHTML = `
-      <div class="photo-plus">＋</div>
-      <p>Нажмите, чтобы добавить фото</p>
-    `;
-  }
-
-  draftAd.image = "";
+  draftAd.images = [];
+  renderPhotoPreview();
 }
 
 /* =======================
@@ -759,35 +861,57 @@ function initEvents() {
     render();
   });
 
+  const addPhotoBtn = document.getElementById("addPhotoBtn");
   const photoInput = document.getElementById("photoInput");
+
+  if (addPhotoBtn) {
+    addPhotoBtn.addEventListener("click", () => {
+      if (draftAd.images.length >= MAX_PHOTOS) {
+        alert(`Можно добавить максимум ${MAX_PHOTOS} фото`);
+        return;
+      }
+
+      photoInput?.click();
+    });
+  }
 
   if (photoInput) {
     photoInput.addEventListener("change", async event => {
-      const file = event.target.files?.[0];
+      const files = Array.from(event.target.files || []);
 
-      if (!file) return;
+      if (files.length === 0) return;
 
-      if (!file.type.startsWith("image/")) {
-        alert("Можно загрузить только изображение");
+      const slotsLeft = MAX_PHOTOS - draftAd.images.length;
+
+      if (slotsLeft <= 0) {
+        alert(`Можно добавить максимум ${MAX_PHOTOS} фото`);
         event.target.value = "";
         return;
       }
 
+      const filesToAdd = files.slice(0, slotsLeft);
+
+      if (files.length > slotsLeft) {
+        alert(`Добавим только ${slotsLeft} фото. Максимум — ${MAX_PHOTOS}.`);
+      }
+
       try {
-        draftAd.image = await compressImage(file, 900, 0.72);
+        for (const file of filesToAdd) {
+          if (!file.type.startsWith("image/")) {
+            continue;
+          }
 
-        const photoPreview = document.getElementById("photoPreview");
-
-        if (photoPreview) {
-          photoPreview.innerHTML = `
-            <img src="${draftAd.image}" alt="Фото объявления">
-          `;
+          const compressed = await compressImage(file, 900, 0.72);
+          draftAd.images.push(compressed);
         }
 
+        renderPhotoPreview();
         updatePreviewCard();
       } catch (error) {
         console.error("Ошибка обработки фото:", error);
         alert("Не удалось загрузить фото");
+      } finally {
+        event.target.value = "";
       }
     });
   }
@@ -820,6 +944,8 @@ function initEvents() {
     document.getElementById(id)?.addEventListener("input", updatePreviewCard);
     document.getElementById(id)?.addEventListener("change", updatePreviewCard);
   });
+
+  renderPhotoPreview();
 }
 
 /* =======================

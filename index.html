@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Осетинский Маркет</title>
-  <link rel="stylesheet" href="style.css?v=101" />
+  <link rel="stylesheet" href="style.css?v=110" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
@@ -102,25 +102,24 @@
       <button class="primary wide" onclick="showPage('create2')">Продолжить</button>
     </section>
 
-   <section id="create2" class="page">
+ <section id="create2" class="page">
   <div class="steps">
     <b>✓</b><span></span><b>2</b><span></span><b>3</b>
   </div>
 
   <h3>Фото объявления</h3>
-  <p class="muted">Добавьте фото товара. Так объявление будет выглядеть лучше.</p>
+  <p class="muted">Добавьте до 5 фото товара.</p>
 
-  <div class="photo-box" onclick="document.getElementById('photoInput').click()">
-    <input id="photoInput" type="file" accept="image/*" hidden>
+  <input id="photoInput" type="file" accept="image/*" multiple hidden>
 
-    <div id="photoPreview" class="photo-preview">
-      <div class="photo-plus">＋</div>
-      <p>Нажмите, чтобы добавить фото</p>
-    </div>
-  </div>
+  <button id="addPhotoBtn" type="button" class="outline wide">
+    ＋ Добавить фото
+  </button>
+
+  <div id="photoPreview" class="photo-grid"></div>
 
   <button class="outline wide" onclick="goBack()">Назад</button>
-  <button class="primary wide" onclick="showPage('create3')">Далее</button>
+  <button class="primary wide" onclick="goCreateStep3()">Далее</button>
 </section>
 
     <section id="create3" class="page">
@@ -197,6 +196,6 @@
     </nav>
   </main>
 
-  <script src="script.js?v=109"></script>
+  <script src="script.js?v=110"></script>
 </body>
 </html>
