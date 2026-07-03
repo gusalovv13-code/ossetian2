@@ -1,352 +1,543 @@
-
-// =====================
-// TELEGRAM INIT (FIXED FOR MOBILE + DESKTOP)
-// =====================
-let tgUser = null;
-
-function initTelegram() {
-  if (window.Telegram && Telegram.WebApp) {
-    Telegram.WebApp.ready();
-    Telegram.WebApp.expand();
-
-    const user = Telegram.WebApp.initDataUnsafe?.user;
-
-    if (user) {
-      tgUser = {
-        id: user.id,
-        name: user.first_name,
-        username: user.username || null,
-        photo: user.photo_url || null
-      };
-    } else {
-      // fallback (если открыт не через Telegram WebApp)
-      tgUser = {
-        id: "demo",
-        name: "Demo User",
-        username: "demo_user",
-        photo: null
-      };
-    }
-
-    applyUserToUI();
-  }
-}
-
-function applyUserToUI() {
-  if (!tgUser) return;
-
-  const avatar = document.querySelector(".avatar");
-  if (avatar) avatar.innerText = tgUser.name?.[0] || "U";
-
-  const name = document.querySelector(".profile-card h3");
-  if (name) name.innerText = tgUser.name;
-
-  const username = document.querySelector(".profile-card p");
-  if (username) username.innerText = "@" + (tgUser.username || "user");
-}
-
-// =====================
-// DATA
-// =====================
 function generateId() {
-  return '_' + Math.random().toString(36).substr(2, 9);
+  return "_" + Math.random().toString(36).substr(2, 9);
 }
 
-let products = JSON.parse(localStorage.getItem("products")) || [];
-let favorites = JSON.parse(localStorage.getItem("favorites")) || [];
+const DEFAULT_IMAGE =
+  "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=500";
 
-let historyStack = ["home"];
-let currentCategory = "Все";
-let searchValue = "";
+const state = {
+  page: "home",
+  history: [],
+  search: "",
+  category: "Все",
+  openedProductId: null,
+  products: JSON.parse(localStorage.getItem("products")) || [],
+  favorites: JSON.parse(localStorage.getItem("favorites")) || []
+};
 
-// =====================
-// SAVE
-// =====================
-function saveProducts() {
-  localStorage.setItem("products", JSON.stringify(products));
+const draftAd = {
+  image: ""
+};
+
+if (state.products.length === 0) {
+  state.products = [
+    {
+      id: generateId(),
+      name: "iPhone 15 Pro 128GB",
+      price: "90 000 ₽",
+      category: "Электроника",
+      image: "https://images.unsplash.com/photo-1695048133142-1a20484d2569?w=500",
+      desc: "Телефон в идеальном состоянии. Носился в чехле, без сколов и царапин.",
+      location: "Владикавказ",
+      createdAt: Date.now() - 1000 * 60 * 5,
+      views: 128,
+      status: "active"
+    },
+    {
+      id: generateId(),
+      name: "BMW 3 Series",
+      price: "1 650 000 ₽",
+      category: "Авто",
+      image: "https://images.unsplash.com/photo-1555215695-3004980ad54e?w=500",
+      desc: "Авто в хорошем состоянии. Документы чистые.",
+      location: "Владикавказ",
+      createdAt: Date.now() - 1000 * 60 * 60 * 2,
+      views: 34,
+      status: "active"
+    },
+    {
+      id: generateId(),
+      name: "Диван в отличном состоянии",
+      price: "25 000 ₽",
+      category: "Дом",
+      image: "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?w=500",
+      desc: "Удобный диван, без пятен и повреждений.",
+      location: "Беслан",
+      createdAt: Date.now() - 1000 * 60 * 60 * 24,
+      views: 30,
+      status: "active"
+    }
+  ];
+
+  save();
 }
 
-function saveFavorites() {
-  localStorage.setItem("favorites", JSON.stringify(favorites));
+function save() {
+  localStorage.setItem("products", JSON.stringify(state.products));
+  localStorage.setItem("favorites", JSON.stringify(state.favorites));
 }
 
-// =====================
-// NAVIGATION
-// =====================
-function showPage(pageId) {
+function showPage(page, addToHistory = true) {
+  if (addToHistory && state.page !== page) {
+    state.history.push(state.page);
+  }
+
+  state.page = page;
+
   document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
-  document.getElementById(pageId).classList.add("active");
+
+  const el = document.getElementById(page);
+  if (el) el.classList.add("active");
 
   const titles = {
     home: "Осетинский Маркет",
-    catalog: "Список товаров",
+    catalog: "Каталог",
     product: "Карточка товара",
     create1: "Новое объявление",
     create2: "Новое объявление",
     create3: "Новое объявление",
     myAds: "Мои объявления",
     favorites: "Избранное",
-    chats: "Чаты",
-    profile: "Профиль"
+    profile: "Профиль",
+    chats: "Чаты"
   };
 
-  document.getElementById("pageTitle").innerText = titles[pageId] || "Маркет";
+  const titleEl = document.getElementById("pageTitle");
+  if (titleEl) titleEl.innerText = titles[page] || "Осетинский Маркет";
 
-  if (historyStack[historyStack.length - 1] !== pageId) {
-    historyStack.push(pageId);
-  }
-
-  if (pageId === "catalog") renderProducts();
-  if (pageId === "myAds") renderMyAds();
-  if (pageId === "favorites") renderFavorites();
-  if (pageId === "create3") updatePreview();
+  updateBottomNav();
+  render();
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 function goBack() {
-  if (historyStack.length > 1) {
-    historyStack.pop();
-    showPage(historyStack[historyStack.length - 1]);
-  }
-}
+  const prev = state.history.pop();
 
-// =====================
-// FILTER
-// =====================
-function getFilteredProducts() {
-  return products.filter(p => {
-    const categoryMatch =
-      currentCategory === "Все" || p.category === currentCategory;
-
-    const searchMatch =
-      p.name.toLowerCase().includes(searchValue.toLowerCase()) ||
-      p.desc.toLowerCase().includes(searchValue.toLowerCase());
-
-    return categoryMatch && searchMatch;
-  });
-}
-
-// =====================
-// RENDER MARKET
-// =====================
-function renderProducts() {
-  const list = document.getElementById("productList");
-  list.innerHTML = "";
-
-  const filtered = getFilteredProducts();
-
-  if (filtered.length === 0) {
-    list.innerHTML = `<p class="muted">Ничего не найдено</p>`;
+  if (prev) {
+    showPage(prev, false);
     return;
   }
 
-  filtered.forEach(product => {
-    const card = document.createElement("div");
-    card.className = "product-card";
-
-    card.innerHTML = `
-      <img src="${product.image}" />
-      <div>
-        <h4>${product.name}</h4>
-        <b>${product.price}</b>
-        <p>${product.userName || "Пользователь"} · Владикавказ</p>
-      </div>
-      <button class="heart" onclick="event.stopPropagation(); toggleFavorite('${product.id}')">
-        ${favorites.includes(product.id) ? "♥" : "♡"}
-      </button>
-    `;
-
-    card.onclick = () => openProduct(product.id);
-    list.appendChild(card);
-  });
-}
-
-// =====================
-// MY ADS
-// =====================
-function renderMyAds() {
-  const list = document.getElementById("myAdsList");
-  list.innerHTML = "";
-
-  const myAds = products.filter(p => p.userId === tgUser?.id);
-
-  if (myAds.length === 0) {
-    list.innerHTML = `<p class="muted">У вас нет объявлений</p>`;
+  if (state.page !== "home") {
+    showPage("home", false);
     return;
   }
 
-  myAds.forEach(product => {
-    const card = document.createElement("div");
-    card.className = "product-card";
+  if (tg) {
+    tg.close();
+  }
+}
 
-    card.innerHTML = `
-      <img src="${product.image}" />
-      <div>
-        <h4>${product.name}</h4>
-        <b>${product.price}</b>
-        <p>Ваше объявление</p>
-      </div>
-      <button class="heart" onclick="event.stopPropagation(); deleteAd('${product.id}')">🗑</button>
-    `;
+function updateBottomNav() {
+  document.querySelectorAll(".bottom-nav button").forEach(btn => {
+    btn.classList.remove("active");
 
-    card.onclick = () => openProduct(product.id);
-    list.appendChild(card);
+    const action = btn.getAttribute("onclick") || "";
+
+    if (
+      action.includes(`'${state.page}'`) ||
+      action.includes(`"${state.page}"`)
+    ) {
+      btn.classList.add("active");
+    }
+  });
+
+  if (["create1", "create2", "create3"].includes(state.page)) {
+    document.querySelector(".add-btn")?.classList.add("active");
+  }
+}
+
+function formatPrice(value) {
+  const onlyNums = String(value).replace(/[^\d]/g, "");
+
+  if (!onlyNums) return "";
+
+  return Number(onlyNums).toLocaleString("ru-RU") + " ₽";
+}
+
+function getTimeAgo(timestamp) {
+  if (!timestamp) return "только что";
+
+  const diff = Date.now() - timestamp;
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+
+  if (minutes < 1) return "только что";
+  if (minutes < 60) return `${minutes} мин. назад`;
+  if (hours < 24) return `${hours} ч. назад`;
+  return `${days} дн. назад`;
+}
+
+function getFiltered() {
+  return state.products.filter(product => {
+    const search = state.search.toLowerCase();
+
+    const matchSearch =
+      product.name.toLowerCase().includes(search) ||
+      product.desc.toLowerCase().includes(search) ||
+      product.category.toLowerCase().includes(search);
+
+    const matchCategory =
+      state.category === "Все" || product.category === state.category;
+
+    return matchSearch && matchCategory && product.status !== "deleted";
   });
 }
 
-// =====================
-// FAVORITES
-// =====================
-function toggleFavorite(id) {
-  if (favorites.includes(id)) {
-    favorites = favorites.filter(f => f !== id);
-  } else {
-    favorites.push(id);
-  }
-
-  saveFavorites();
+function render() {
   renderProducts();
+  renderMyAds();
   renderFavorites();
+  renderProfileCounters();
 }
 
-function renderFavorites() {
-  const page = document.getElementById("favorites");
-  const favs = products.filter(p => favorites.includes(p.id));
+function renderProducts() {
+  const el = document.getElementById("productList");
+  if (!el || state.page !== "catalog") return;
 
-  if (favs.length === 0) {
-    page.innerHTML = `<h2>Избранное</h2><p class="muted">Пусто</p>`;
+  const data = getFiltered();
+
+  if (data.length === 0) {
+    el.innerHTML = `
+      <div class="empty-state">
+        <h3>Ничего не найдено</h3>
+        <p class="muted">Попробуйте изменить поиск или категорию.</p>
+      </div>
+    `;
     return;
   }
 
-  page.innerHTML = `
-    <h2>Избранное</h2>
-    <div class="product-list">
-      ${favs.map(p => `
-        <div class="product-card" onclick="openProduct('${p.id}')">
-          <img src="${p.image}" />
-          <div>
-            <h4>${p.name}</h4>
-            <b>${p.price}</b>
-          </div>
-          <button class="heart" onclick="event.stopPropagation(); toggleFavorite('${p.id}')">♥</button>
-        </div>
-      `).join("")}
+  el.innerHTML = data.map(product => getProductCard(product)).join("");
+}
+
+function getProductCard(product, options = {}) {
+  const isFav = state.favorites.includes(product.id);
+
+  return `
+    <div class="product-card" onclick="openProduct('${product.id}')">
+      <img src="${product.image || DEFAULT_IMAGE}" alt="${product.name}">
+      <div>
+        <h4>${product.name}</h4>
+        <b>${product.price}</b>
+        <p>${product.location || "Владикавказ"} · ${getTimeAgo(product.createdAt)}</p>
+        ${options.showStatus ? `<p>${product.status === "sold" ? "Продано" : "Активно"}</p>` : ""}
+      </div>
+      ${
+        options.deleteButton
+          ? `<button class="heart" onclick="event.stopPropagation(); deleteAd('${product.id}')">🗑</button>`
+          : `<button class="heart" onclick="event.stopPropagation(); toggleFav('${product.id}')">${isFav ? "♥" : "♡"}</button>`
+      }
     </div>
   `;
 }
 
-// =====================
-// PRODUCT PAGE
-// =====================
-function openProduct(id) {
-  const product = products.find(p => p.id === id);
-  if (!product) return;
+function renderMyAds() {
+  const el = document.getElementById("myAdsList");
+  if (!el || state.page !== "myAds") return;
 
-  document.getElementById("productImage").src = product.image;
-  document.getElementById("productName").innerText = product.name;
-  document.getElementById("productPrice").innerText = product.price;
-  document.getElementById("productDesc").innerText = product.desc;
+  const ads = state.products.filter(product => product.status !== "deleted");
 
-  document.querySelector(".actions").innerHTML = `
-    <button class="outline" onclick="openChat('${product.userUsername || ''}', '${product.name}')">
-      💬 Написать
-    </button>
-    <button class="primary" onclick="alert('Позвонить позже')">
-      📞 Позвонить
-    </button>
-  `;
-
-  showPage("product");
-}
-
-// =====================
-// CHAT (TELEGRAM)
-// =====================
-function openChat(username, productName) {
-  if (!username) {
-    alert("У продавца нет Telegram username");
+  if (ads.length === 0) {
+    el.innerHTML = `
+      <div class="empty-state">
+        <h3>У вас пока нет объявлений</h3>
+        <p class="muted">Добавьте первый товар на маркет.</p>
+      </div>
+    `;
     return;
   }
 
-  const text = encodeURIComponent(
-    `Привет! Интересует товар: ${productName}`
-  );
-
-  // Telegram deep link (лучше чем https)
-  window.location.href = `https://t.me/${username}?text=${text}`;
+  el.innerHTML = ads
+    .map(product => getProductCard(product, { deleteButton: true, showStatus: true }))
+    .join("");
 }
 
-// =====================
-// CREATE AD
-// =====================
-function updatePreview() {
-  const title = document.getElementById("adTitle").value || "Название";
-  const price = document.getElementById("adPrice").value || "Цена";
-  const category = document.getElementById("adCategory").value;
+function renderFavorites() {
+  const el = document.getElementById("favorites");
+  if (!el || state.page !== "favorites") return;
 
-  document.getElementById("previewCard").innerHTML = `
-    <img src="https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=500" />
+  const favs = state.products.filter(product => state.favorites.includes(product.id));
+
+  if (favs.length === 0) {
+    el.innerHTML = `
+      <h2>Избранное</h2>
+      <div class="empty-state">
+        <h3>Пока пусто</h3>
+        <p class="muted">Добавляйте товары в избранное через сердечко.</p>
+      </div>
+    `;
+    return;
+  }
+
+  el.innerHTML = `
+    <h2>Избранное</h2>
+    <div class="product-list">
+      ${favs.map(product => getProductCard(product)).join("")}
+    </div>
+  `;
+}
+
+function renderProfileCounters() {
+  const rows = document.querySelectorAll(".profile-row");
+
+  rows.forEach(row => {
+    const text = row.innerText;
+
+    if (text.includes("Мои объявления")) {
+      const count = state.products.filter(product => product.status !== "deleted").length;
+      row.querySelector("b")?.remove();
+      row.insertAdjacentHTML("beforeend", `<b>${count}</b>`);
+    }
+
+    if (text.includes("Избранное")) {
+      row.querySelector("b")?.remove();
+      row.insertAdjacentHTML("beforeend", `<b>${state.favorites.length}</b>`);
+    }
+  });
+}
+
+function toggleFav(id) {
+  if (state.favorites.includes(id)) {
+    state.favorites = state.favorites.filter(favId => favId !== id);
+  } else {
+    state.favorites.push(id);
+  }
+
+  save();
+  render();
+}
+
+function openProduct(id) {
+  const product = state.products.find(item => item.id === id);
+  if (!product) return;
+
+  product.views = (product.views || 0) + 1;
+  state.openedProductId = id;
+
+  const imageEl = document.getElementById("productImage");
+  const nameEl = document.getElementById("productName");
+  const priceEl = document.getElementById("productPrice");
+  const descEl = document.getElementById("productDesc");
+  const sellerEl = document.querySelector("#product .seller");
+
+  if (imageEl) imageEl.src = product.image || DEFAULT_IMAGE;
+  if (nameEl) nameEl.innerText = product.name;
+  if (priceEl) priceEl.innerText = product.price;
+  if (descEl) descEl.innerText = product.desc;
+
+  if (sellerEl) {
+    sellerEl.innerText = `📍 ${product.location || "Владикавказ"} · ${getTimeAgo(product.createdAt)} · 👁 ${product.views || 0}`;
+  }
+
+  save();
+  showPage("product");
+}
+
+function getAdFormData() {
+  return {
+    title: document.getElementById("adTitle")?.value.trim() || "",
+    price: document.getElementById("adPrice")?.value.trim() || "",
+    category: document.getElementById("adCategory")?.value || "Другое",
+    desc: document.getElementById("adDesc")?.value.trim() || ""
+  };
+}
+
+function goCreateStep2() {
+  const ad = getAdFormData();
+
+  if (!ad.title) return alert("Введите название товара");
+  if (!ad.price) return alert("Укажите цену");
+  if (!ad.desc) return alert("Добавьте описание");
+
+  showPage("create2");
+}
+
+function goCreateStep3() {
+  updatePreviewCard();
+  showPage("create3");
+}
+
+function updatePreviewCard() {
+  const preview = document.getElementById("previewCard");
+  if (!preview) return;
+
+  const ad = getAdFormData();
+
+  preview.innerHTML = `
+    <img src="${draftAd.image || DEFAULT_IMAGE}" alt="Предпросмотр">
     <div>
-      <h4>${title}</h4>
-      <b>${price}</b>
-      <p>${category}</p>
+      <h4>${ad.title || "Название товара"}</h4>
+      <b>${formatPrice(ad.price) || ad.price || "Цена не указана"}</b>
+      <p>${ad.category}</p>
     </div>
   `;
 }
 
 function publishAd() {
-  const title = document.getElementById("adTitle").value.trim();
-  const price = document.getElementById("adPrice").value.trim();
-  const category = document.getElementById("adCategory").value;
-  const desc = document.getElementById("adDesc").value.trim();
+  const ad = getAdFormData();
 
-  if (!title || !price || !desc) return alert("Заполни все поля");
+  if (!ad.title) return alert("Введите название товара");
+  if (!ad.price) return alert("Укажите цену");
+  if (!ad.desc) return alert("Добавьте описание");
 
-  const newAd = {
+  const newProduct = {
     id: generateId(),
-    userId: tgUser?.id,
-    userName: tgUser?.name,
-    userUsername: tgUser?.username || null,
-    name: title,
-    price,
-    category,
-    image: "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=500",
-    desc
+    name: ad.title,
+    price: formatPrice(ad.price) || ad.price,
+    category: ad.category,
+    desc: ad.desc,
+    image: draftAd.image || DEFAULT_IMAGE,
+    location: "Владикавказ",
+    createdAt: Date.now(),
+    views: 0,
+    status: "active"
   };
 
-  products.unshift(newAd);
-  saveProducts();
-  renderProducts();
-
-  alert("Объявление опубликовано!");
+  state.products.unshift(newProduct);
+  save();
+  clearCreateForm();
   showPage("myAds");
+  alert("Объявление опубликовано");
 }
 
-// =====================
-// DELETE
-// =====================
+function clearCreateForm() {
+  const title = document.getElementById("adTitle");
+  const price = document.getElementById("adPrice");
+  const desc = document.getElementById("adDesc");
+  const category = document.getElementById("adCategory");
+  const preview = document.getElementById("previewCard");
+  const photoInput = document.getElementById("photoInput");
+
+  if (title) title.value = "";
+  if (price) price.value = "";
+  if (desc) desc.value = "";
+  if (category) category.selectedIndex = 0;
+  if (preview) preview.innerHTML = "";
+  if (photoInput) photoInput.value = "";
+
+  draftAd.image = "";
+
+  document.querySelectorAll(".photo-grid div").forEach(cell => {
+    cell.innerHTML = "";
+    cell.classList.remove("filled");
+  });
+}
+
 function deleteAd(id) {
-  products = products.filter(p => p.id !== id);
-  favorites = favorites.filter(f => f !== id);
+  const ok = confirm("Удалить объявление?");
+  if (!ok) return;
 
-  saveProducts();
-  saveFavorites();
+  state.products = state.products.filter(product => product.id !== id);
+  state.favorites = state.favorites.filter(favId => favId !== id);
 
-  renderProducts();
-  renderFavorites();
-  renderMyAds();
+  save();
+  render();
 }
 
-// =====================
-// SEARCH
-// =====================
-document.querySelector(".search").addEventListener("input", e => {
-  searchValue = e.target.value;
-  renderProducts();
+document.getElementById("searchInput")?.addEventListener("input", event => {
+  state.search = event.target.value;
+  render();
 });
 
-// =====================
-// INIT
-// =====================
+document.querySelectorAll(".categories button").forEach(button => {
+  button.addEventListener("click", () => {
+    document.querySelectorAll(".categories button").forEach(item => {
+      item.classList.remove("active");
+    });
+
+    button.classList.add("active");
+
+    state.category = button.innerText
+      .replace(/[📱🚗👕🏠]/g, "")
+      .trim();
+
+    render();
+  });
+});
+
+document.getElementById("adPrice")?.addEventListener("blur", event => {
+  const formatted = formatPrice(event.target.value);
+  if (formatted) event.target.value = formatted;
+});
+
+["adTitle", "adPrice", "adDesc", "adCategory"].forEach(id => {
+  document.getElementById(id)?.addEventListener("input", updatePreviewCard);
+  document.getElementById(id)?.addEventListener("change", updatePreviewCard);
+});
+
+document.getElementById("addPhotoBtn")?.addEventListener("click", () => {
+  document.getElementById("photoInput")?.click();
+});
+
+document.getElementById("photoInput")?.addEventListener("change", event => {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  if (!file.type.startsWith("image/")) {
+    alert("Выберите изображение");
+    return;
+  }
+
+  const reader = new FileReader();
+
+  reader.onload = () => {
+    draftAd.image = reader.result;
+
+    const firstCell = document.querySelector(".photo-grid div");
+
+    if (firstCell) {
+      firstCell.innerHTML = `<img src="${draftAd.image}" alt="Фото товара">`;
+      firstCell.classList.add("filled");
+    }
+
+    updatePreviewCard();
+  };
+
+  reader.readAsDataURL(file);
+});
+
+/* =======================
+   TELEGRAM MINI APP
+======================= */
+
+const tg = window.Telegram?.WebApp;
+
+function initTelegram() {
+  if (!tg) return;
+
+  tg.ready();
+  tg.expand();
+
+  const user = tg.initDataUnsafe?.user;
+
+  if (user) {
+    state.telegramUser = {
+      id: user.id,
+      firstName: user.first_name || "Пользователь",
+      lastName: user.last_name || "",
+      username: user.username || "",
+      photoUrl: user.photo_url || ""
+    };
+
+    renderTelegramProfile();
+  }
+}
+
+function renderTelegramProfile() {
+  const user = state.telegramUser;
+  if (!user) return;
+
+  const avatar = document.querySelector(".profile-card .avatar");
+  const name = document.querySelector(".profile-card h3");
+  const username = document.querySelector(".profile-card p");
+
+  const fullName = `${user.firstName} ${user.lastName}`.trim();
+
+  if (avatar) {
+    avatar.innerText = user.firstName[0]?.toUpperCase() || "U";
+  }
+
+  if (name) {
+    name.innerText = fullName;
+  }
+
+  if (username) {
+    username.innerText = user.username ? `@${user.username}` : "Telegram-пользователь";
+  }
+}
+
 initTelegram();
-renderProducts();
-renderFavorites();
+
+render();
+updateBottomNav();

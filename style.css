@@ -2,23 +2,28 @@
   box-sizing: border-box;
 }
 
+html, body {
+  height: 100%;
+}
+
 body {
   margin: 0;
   background: #111;
   font-family: Inter, Arial, sans-serif;
   color: #1f2430;
+  -webkit-text-size-adjust: 100%;
 }
 
-/* ===== APP CONTAINER ===== */
+/* ===== APP WRAPPER ===== */
 .phone {
   max-width: 430px;
   min-height: 100vh;
   margin: 0 auto;
   background: #f7f8fc;
   position: relative;
-  padding-bottom: 110px;
-  overflow: hidden;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+
+  /* FIX: safe area for Telegram bottom bar */
+  padding-bottom: calc(92px + env(safe-area-inset-bottom));
 }
 
 /* ===== TOP BAR ===== */
@@ -30,6 +35,7 @@ body {
   justify-content: space-between;
   padding: 14px 18px;
   border-bottom: 1px solid #edf0f5;
+
   position: sticky;
   top: 0;
   z-index: 10;
@@ -38,14 +44,12 @@ body {
 .topbar h3 {
   margin: 0;
   font-size: 15px;
-  text-align: center;
 }
 
 .topbar p {
   margin: 2px 0 0;
   font-size: 11px;
   color: #9aa2b1;
-  text-align: center;
 }
 
 .ghost {
@@ -65,25 +69,21 @@ body {
 /* ===== PAGES ===== */
 .page {
   display: none;
-  padding: 22px 18px;
-  animation: fade .22s ease;
-  min-height: calc(100vh - 140px);
-  overflow-y: auto;
+  padding: 22px 18px 110px;
 }
 
 .page.active {
   display: block;
 }
 
-@keyframes fade {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
 /* ===== TEXT ===== */
 h1 {
   font-size: 28px;
   margin-bottom: 4px;
+}
+
+h2 {
+  margin: 0 0 10px;
 }
 
 .muted {
@@ -107,12 +107,8 @@ h1 {
   align-items: center;
   gap: 14px;
   text-align: left;
-  box-shadow: 0 10px 25px rgba(35, 41, 60, .05);
-  transition: 0.2s;
-}
 
-.menu-card:active {
-  transform: scale(0.98);
+  box-shadow: 0 10px 25px rgba(35, 41, 60, .05);
 }
 
 .menu-card span {
@@ -146,19 +142,14 @@ textarea {
   background: white;
   border-radius: 14px;
   padding: 15px;
-  margin: 8px 0 16px;
-  outline: none;
+  margin: 8px 0 14px;
   font-size: 14px;
+  outline: none;
 }
 
 textarea {
   min-height: 120px;
   resize: none;
-}
-
-label {
-  font-size: 13px;
-  font-weight: 700;
 }
 
 /* ===== FILTERS ===== */
@@ -167,21 +158,21 @@ label {
   display: flex;
   gap: 8px;
   overflow-x: auto;
-  padding: 4px 0 14px;
+  padding: 6px 0 14px;
 }
 
 .categories button,
 .tabs button {
-  white-space: nowrap;
   border: 0;
   background: white;
   padding: 10px 13px;
   border-radius: 14px;
+  white-space: nowrap;
   color: #596073;
 }
 
-.categories button.active,
-.tabs button.active {
+.categories .active,
+.tabs .active {
   background: #6d5dfc;
   color: white;
 }
@@ -192,21 +183,17 @@ label {
   gap: 12px;
 }
 
-/* ===== PRODUCT CARD ===== */
+/* ===== CARD ===== */
 .product-card {
   background: white;
   border-radius: 18px;
   padding: 12px;
   display: grid;
-  grid-template-columns: 82px minmax(0, 1fr) auto;
+  grid-template-columns: 82px 1fr auto;
   gap: 12px;
   align-items: center;
-  box-shadow: 0 10px 25px rgba(35, 41, 60, .05);
-  transition: 0.2s;
-}
 
-.product-card:active {
-  transform: scale(0.98);
+  box-shadow: 0 10px 25px rgba(35, 41, 60, .05);
 }
 
 .product-card img {
@@ -214,73 +201,56 @@ label {
   height: 82px;
   border-radius: 14px;
   object-fit: cover;
-  background: #e9ecf3;
-}
-
-.product-card div {
-  min-width: 0;
-  overflow: hidden;
 }
 
 .product-card h4 {
   margin: 0 0 5px;
   font-size: 15px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+.product-card p {
+  margin: 3px 0;
+  font-size: 12px;
+  color: #8a93a5;
 }
 
 .product-card b {
   color: #222;
 }
 
-.product-card p {
-  margin: 4px 0;
-  color: #8a93a5;
-  font-size: 12px;
-}
-
-/* ===== HEART ===== */
+/* ===== FAVORITE BUTTON ===== */
 .heart {
   border: 0;
   background: transparent;
   font-size: 22px;
   color: #b5bdca;
-  cursor: pointer;
-  transition: 0.2s;
-}
-
-.heart:active {
-  transform: scale(0.9);
 }
 
 /* ===== PRODUCT PAGE ===== */
 .hero-img {
   width: 100%;
-  height: 295px;
+  height: 280px;
   border-radius: 22px;
   object-fit: cover;
-  background: #e6e9f2;
 }
 
 .price {
   color: #6d5dfc;
-  margin-top: -5px;
+  margin-top: 6px;
 }
 
 .seller,
 .desc {
   color: #687083;
-  line-height: 1.45;
+  line-height: 1.4;
 }
 
-/* ===== ACTIONS ===== */
+/* ===== ACTIONS (FIXED SAFE) ===== */
 .actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
-  position: sticky;
-  bottom: 92px;
+  margin-top: 16px;
 }
 
 .primary,
@@ -302,17 +272,12 @@ label {
   border: 1px solid #d8d4ff;
 }
 
-.wide {
-  width: 100%;
-  margin-top: 12px;
-}
-
 /* ===== STEPS ===== */
 .steps {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 24px;
+  margin-bottom: 20px;
 }
 
 .steps b {
@@ -323,20 +288,13 @@ label {
   color: white;
   display: grid;
   place-items: center;
-  font-size: 13px;
-}
-
-.steps span {
-  flex: 1;
-  height: 2px;
-  background: #dfe3ee;
 }
 
 /* ===== PHOTO GRID ===== */
 .photo-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 11px;
+  gap: 10px;
 }
 
 .photo-grid button,
@@ -345,17 +303,6 @@ label {
   border-radius: 16px;
   border: 1px dashed #cbd2e1;
   background: white;
-  color: #6d5dfc;
-}
-
-/* ===== TOGGLE ===== */
-.toggle-row {
-  background: white;
-  padding: 15px;
-  border-radius: 16px;
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 16px;
 }
 
 /* ===== PROFILE ===== */
@@ -364,7 +311,6 @@ label {
   border-radius: 22px;
   text-align: center;
   padding: 24px;
-  margin-bottom: 18px;
 }
 
 .avatar {
@@ -376,7 +322,6 @@ label {
   display: grid;
   place-items: center;
   font-size: 32px;
-  font-weight: 800;
   margin: auto;
 }
 
@@ -386,31 +331,32 @@ label {
   background: white;
   border-radius: 15px;
   padding: 16px;
-  margin-bottom: 10px;
-  text-align: left;
+  margin-top: 10px;
   display: flex;
   justify-content: space-between;
-  transition: 0.2s;
 }
 
-.profile-row:active {
-  transform: scale(0.98);
-}
-
-/* ===== BOTTOM NAV ===== */
+/* ===== BOTTOM NAV (FIXED + SAFE AREA) ===== */
 .bottom-nav {
   position: fixed;
   left: 50%;
   bottom: 0;
   transform: translateX(-50%);
+
   width: min(430px, 100%);
   height: 72px;
+
   background: white;
   border-top: 1px solid #edf0f5;
+
   display: flex;
   justify-content: space-around;
   align-items: center;
-  z-index: 20;
+
+  z-index: 50;
+
+  /* FIX: Telegram safe area */
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
 .bottom-nav button {
@@ -424,9 +370,10 @@ label {
 
 .bottom-nav small {
   font-size: 10px;
-  margin-top: 3px;
+  margin-top: 2px;
 }
 
+/* ===== ADD BUTTON ===== */
 .add-btn {
   width: 52px;
   height: 52px;
@@ -438,26 +385,38 @@ label {
   box-shadow: 0 10px 24px rgba(109, 93, 252, .35);
 }
 
-/* ===== FIX BUTTON POSITION ===== */
-.fixed-btn {
-  position: sticky;
-  bottom: 90px;
+.wide {
+  width: 100%;
 }
 
-body {
-  padding-top: env(safe-area-inset-top);
-  padding-bottom: env(safe-area-inset-bottom);
+.empty-state {
+  background: white;
+  border-radius: 18px;
+  padding: 22px;
+  text-align: center;
+  box-shadow: 0 10px 25px rgba(35, 41, 60, .05);
 }
 
-button {
-  -webkit-tap-highlight-color: transparent;
+.empty-state h3 {
+  margin: 0 0 6px;
 }
 
-* {
-  -webkit-user-select: none;
-  -webkit-touch-callout: none;
+.photo-grid div.filled {
+  border-style: solid;
+  overflow: hidden;
 }
 
-html, body {
-  overflow-x: hidden;
+.photo-grid img {
+  width: 100%;
+  height: 100%;
+  border-radius: 16px;
+  object-fit: cover;
+}
+
+.bottom-nav button.active {
+  color: #6d5dfc;
+}
+
+.add-btn.active {
+  color: white !important;
 }
