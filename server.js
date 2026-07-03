@@ -77,6 +77,8 @@ async function initDb() {
       views INTEGER DEFAULT 0,
       status TEXT DEFAULT 'active',
       created_at TIMESTAMPTZ DEFAULT NOW()
+      phone TEXT DEFAULT '',
+      allow_messages BOOLEAN DEFAULT true,
     );
   `);
 
