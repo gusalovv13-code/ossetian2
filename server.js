@@ -83,6 +83,16 @@ async function initDb() {
   `);
 
   await pool.query(`
+  ALTER TABLE products
+  ADD COLUMN IF NOT EXISTS phone TEXT DEFAULT '';
+`);
+
+await pool.query(`
+  ALTER TABLE products
+  ADD COLUMN IF NOT EXISTS allow_messages BOOLEAN DEFAULT true;
+`);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS favorites (
       user_id TEXT NOT NULL,
       product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
