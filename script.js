@@ -599,15 +599,34 @@ function initTelegramUser() {
 
   if (!webApp) {
     if (avatar) {
+  avatar.innerHTML = "";
+
   if (user.photo_url) {
-    avatar.innerHTML = `<img src="${user.photo_url}" alt="${fullName}">`;
+    const img = new Image();
+    img.src = user.photo_url;
+    img.alt = fullName;
+
+    img.onload = () => {
+      avatar.innerHTML = "";
+      avatar.appendChild(img);
+    };
+
+    img.onerror = () => {
+      avatar.innerText = firstName[0]?.toUpperCase() || "?";
+    };
   } else {
     avatar.innerText = firstName[0]?.toUpperCase() || "?";
   }
 }
 
 if (name) name.innerText = fullName;
-if (nick) nick.innerText = username ? `@${username}` : "без username";
+if (nick) {
+  nick.innerText = username
+    ? `@${username}`
+    : user.photo_url
+      ? "фото найдено"
+      : "Telegram не передал фото";
+}
     return;
   }
 
