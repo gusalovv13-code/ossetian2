@@ -53,6 +53,8 @@ function mapProduct(row) {
     desc: row.description,
     image: row.image,
     location: row.location,
+    phone: row.phone || "",
+    allowMessages: row.allow_messages,
     views: row.views,
     status: row.status,
     createdAt: new Date(row.created_at).getTime()
