@@ -268,16 +268,18 @@ app.get("/api/my-products/:userId", async (req, res) => {
 app.post("/api/products", async (req, res) => {
   try {
     const {
-      ownerId,
-      ownerName,
-      ownerUsername,
-      name,
-      price,
-      category,
-      desc,
-      image,
-      location
-    } = req.body;
+  ownerId,
+  ownerName,
+  ownerUsername,
+  name,
+  price,
+  category,
+  desc,
+  image,
+  location,
+  phone,
+  allowMessages
+} = req.body;
 
     if (!ownerId || !name || !price || !category || !desc) {
       return res.status(400).json({
