@@ -290,39 +290,42 @@ app.post("/api/products", async (req, res) => {
 
     const id = generateId();
 
-    const result = await pool.query(
-      `
-        INSERT INTO products (
-          id,
-          owner_id,
-          owner_name,
-          owner_username,
-          name,
-          price,
-          category,
-          description,
-          image,
-          location,
-          views,
-          status
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, 'active')
-        RETURNING *;
-      `,
-      [
-        id,
-        String(ownerId),
-        ownerName || "",
-        ownerUsername || "",
-        name,
-        price,
-        category,
-        desc,
-        image || "",
-        location || "Владикавказ"
-      ]
-    );
-
+   const result = await pool.query(
+  `
+    INSERT INTO products (
+      id,
+      owner_id,
+      owner_name,
+      owner_username,
+      name,
+      price,
+      category,
+      description,
+      image,
+      location,
+      phone,
+      allow_messages,
+      views,
+      status
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 0, 'active')
+    RETURNING *;
+  `,
+  [
+    id,
+    String(ownerId),
+    ownerName || "",
+    ownerUsername || "",
+    name,
+    price,
+    category,
+    desc,
+    image || "",
+    location || "Владикавказ",
+    phone || "",
+    allowMessages !== false
+  ]
+);
     res.json({
       ok: true,
       product: mapProduct(result.rows[0])
