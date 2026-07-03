@@ -12,8 +12,9 @@ const state = {
   category: "Все",
   openedProductId: null,
   telegramUser: null,
-  products: JSON.parse(localStorage.getItem("products")) || [],
-  favorites: JSON.parse(localStorage.getItem("favorites")) || []
+  products: [],
+  myProducts: [],
+  favorites: []
 };
 
 const draftAd = {
@@ -21,59 +22,67 @@ const draftAd = {
 };
 
 /* =======================
-   INIT DATA
+   API
 ======================= */
 
-if (state.products.length === 0) {
-  state.products = [
-    {
-      id: generateId(),
-      name: "iPhone 15 Pro 128GB",
-      price: "90 000 ₽",
-      category: "Электроника",
-      image: "https://images.unsplash.com/photo-1695048133142-1a20484d2569?w=500",
-      desc: "Телефон в идеальном состоянии. Носился в чехле, без сколов и царапин.",
-      location: "Владикавказ",
-      createdAt: Date.now() - 1000 * 60 * 5,
-      views: 128,
-      status: "active"
+async function apiRequest(url, options = {}) {
+  const response = await fetch(url, {
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {})
     },
-    {
-      id: generateId(),
-      name: "BMW 3 Series",
-      price: "1 650 000 ₽",
-      category: "Авто",
-      image: "https://images.unsplash.com/photo-1555215695-3004980ad54e?w=500",
-      desc: "Авто в хорошем состоянии. Документы чистые.",
-      location: "Владикавказ",
-      createdAt: Date.now() - 1000 * 60 * 60 * 2,
-      views: 34,
-      status: "active"
-    },
-    {
-      id: generateId(),
-      name: "Диван в отличном состоянии",
-      price: "25 000 ₽",
-      category: "Дом",
-      image: "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?w=500",
-      desc: "Удобный диван, без пятен и повреждений.",
-      location: "Беслан",
-      createdAt: Date.now() - 1000 * 60 * 60 * 24,
-      views: 30,
-      status: "active"
-    }
-  ];
+    ...options
+  });
 
-  save();
+  const data = await response.json();
+
+  if (!data.ok) {
+    throw new Error(data.error || "Ошибка сервера");
+  }
+
+  return data;
 }
 
-/* =======================
-   SAVE
-======================= */
+async function loadProducts() {
+  try {
+    const data = await apiRequest("/api/products");
+    state.products = data.products || [];
+    render();
+  } catch (error) {
+    console.error("Не удалось загрузить товары:", error);
+  }
+}
 
-function save() {
-  localStorage.setItem("products", JSON.stringify(state.products));
-  localStorage.setItem("favorites", JSON.stringify(state.favorites));
+async function loadMyProducts() {
+  if (!state.telegramUser?.id) {
+    state.myProducts = [];
+    render();
+    return;
+  }
+
+  try {
+    const data = await apiRequest(`/api/my-products/${state.telegramUser.id}`);
+    state.myProducts = data.products || [];
+    render();
+  } catch (error) {
+    console.error("Не удалось загрузить мои объявления:", error);
+  }
+}
+
+async function loadFavorites() {
+  if (!state.telegramUser?.id) {
+    state.favorites = [];
+    render();
+    return;
+  }
+
+  try {
+    const data = await apiRequest(`/api/favorites/${state.telegramUser.id}`);
+    state.favorites = data.favorites || [];
+    render();
+  } catch (error) {
+    console.error("Не удалось загрузить избранное:", error);
+  }
 }
 
 /* =======================
@@ -117,6 +126,19 @@ function showPage(page, addToHistory = true) {
   }
 
   updateBottomNav();
+
+  if (page === "catalog") {
+    loadProducts();
+  }
+
+  if (page === "myAds") {
+    loadMyProducts();
+  }
+
+  if (page === "favorites") {
+    loadFavorites();
+  }
+
   render();
 
   window.scrollTo({
@@ -228,8 +250,8 @@ function renderProducts() {
   if (products.length === 0) {
     productList.innerHTML = `
       <div class="empty-state">
-        <h3>Ничего не найдено</h3>
-        <p class="muted">Попробуйте изменить поиск или категорию.</p>
+        <h3>Объявлений пока нет</h3>
+        <p class="muted">Станьте первым, кто добавит товар.</p>
       </div>
     `;
     return;
@@ -270,9 +292,17 @@ function renderMyAds() {
 
   if (!myAdsList || state.page !== "myAds") return;
 
-  const ads = state.products.filter(product => product.status !== "deleted");
+  if (!state.telegramUser?.id) {
+    myAdsList.innerHTML = `
+      <div class="empty-state">
+        <h3>Откройте через Telegram</h3>
+        <p class="muted">Так мы поймём, какие объявления ваши.</p>
+      </div>
+    `;
+    return;
+  }
 
-  if (ads.length === 0) {
+  if (state.myProducts.length === 0) {
     myAdsList.innerHTML = `
       <div class="empty-state">
         <h3>У вас пока нет объявлений</h3>
@@ -282,7 +312,7 @@ function renderMyAds() {
     return;
   }
 
-  myAdsList.innerHTML = ads
+  myAdsList.innerHTML = state.myProducts
     .map(product =>
       getProductCard(product, {
         deleteButton: true,
@@ -300,6 +330,17 @@ function renderFavorites() {
   const favs = state.products.filter(product =>
     state.favorites.includes(product.id)
   );
+
+  if (!state.telegramUser?.id) {
+    favoritesPage.innerHTML = `
+      <h2>Избранное</h2>
+      <div class="empty-state">
+        <h3>Откройте через Telegram</h3>
+        <p class="muted">Избранное привязывается к вашему Telegram-профилю.</p>
+      </div>
+    `;
+    return;
+  }
 
   if (favs.length === 0) {
     favoritesPage.innerHTML = `
@@ -327,9 +368,8 @@ function renderProfileCounters() {
     const text = row.innerText;
 
     if (text.includes("Мои объявления")) {
-      const count = state.products.filter(product => product.status !== "deleted").length;
       row.querySelector("b")?.remove();
-      row.insertAdjacentHTML("beforeend", `<b>${count}</b>`);
+      row.insertAdjacentHTML("beforeend", `<b>${state.myProducts.length}</b>`);
     }
 
     if (text.includes("Избранное")) {
@@ -343,28 +383,57 @@ function renderProfileCounters() {
    FAVORITES
 ======================= */
 
-function toggleFav(id) {
-  if (state.favorites.includes(id)) {
-    state.favorites = state.favorites.filter(favId => favId !== id);
-  } else {
-    state.favorites.push(id);
+async function toggleFav(id) {
+  if (!state.telegramUser?.id) {
+    alert("Откройте приложение через Telegram");
+    return;
   }
 
-  save();
-  render();
+  try {
+    const data = await apiRequest("/api/favorites", {
+      method: "POST",
+      body: JSON.stringify({
+        userId: state.telegramUser.id,
+        productId: id
+      })
+    });
+
+    if (data.isFavorite) {
+      if (!state.favorites.includes(id)) {
+        state.favorites.push(id);
+      }
+    } else {
+      state.favorites = state.favorites.filter(favId => favId !== id);
+    }
+
+    render();
+  } catch (error) {
+    console.error("Не удалось обновить избранное:", error);
+    alert("Не удалось обновить избранное");
+  }
 }
 
 /* =======================
    PRODUCT PAGE
 ======================= */
 
-function openProduct(id) {
-  const product = state.products.find(item => item.id === id);
+async function openProduct(id) {
+  const product = state.products.find(item => item.id === id) ||
+    state.myProducts.find(item => item.id === id);
 
   if (!product) return;
 
-  product.views = (product.views || 0) + 1;
   state.openedProductId = id;
+
+  try {
+    const data = await apiRequest(`/api/products/${id}/view`, {
+      method: "POST"
+    });
+
+    Object.assign(product, data.product);
+  } catch (error) {
+    console.error("Не удалось обновить просмотры:", error);
+  }
 
   const imageEl = document.getElementById("productImage");
   const nameEl = document.getElementById("productName");
@@ -381,7 +450,6 @@ function openProduct(id) {
     sellerEl.innerText = `📍 ${product.location || "Владикавказ"} · ${getTimeAgo(product.createdAt)} · 👁 ${product.views || 0}`;
   }
 
-  save();
   showPage("product");
 }
 
@@ -441,7 +509,12 @@ function updatePreviewCard() {
   `;
 }
 
-function publishAd() {
+async function publishAd() {
+  if (!state.telegramUser?.id) {
+    alert("Откройте приложение через Telegram");
+    return;
+  }
+
   const ad = getAdFormData();
 
   if (!ad.title) {
@@ -459,25 +532,35 @@ function publishAd() {
     return;
   }
 
-  const newProduct = {
-    id: generateId(),
-    name: ad.title,
-    price: formatPrice(ad.price) || ad.price,
-    category: ad.category,
-    desc: ad.desc,
-    image: draftAd.image || DEFAULT_IMAGE,
-    location: "Владикавказ",
-    createdAt: Date.now(),
-    views: 0,
-    status: "active"
-  };
+  try {
+    const ownerName = `${state.telegramUser.firstName || ""} ${state.telegramUser.lastName || ""}`.trim();
 
-  state.products.unshift(newProduct);
-  save();
-  clearCreateForm();
-  showPage("myAds");
+    const data = await apiRequest("/api/products", {
+      method: "POST",
+      body: JSON.stringify({
+        ownerId: state.telegramUser.id,
+        ownerName,
+        ownerUsername: state.telegramUser.username || "",
+        name: ad.title,
+        price: formatPrice(ad.price) || ad.price,
+        category: ad.category,
+        desc: ad.desc,
+        image: draftAd.image || DEFAULT_IMAGE,
+        location: "Владикавказ"
+      })
+    });
 
-  alert("Объявление опубликовано");
+    state.products.unshift(data.product);
+    state.myProducts.unshift(data.product);
+
+    clearCreateForm();
+    showPage("myAds");
+
+    alert("Объявление опубликовано");
+  } catch (error) {
+    console.error("Не удалось опубликовать объявление:", error);
+    alert("Не удалось опубликовать объявление");
+  }
 }
 
 function clearCreateForm() {
@@ -507,16 +590,30 @@ function clearCreateForm() {
    DELETE AD
 ======================= */
 
-function deleteAd(id) {
+async function deleteAd(id) {
+  if (!state.telegramUser?.id) {
+    alert("Откройте приложение через Telegram");
+    return;
+  }
+
   const ok = confirm("Удалить объявление?");
 
   if (!ok) return;
 
-  state.products = state.products.filter(product => product.id !== id);
-  state.favorites = state.favorites.filter(favId => favId !== id);
+  try {
+    await apiRequest(`/api/products/${id}?ownerId=${state.telegramUser.id}`, {
+      method: "DELETE"
+    });
 
-  save();
-  render();
+    state.products = state.products.filter(product => product.id !== id);
+    state.myProducts = state.myProducts.filter(product => product.id !== id);
+    state.favorites = state.favorites.filter(favId => favId !== id);
+
+    render();
+  } catch (error) {
+    console.error("Не удалось удалить объявление:", error);
+    alert("Не удалось удалить объявление");
+  }
 }
 
 /* =======================
@@ -676,13 +773,21 @@ async function loadTelegramAvatar(userId, firstName, fullName) {
     avatar.innerText = firstName[0]?.toUpperCase() || "?";
   }
 }
+
 /* =======================
    INIT
 ======================= */
 
-function initApp() {
+async function initApp() {
   initEvents();
   initTelegramUser();
+
+  await Promise.all([
+    loadProducts(),
+    loadMyProducts(),
+    loadFavorites()
+  ]);
+
   render();
   updateBottomNav();
 }
