@@ -1324,3 +1324,42 @@ html body .phone .page button#createStep2Btn:not([disabled]) {
   cursor: pointer !important;
   pointer-events: auto !important;
 }
+
+/* =======================
+   FIX: MOVE TOP TITLE UP
+======================= */
+
+.topbar,
+.topbar.safe-top {
+  padding-top: calc(
+    0px + env(safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px)
+  ) !important;
+
+  padding-bottom: 4px !important;
+  min-height: 44px !important;
+  height: 48px !important;
+
+  display: flex !important;
+  align-items: flex-start !important;
+}
+
+/* Сам текст чуть выше */
+.topbar-title {
+  padding-top: 0 !important;
+  transform: translateY(-4px);
+}
+
+/* Название */
+.topbar-title h3,
+#pageTitle {
+  margin: 0 !important;
+  font-size: 16px !important;
+  line-height: 1.1 !important;
+}
+
+/* Подпись мини-приложение, если есть */
+.topbar-title p {
+  margin: 1px 0 0 !important;
+  font-size: 11px !important;
+  line-height: 1.1 !important;
+}

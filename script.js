@@ -208,6 +208,8 @@ function updateBottomNav() {
    HELPERS
 ======================= */
 
+
+
 function getPriceNumber(value) {
   const onlyNums = String(value || "").replace(/[^\d]/g, "");
 
@@ -268,6 +270,18 @@ function openPhoneCall(phone) {
   setTimeout(() => {
     phoneLink.remove();
   }, 500);
+}
+
+function hideKeyboardOnEnter(event) {
+  if (event.key !== "Enter") return;
+
+  event.preventDefault();
+
+  const target = event.target;
+
+  if (target && typeof target.blur === "function") {
+    target.blur();
+  }
 }
 
 function getTimeAgo(timestamp) {
@@ -1120,6 +1134,12 @@ adPriceInput?.addEventListener("blur", event => {
       updateCreateButtons();
     });
   });
+
+  ["adTitle", "adPrice", "adDesc", "adPhone"].forEach(id => {
+  const el = document.getElementById(id);
+
+  el?.addEventListener("keydown", hideKeyboardOnEnter);
+});
 
   renderPhotoPreview();
   updateCreateButtons();
