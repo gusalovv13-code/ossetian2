@@ -1083,6 +1083,10 @@ function initSwipeBack() {
   let isEdgeSwipe = false;
   let indicatorVisible = false;
 
+  const swipeStartZone = 85; // зона слева, откуда можно начать свайп
+  const showArrowDistance = 18; // когда показать стрелку
+  const backTriggerDistance = 55; // сколько нужно провести, чтобы вернуться назад
+
   document.addEventListener(
     "touchstart",
     event => {
@@ -1094,10 +1098,72 @@ function initSwipeBack() {
       startY = touch.clientY;
       indicatorVisible = false;
 
-      isEdgeSwipe = startX <= 36 && canSwipeBack();
+      isEdgeSwipe = startX <= swipeStartZone && canSwipeBack();
     },
     { passive: true }
   );
+
+  document.addEventListener(
+    "touchmove",
+    event => {
+      if (!isEdgeSwipe || !event.touches || event.touches.length !== 1) return;
+
+      const touch = event.touches[0];
+      const deltaX = touch.clientX - startX;
+      const deltaY = Math.abs(touch.clientY - startY);
+
+      if (deltaX > showArrowDistance && deltaY < 55) {
+        event.preventDefault();
+
+        const indicator = getSwipeBackIndicator();
+        indicator.classList.add("active");
+        indicatorVisible = true;
+      }
+    },
+    { passive: false }
+  );
+
+  document.addEventListener(
+    "touchend",
+    event => {
+      if (!isEdgeSwipe) return;
+
+      const indicator = getSwipeBackIndicator();
+
+      if (indicatorVisible) {
+        indicator.classList.remove("active");
+      }
+
+      const touch = event.changedTouches?.[0];
+
+      if (!touch) {
+        isEdgeSwipe = false;
+        return;
+      }
+
+      const deltaX = touch.clientX - startX;
+      const deltaY = Math.abs(touch.clientY - startY);
+
+      if (deltaX > backTriggerDistance && deltaY < 65) {
+        goBack();
+      }
+
+      isEdgeSwipe = false;
+      indicatorVisible = false;
+    },
+    { passive: true }
+  );
+
+  document.addEventListener(
+    "touchcancel",
+    () => {
+      getSwipeBackIndicator().classList.remove("active");
+      isEdgeSwipe = false;
+      indicatorVisible = false;
+    },
+    { passive: true }
+  );
+
 
   document.addEventListener(
     "touchmove",

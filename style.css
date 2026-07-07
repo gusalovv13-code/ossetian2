@@ -1108,3 +1108,159 @@ body {
   font-size: 12px;
   line-height: 1.1;
 }
+
+/* =======================
+   FIX: CENTER BOTTOM PLUS BUTTON
+======================= */
+
+.bottom-nav {
+  display: grid !important;
+  grid-template-columns: repeat(5, 1fr) !important;
+  align-items: center !important;
+
+  width: 100% !important;
+  left: 0 !important;
+  right: 0 !important;
+
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+
+/* Все кнопки в нижнем меню по центру своей колонки */
+.bottom-nav button {
+  width: 100% !important;
+  min-width: 0 !important;
+
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+
+  text-align: center !important;
+  margin: 0 !important;
+}
+
+/* Центральная кнопка плюс */
+.bottom-nav .add-btn {
+  grid-column: 3 !important;
+  justify-self: center !important;
+  align-self: center !important;
+
+  width: 58px !important;
+  height: 58px !important;
+
+  margin: -26px auto 0 auto !important;
+
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+
+  border-radius: 22px !important;
+
+  transform: none !important;
+  left: auto !important;
+  right: auto !important;
+  position: relative !important;
+}
+
+/* Сам символ плюса ровно по центру */
+.bottom-nav .add-btn {
+  font-size: 34px !important;
+  line-height: 1 !important;
+  padding: 0 !important;
+}
+
+/* =======================
+   FIX: BOTTOM NAV WIDTH AFTER GRID BUG
+======================= */
+
+/* Контейнер приложения */
+.phone {
+  position: relative !important;
+
+  width: 100% !important;
+  max-width: 430px !important;
+
+  margin-left: auto !important;
+  margin-right: auto !important;
+
+  overflow-x: hidden !important;
+}
+
+/* Нижняя навигация строго по ширине приложения, а не всего экрана */
+.bottom-nav {
+  position: fixed !important;
+
+  left: 50% !important;
+  right: auto !important;
+  bottom: 0 !important;
+
+  transform: translateX(-50%) !important;
+
+  width: min(100vw, 430px) !important;
+  max-width: 430px !important;
+
+  display: grid !important;
+  grid-template-columns: repeat(5, 1fr) !important;
+  align-items: center !important;
+
+  padding: 8px 0 calc(8px + env(safe-area-inset-bottom, 0px)) !important;
+
+  background: #ffffff !important;
+  border-radius: 24px 24px 0 0 !important;
+
+  z-index: 1000 !important;
+}
+
+/* Кнопки внутри нижнего меню */
+.bottom-nav button {
+  width: 100% !important;
+  min-width: 0 !important;
+
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+
+  margin: 0 !important;
+  padding: 0 !important;
+
+  text-align: center !important;
+
+  position: relative !important;
+  left: auto !important;
+  right: auto !important;
+  transform: none !important;
+}
+
+/* Центральная кнопка плюс */
+.bottom-nav .add-btn {
+  grid-column: 3 !important;
+
+  justify-self: center !important;
+  align-self: center !important;
+
+  width: 58px !important;
+  height: 58px !important;
+
+  margin-top: -28px !important;
+
+  border-radius: 22px !important;
+
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+
+  font-size: 34px !important;
+  line-height: 1 !important;
+
+  position: relative !important;
+  left: auto !important;
+  right: auto !important;
+  transform: none !important;
+}
+
+/* Чтобы контент не залезал под нижнее меню */
+.page {
+  padding-bottom: 100px !important;
+}
