@@ -12,7 +12,7 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=117" />
+  <link rel="stylesheet" href="style.css?v=119" />
 </head>
 
 <body>
@@ -66,8 +66,16 @@
       </div>
     </section>
 
-    <section id="catalog" class="page">
-      <input class="search" placeholder="Поиск товаров..." />
+    <form id="searchForm" class="search-form" action="javascript:void(0);">
+  <input
+    id="searchInput"
+    class="search"
+    type="search"
+    placeholder="Поиск товаров..."
+    enterkeyhint="done"
+    autocomplete="off"
+  />
+</form>
 
       <div class="categories">
         <button class="active" type="button">Все</button>
@@ -293,6 +301,6 @@
 
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">‹</div>
 
-  <script src="script.js?v=117"></script>
+  <script src="script.js?v=119"></script>
 </body>
 </html>

@@ -1391,3 +1391,12 @@ html body .phone .page button#createStep2Btn:not([disabled]) {
   pointer-events: none !important;
   cursor: not-allowed !important;
 }
+
+.phone-line-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.phone-line-link:active {
+  opacity: 0.7;
+}
