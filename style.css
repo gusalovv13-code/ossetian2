@@ -992,3 +992,119 @@ body {
     font-size: 10px;
   }
 }
+
+/* =======================
+   FIX: TELEGRAM BLACK PULL STRIP
+======================= */
+
+html {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #f5f6fb;
+  overscroll-behavior: none;
+}
+
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+
+  overflow: hidden;
+  background: #f5f6fb;
+
+  overscroll-behavior: none;
+  overscroll-behavior-y: none;
+
+  -webkit-overflow-scrolling: auto;
+}
+
+/* Скролл должен быть внутри приложения, а не у body */
+.phone {
+  height: 100vh;
+  max-height: 100vh;
+
+  overflow-y: auto;
+  overflow-x: hidden;
+
+  overscroll-behavior: contain;
+  overscroll-behavior-y: contain;
+
+  -webkit-overflow-scrolling: touch;
+
+  background: #f5f6fb;
+}
+
+/* Чтобы верх не показывал черноту при микросвайпе */
+.phone::before {
+  content: "";
+  position: fixed;
+  top: -120px;
+  left: 0;
+  right: 0;
+
+  height: 160px;
+  background: #f5f6fb;
+  z-index: -1;
+}
+
+/* Верхняя панель пусть будет белой/светлой */
+.topbar {
+  background: #ffffff;
+}
+
+/* =======================
+   FIX: TOPBAR POSITION + REMOVE DOTS
+======================= */
+
+/* Убираем лишний общий отступ, из-за которого текст уехал вниз */
+body {
+  padding-top: 0 !important;
+}
+
+/* Верхняя панель — ниже шторки, но не слишком низко */
+.topbar,
+.topbar.safe-top {
+  padding-top: calc(
+    6px + env(safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px)
+  ) !important;
+
+  padding-left: 14px;
+  padding-right: 14px;
+  padding-bottom: 8px;
+
+  min-height: 58px;
+}
+
+/* Заголовок аккуратно по центру */
+.topbar-title {
+  flex: 1;
+  text-align: center;
+  min-width: 0;
+}
+
+/* Левый и правый пустые блоки одинаковые */
+.topbar-spacer {
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
+}
+
+/* Убираем внутренние три точки приложения */
+.circle {
+  display: none !important;
+}
+
+/* Текст заголовка компактнее */
+.topbar-title h3,
+#pageTitle {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.15;
+}
+
+.topbar-title p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 1.1;
+}

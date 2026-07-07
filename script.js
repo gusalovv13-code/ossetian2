@@ -983,8 +983,19 @@ function initTelegramAppUI() {
   tg.ready();
   tg.expand();
 
+  document.body.style.background = "#f5f6fb";
+  document.documentElement.style.background = "#f5f6fb";
+
   if (typeof tg.disableVerticalSwipes === "function") {
     tg.disableVerticalSwipes();
+  }
+
+  if (typeof tg.setHeaderColor === "function") {
+    tg.setHeaderColor("#f5f6fb");
+  }
+
+  if (typeof tg.setBackgroundColor === "function") {
+    tg.setBackgroundColor("#f5f6fb");
   }
 
   if (tg.BackButton) {
