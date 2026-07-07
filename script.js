@@ -6,6 +6,7 @@ const DEFAULT_IMAGE =
   "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=500";
 
 const MAX_PHOTOS = 5;
+const MAX_PRICE = 100000000;
 
 const tg = window.Telegram?.WebApp || null;
 
@@ -206,6 +207,38 @@ function updateBottomNav() {
 /* =======================
    HELPERS
 ======================= */
+
+function getPriceNumber(value) {
+  const onlyNums = String(value || "").replace(/[^\d]/g, "");
+
+  if (!onlyNums) return 0;
+
+  return Number(onlyNums);
+}
+
+function normalizePriceInput(input) {
+  if (!input) return;
+
+  let onlyNums = input.value.replace(/[^\d]/g, "");
+
+  if (!onlyNums) {
+    input.value = "";
+    updateCreateButtons();
+    updatePreviewCard();
+    return;
+  }
+
+  let priceNumber = Number(onlyNums);
+
+  if (priceNumber > MAX_PRICE) {
+    priceNumber = MAX_PRICE;
+  }
+
+  input.value = String(priceNumber);
+
+  updateCreateButtons();
+  updatePreviewCard();
+}
 
 function formatPrice(value) {
   const onlyNums = String(value).replace(/[^\d]/g, "");
@@ -677,10 +710,12 @@ function getAdFormData() {
 
 function isCreateStep1Valid() {
   const ad = getAdFormData();
+  const priceNumber = getPriceNumber(ad.price);
 
   return Boolean(
     ad.title &&
-    ad.price &&
+    priceNumber > 0 &&
+    priceNumber <= MAX_PRICE &&
     ad.category &&
     ad.desc
   );
@@ -834,6 +869,18 @@ async function publishAd() {
       return;
     }
 
+    const priceNumber = getPriceNumber(ad.price);
+
+if (priceNumber <= 0) {
+  alert("Укажите корректную цену");
+  return;
+}
+
+if (priceNumber > MAX_PRICE) {
+  alert("Цена не может быть больше 100 000 000 ₽");
+  return;
+}
+
     if (!ad.price) {
       alert("Укажите цену");
       return;
@@ -855,7 +902,7 @@ async function publishAd() {
         ownerName,
         ownerUsername: state.telegramUser.username || "",
         name: ad.title,
-        price: formatPrice(ad.price) || ad.price,
+        price: formatPrice(priceNumber),
         category: ad.category,
         desc: ad.desc,
         image: mainImage,
@@ -1028,16 +1075,29 @@ function initEvents() {
     });
   });
 
-  document.getElementById("adPrice")?.addEventListener("blur", event => {
-    const formatted = formatPrice(event.target.value);
+  const adPriceInput = document.getElementById("adPrice");
 
-    if (formatted) {
-      event.target.value = formatted;
-    }
+adPriceInput?.addEventListener("input", event => {
+  normalizePriceInput(event.target);
+});
 
-    updateCreateButtons();
-    updatePreviewCard();
-  });
+adPriceInput?.addEventListener("focus", event => {
+  const onlyNums = String(event.target.value || "").replace(/[^\d]/g, "");
+  event.target.value = onlyNums;
+});
+
+adPriceInput?.addEventListener("blur", event => {
+  normalizePriceInput(event.target);
+
+  const priceNumber = getPriceNumber(event.target.value);
+
+  if (priceNumber > 0) {
+    event.target.value = formatPrice(priceNumber);
+  }
+
+  updateCreateButtons();
+  updatePreviewCard();
+});
 
   [
     "adTitle",
@@ -1090,9 +1150,39 @@ function initTelegramAppUI() {
     tg.setBackgroundColor("#f5f6fb");
   }
 
+  requestTelegramFullscreen();
+
+  setTimeout(() => {
+    tg.expand();
+    requestTelegramFullscreen();
+  }, 300);
+
   if (tg.BackButton) {
     tg.BackButton.onClick(goBack);
     updateTelegramBackButton();
+  }
+}
+
+function requestTelegramFullscreen() {
+  try {
+    if (window.TelegramWebviewProxy?.postEvent) {
+      window.TelegramWebviewProxy.postEvent(
+        "web_app_request_fullscreen",
+        JSON.stringify({ blur: false })
+      );
+      return;
+    }
+
+    if (window.external?.notify) {
+      window.external.notify(
+        JSON.stringify({
+          eventType: "web_app_request_fullscreen",
+          eventData: { blur: false }
+        })
+      );
+    }
+  } catch (error) {
+    console.warn("Fullscreen недоступен:", error);
   }
 }
 

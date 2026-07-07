@@ -116,7 +116,14 @@
       <input id="adTitle" placeholder="Введите название" />
 
       <label for="adPrice">Цена</label>
-      <input id="adPrice" placeholder="Укажите цену" />
+      <input
+  id="adPrice"
+  type="text"
+  inputmode="numeric"
+  pattern="[0-9]*"
+  maxlength="9"
+  placeholder="Укажите цену"
+/>
 
       <label for="adCategory">Категория</label>
       <select id="adCategory">
