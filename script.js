@@ -209,6 +209,26 @@ function updateBottomNav() {
 ======================= */
 
 
+function normalizePhoneForTel(phone) {
+  let cleanPhone = String(phone || "")
+    .trim()
+    .replace(/[^\d+]/g, "");
+
+  if (!cleanPhone) return "";
+
+  // Если номер начинается с 8 и всего 11 цифр — превращаем в +7
+  if (cleanPhone.startsWith("8") && cleanPhone.length === 11) {
+    cleanPhone = "+7" + cleanPhone.slice(1);
+  }
+
+  // Если номер начинается с 7 и всего 11 цифр — добавляем +
+  if (cleanPhone.startsWith("7") && cleanPhone.length === 11) {
+    cleanPhone = "+" + cleanPhone;
+  }
+
+  return cleanPhone;
+}
+
 
 function getPriceNumber(value) {
   const onlyNums = String(value || "").replace(/[^\d]/g, "");
@@ -685,21 +705,29 @@ async function openProduct(id) {
   }
 
   if (callBtn) {
-  if (sellerPhone) {
-    callBtn.disabled = false;
-    callBtn.classList.remove("disabled-btn");
+  const cleanPhone = normalizePhoneForTel(sellerPhone);
+
+  if (cleanPhone) {
+    callBtn.href = `tel:${cleanPhone}`;
     callBtn.innerText = "📞 Позвонить";
+
+    callBtn.classList.remove("disabled-btn");
+    callBtn.classList.remove("disabled");
+    callBtn.removeAttribute("aria-disabled");
+
+    callBtn.onclick = null;
+  } else {
+    callBtn.href = "#";
+    callBtn.innerText = "📞 Нет номера";
+
+    callBtn.classList.add("disabled-btn");
+    callBtn.classList.add("disabled");
+    callBtn.setAttribute("aria-disabled", "true");
 
     callBtn.onclick = event => {
       event.preventDefault();
-      event.stopPropagation();
-      openPhoneCall(sellerPhone);
+      alert("Телефон продавца не указан");
     };
-  } else {
-    callBtn.disabled = true;
-    callBtn.classList.add("disabled-btn");
-    callBtn.innerText = "📞 Нет номера";
-    callBtn.onclick = null;
   }
 }
 

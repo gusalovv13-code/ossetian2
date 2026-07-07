@@ -1346,7 +1346,7 @@ html body .phone .page button#createStep2Btn:not([disabled]) {
 /* Сам текст чуть выше */
 .topbar-title {
   padding-top: 0 !important;
-  transform: translateY(4px);
+  transform: translateY(-7px);
 }
 
 /* Название */
@@ -1362,4 +1362,32 @@ html body .phone .page button#createStep2Btn:not([disabled]) {
   margin: 1px 0 0 !important;
   font-size: 11px !important;
   line-height: 1.1 !important;
+}
+
+/* =======================
+   CALL LINK BUTTON
+======================= */
+
+.actions .call-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  text-decoration: none;
+  text-align: center;
+
+  min-height: 48px;
+  border-radius: 16px;
+
+  font-weight: 700;
+}
+
+.actions .call-link.disabled,
+.actions .call-link.disabled-btn {
+  background: #d7d9e2 !important;
+  background-image: none !important;
+  color: #7f8494 !important;
+  box-shadow: none !important;
+  pointer-events: none !important;
+  cursor: not-allowed !important;
 }
