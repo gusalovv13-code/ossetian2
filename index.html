@@ -12,7 +12,7 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=115" />
+  <link rel="stylesheet" href="style.css?v=116" />
 </head>
 
 <body>
@@ -120,18 +120,19 @@
 
       <label for="adCategory">Категория</label>
       <select id="adCategory">
-        <option>Электроника</option>
-        <option>Авто</option>
-        <option>Одежда</option>
-        <option>Дом</option>
-      </select>
+  <option value="">Выберите категорию</option>
+  <option value="Электроника">Электроника</option>
+  <option value="Авто">Авто</option>
+  <option value="Одежда">Одежда</option>
+  <option value="Дом">Дом</option>
+</select>
 
       <label for="adDesc">Описание</label>
       <textarea id="adDesc" placeholder="Подробно опишите товар"></textarea>
 
-      <button class="primary wide" onclick="showPage('create2')" type="button">
-        Продолжить
-      </button>
+      <button id="createStep1Btn" class="primary wide" onclick="goCreateStep2()" type="button" disabled>
+  Вы заполнили не все поля
+</button>
     </section>
 
     <section id="create2" class="page">
@@ -154,13 +155,11 @@
 
       <div id="photoPreview" class="photo-grid"></div>
 
-      <button class="outline wide" onclick="goBack()" type="button">
-        Назад
-      </button>
+      <button id="createStep2Btn" class="primary wide" onclick="goCreateStep3()" type="button" disabled>
+  Добавьте хотя бы 1 фото
+</button>
 
-      <button class="primary wide" onclick="goCreateStep3()" type="button">
-        Далее
-      </button>
+
     </section>
 
     <section id="create3" class="page">
@@ -283,6 +282,6 @@
 
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">‹</div>
 
-  <script src="script.js?v=115"></script>
+  <script src="script.js?v=116"></script>
 </body>
 </html>

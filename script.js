@@ -215,6 +215,28 @@ function formatPrice(value) {
   return Number(onlyNums).toLocaleString("ru-RU") + " ₽";
 }
 
+function openPhoneCall(phone) {
+  const cleanPhone = String(phone || "").replace(/[^\d+]/g, "");
+
+  if (!cleanPhone) {
+    alert("Телефон продавца не указан");
+    return;
+  }
+
+  const link = `tel:${cleanPhone}`;
+
+  const phoneLink = document.createElement("a");
+  phoneLink.href = link;
+  phoneLink.style.display = "none";
+
+  document.body.appendChild(phoneLink);
+  phoneLink.click();
+
+  setTimeout(() => {
+    phoneLink.remove();
+  }, 500);
+}
+
 function getTimeAgo(timestamp) {
   if (!timestamp) return "только что";
 
@@ -616,19 +638,23 @@ async function openProduct(id) {
   }
 
   if (callBtn) {
-    if (sellerPhone) {
-      callBtn.disabled = false;
-      callBtn.innerText = "📞 Позвонить";
-      callBtn.onclick = () => {
-        const cleanPhone = sellerPhone.replace(/[^\d+]/g, "");
-        window.location.href = `tel:${cleanPhone}`;
-      };
-    } else {
-      callBtn.disabled = true;
-      callBtn.innerText = "📞 Нет номера";
-      callBtn.onclick = null;
-    }
+  if (sellerPhone) {
+    callBtn.disabled = false;
+    callBtn.classList.remove("disabled-btn");
+    callBtn.innerText = "📞 Позвонить";
+
+    callBtn.onclick = event => {
+      event.preventDefault();
+      event.stopPropagation();
+      openPhoneCall(sellerPhone);
+    };
+  } else {
+    callBtn.disabled = true;
+    callBtn.classList.add("disabled-btn");
+    callBtn.innerText = "📞 Нет номера";
+    callBtn.onclick = null;
   }
+}
 
   showPage("product");
 }
@@ -641,7 +667,7 @@ function getAdFormData() {
   return {
     title: document.getElementById("adTitle")?.value.trim() || "",
     price: document.getElementById("adPrice")?.value.trim() || "",
-    category: document.getElementById("adCategory")?.value || "Другое",
+    category: document.getElementById("adCategory")?.value || "",
     desc: document.getElementById("adDesc")?.value.trim() || "",
     location: document.getElementById("adLocation")?.value || "Владикавказ",
     phone: document.getElementById("adPhone")?.value.trim() || "",
@@ -649,21 +675,50 @@ function getAdFormData() {
   };
 }
 
-function goCreateStep2() {
+function isCreateStep1Valid() {
   const ad = getAdFormData();
 
-  if (!ad.title) {
-    alert("Введите название товара");
-    return;
+  return Boolean(
+    ad.title &&
+    ad.price &&
+    ad.category &&
+    ad.desc
+  );
+}
+
+function isCreateStep2Valid() {
+  return draftAd.images.length > 0;
+}
+
+function updateCreateButtons() {
+  const step1Btn = document.getElementById("createStep1Btn");
+  const step2Btn = document.getElementById("createStep2Btn");
+
+  if (step1Btn) {
+    const validStep1 = isCreateStep1Valid();
+
+    step1Btn.disabled = !validStep1;
+    step1Btn.classList.toggle("disabled-btn", !validStep1);
+    step1Btn.innerText = validStep1
+      ? "Продолжить"
+      : "Вы заполнили не все поля";
   }
 
-  if (!ad.price) {
-    alert("Укажите цену");
-    return;
-  }
+  if (step2Btn) {
+    const validStep2 = isCreateStep2Valid();
 
-  if (!ad.desc) {
-    alert("Добавьте описание");
+    step2Btn.disabled = !validStep2;
+    step2Btn.classList.toggle("disabled-btn", !validStep2);
+    step2Btn.innerText = validStep2
+      ? "Далее"
+      : "Добавьте хотя бы 1 фото";
+  }
+}
+
+function goCreateStep2() {
+  updateCreateButtons();
+
+  if (!isCreateStep1Valid()) {
     return;
   }
 
@@ -671,6 +726,12 @@ function goCreateStep2() {
 }
 
 function goCreateStep3() {
+  updateCreateButtons();
+
+  if (!isCreateStep2Valid()) {
+    return;
+  }
+
   updatePreviewCard();
   showPage("create3");
 }
@@ -678,7 +739,10 @@ function goCreateStep3() {
 function renderPhotoPreview() {
   const photoPreview = document.getElementById("photoPreview");
 
-  if (!photoPreview) return;
+  if (!photoPreview) {
+    updateCreateButtons();
+    return;
+  }
 
   if (draftAd.images.length === 0) {
     photoPreview.innerHTML = `
@@ -688,6 +752,8 @@ function renderPhotoPreview() {
         <small>Можно добавить до ${MAX_PHOTOS} фото</small>
       </div>
     `;
+
+    updateCreateButtons();
     return;
   }
 
@@ -710,6 +776,8 @@ function renderPhotoPreview() {
       `
     );
   }
+
+  updateCreateButtons();
 }
 
 function removeDraftPhoto(index) {
@@ -840,7 +908,9 @@ function clearCreateForm() {
   if (photoInput) photoInput.value = "";
 
   draftAd.images = [];
-  renderPhotoPreview();
+renderPhotoPreview();
+updateCreateButtons();
+
 }
 
 /* =======================
@@ -932,6 +1002,7 @@ function initEvents() {
 
         renderPhotoPreview();
         updatePreviewCard();
+        updateCreateButtons();
       } catch (error) {
         console.error("Ошибка обработки фото:", error);
         alert("Не удалось загрузить фото");
@@ -963,14 +1034,35 @@ function initEvents() {
     if (formatted) {
       event.target.value = formatted;
     }
+
+    updateCreateButtons();
+    updatePreviewCard();
   });
 
-  ["adTitle", "adPrice", "adDesc", "adCategory", "adLocation", "adPhone", "adAllowMessages"].forEach(id => {
-    document.getElementById(id)?.addEventListener("input", updatePreviewCard);
-    document.getElementById(id)?.addEventListener("change", updatePreviewCard);
+  [
+    "adTitle",
+    "adPrice",
+    "adDesc",
+    "adCategory",
+    "adLocation",
+    "adPhone",
+    "adAllowMessages"
+  ].forEach(id => {
+    const el = document.getElementById(id);
+
+    el?.addEventListener("input", () => {
+      updatePreviewCard();
+      updateCreateButtons();
+    });
+
+    el?.addEventListener("change", () => {
+      updatePreviewCard();
+      updateCreateButtons();
+    });
   });
 
   renderPhotoPreview();
+  updateCreateButtons();
 }
 
 /* =======================
