@@ -7,6 +7,8 @@ const DEFAULT_IMAGE =
 
 const MAX_PHOTOS = 5;
 
+const tg = window.Telegram?.WebApp || null;
+
 const state = {
   page: "home",
   history: [],
@@ -22,6 +24,8 @@ const state = {
 const draftAd = {
   images: []
 };
+
+let isPublishingAd = false;
 
 /* =======================
    API
@@ -134,6 +138,7 @@ function showPage(page, addToHistory = true) {
   }
 
   updateBottomNav();
+  updateTelegramBackButton();
 
   if (page === "catalog") {
     loadProducts();
@@ -735,29 +740,42 @@ function updatePreviewCard() {
 }
 
 async function publishAd() {
-  if (!state.telegramUser?.id) {
-    alert("Откройте приложение через Telegram");
+  if (isPublishingAd) {
     return;
   }
 
-  const ad = getAdFormData();
+  const publishBtn = document.getElementById("publishBtn");
 
-  if (!ad.title) {
-    alert("Введите название товара");
-    return;
-  }
+  isPublishingAd = true;
 
-  if (!ad.price) {
-    alert("Укажите цену");
-    return;
-  }
-
-  if (!ad.desc) {
-    alert("Добавьте описание");
-    return;
+  if (publishBtn) {
+    publishBtn.disabled = true;
+    publishBtn.innerText = "Публикуем...";
   }
 
   try {
+    if (!state.telegramUser?.id) {
+      alert("Откройте приложение через Telegram");
+      return;
+    }
+
+    const ad = getAdFormData();
+
+    if (!ad.title) {
+      alert("Введите название товара");
+      return;
+    }
+
+    if (!ad.price) {
+      alert("Укажите цену");
+      return;
+    }
+
+    if (!ad.desc) {
+      alert("Добавьте описание");
+      return;
+    }
+
     const ownerName = `${state.telegramUser.firstName || ""} ${state.telegramUser.lastName || ""}`.trim();
     const images = draftAd.images.slice(0, MAX_PHOTOS);
     const mainImage = images[0] || DEFAULT_IMAGE;
@@ -786,10 +804,17 @@ async function publishAd() {
     clearCreateForm();
     showPage("myAds");
 
-    alert("Объявление опубликовано");
+    alert("Объявление опубликовано ✅");
   } catch (error) {
     console.error("Не удалось опубликовать объявление:", error);
     alert("Не удалось опубликовать объявление: " + error.message);
+  } finally {
+    isPublishingAd = false;
+
+    if (publishBtn) {
+      publishBtn.disabled = false;
+      publishBtn.innerText = "Опубликовать объявление";
+    }
   }
 }
 
@@ -949,11 +974,188 @@ function initEvents() {
 }
 
 /* =======================
+   TELEGRAM MINI APP UX
+======================= */
+
+function initTelegramAppUI() {
+  if (!tg) return;
+
+  tg.ready();
+  tg.expand();
+
+  if (typeof tg.disableVerticalSwipes === "function") {
+    tg.disableVerticalSwipes();
+  }
+
+  if (tg.BackButton) {
+    tg.BackButton.onClick(goBack);
+    updateTelegramBackButton();
+  }
+}
+
+function updateTelegramBackButton() {
+  if (!tg?.BackButton) return;
+
+  if (state.page !== "home" || state.history.length > 0) {
+    tg.BackButton.show();
+  } else {
+    tg.BackButton.hide();
+  }
+}
+
+function initZoomLock() {
+  document.addEventListener(
+    "gesturestart",
+    event => {
+      event.preventDefault();
+    },
+    { passive: false }
+  );
+
+  document.addEventListener(
+    "gesturechange",
+    event => {
+      event.preventDefault();
+    },
+    { passive: false }
+  );
+
+  document.addEventListener(
+    "touchmove",
+    event => {
+      if (event.scale && event.scale !== 1) {
+        event.preventDefault();
+      }
+    },
+    { passive: false }
+  );
+
+  let lastTouchEnd = 0;
+
+  document.addEventListener(
+    "touchend",
+    event => {
+      const now = Date.now();
+
+      if (now - lastTouchEnd <= 300) {
+        event.preventDefault();
+      }
+
+      lastTouchEnd = now;
+    },
+    { passive: false }
+  );
+}
+
+function getSwipeBackIndicator() {
+  let indicator = document.getElementById("swipeBackIndicator");
+
+  if (!indicator) {
+    indicator = document.createElement("div");
+    indicator.id = "swipeBackIndicator";
+    indicator.className = "swipe-back-indicator";
+    indicator.setAttribute("aria-hidden", "true");
+    indicator.innerText = "‹";
+    document.body.appendChild(indicator);
+  }
+
+  return indicator;
+}
+
+function canSwipeBack() {
+  return state.history.length > 0 || state.page !== "home";
+}
+
+function initSwipeBack() {
+  let startX = 0;
+  let startY = 0;
+  let isEdgeSwipe = false;
+  let indicatorVisible = false;
+
+  document.addEventListener(
+    "touchstart",
+    event => {
+      if (!event.touches || event.touches.length !== 1) return;
+
+      const touch = event.touches[0];
+
+      startX = touch.clientX;
+      startY = touch.clientY;
+      indicatorVisible = false;
+
+      isEdgeSwipe = startX <= 36 && canSwipeBack();
+    },
+    { passive: true }
+  );
+
+  document.addEventListener(
+    "touchmove",
+    event => {
+      if (!isEdgeSwipe || !event.touches || event.touches.length !== 1) return;
+
+      const touch = event.touches[0];
+      const deltaX = touch.clientX - startX;
+      const deltaY = Math.abs(touch.clientY - startY);
+
+      if (deltaX > 20 && deltaY < 60) {
+        event.preventDefault();
+
+        const indicator = getSwipeBackIndicator();
+        indicator.classList.add("active");
+        indicatorVisible = true;
+      }
+    },
+    { passive: false }
+  );
+
+  document.addEventListener(
+    "touchend",
+    event => {
+      if (!isEdgeSwipe) return;
+
+      const indicator = getSwipeBackIndicator();
+
+      if (indicatorVisible) {
+        indicator.classList.remove("active");
+      }
+
+      const touch = event.changedTouches?.[0];
+
+      if (!touch) {
+        isEdgeSwipe = false;
+        return;
+      }
+
+      const deltaX = touch.clientX - startX;
+      const deltaY = Math.abs(touch.clientY - startY);
+
+      if (deltaX > 85 && deltaY < 70) {
+        goBack();
+      }
+
+      isEdgeSwipe = false;
+      indicatorVisible = false;
+    },
+    { passive: true }
+  );
+
+  document.addEventListener(
+    "touchcancel",
+    () => {
+      getSwipeBackIndicator().classList.remove("active");
+      isEdgeSwipe = false;
+      indicatorVisible = false;
+    },
+    { passive: true }
+  );
+}
+
+/* =======================
    TELEGRAM USER + AVATAR
 ======================= */
 
 function initTelegramUser() {
-  const webApp = window.Telegram?.WebApp;
+  const webApp = tg;
 
   const avatar = document.querySelector(".profile-card .avatar");
   const name =
@@ -1036,6 +1238,9 @@ async function loadTelegramAvatar(userId, firstName, fullName) {
 ======================= */
 
 async function initApp() {
+  initTelegramAppUI();
+  initZoomLock();
+  initSwipeBack();
   initEvents();
   initTelegramUser();
 
