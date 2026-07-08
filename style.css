@@ -1400,3 +1400,15 @@ html body .phone .page button#createStep2Btn:not([disabled]) {
 .phone-line-link:active {
   opacity: 0.7;
 }
+
+/* =======================
+   EMERGENCY PAGE FIX
+======================= */
+
+.page {
+  display: none !important;
+}
+
+.page.active {
+  display: block !important;
+}

@@ -12,20 +12,20 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=119" />
+  <link rel="stylesheet" href="style.css?v=132" />
 </head>
 
 <body>
   <main class="phone">
     <header class="topbar safe-top">
-  <div class="topbar-spacer"></div>
+      <div class="topbar-spacer"></div>
 
-  <div class="topbar-title">
-    <h3 id="pageTitle">Алания Маркет</h3>
-  </div>
+      <div class="topbar-title">
+        <h3 id="pageTitle">Алания Маркет</h3>
+      </div>
 
-  <div class="topbar-spacer"></div>
-</header>
+      <div class="topbar-spacer"></div>
+    </header>
 
     <section id="home" class="page active">
       <h1>Добро пожаловать!</h1>
@@ -66,16 +66,17 @@
       </div>
     </section>
 
-    <form id="searchForm" class="search-form" action="javascript:void(0);">
-  <input
-    id="searchInput"
-    class="search"
-    type="search"
-    placeholder="Поиск товаров..."
-    enterkeyhint="done"
-    autocomplete="off"
-  />
-</form>
+    <section id="catalog" class="page">
+      <form id="searchForm" class="search-form" action="javascript:void(0);">
+        <input
+          id="searchInput"
+          class="search"
+          type="search"
+          placeholder="Поиск товаров..."
+          enterkeyhint="done"
+          autocomplete="off"
+        />
+      </form>
 
       <div class="categories">
         <button class="active" type="button">Все</button>
@@ -106,12 +107,12 @@
       <p id="productDesc" class="desc"></p>
 
       <div class="actions">
-  <button id="messageBtn" class="outline" type="button">💬 Написать</button>
+        <button id="messageBtn" class="outline" type="button">💬 Написать</button>
 
-  <a id="callBtn" class="primary call-link" href="#" role="button">
-    📞 Позвонить
-  </a>
-</div>
+        <a id="callBtn" class="primary call-link" href="#" role="button">
+          📞 Позвонить
+        </a>
+      </div>
     </section>
 
     <section id="create1" class="page">
@@ -128,30 +129,40 @@
 
       <label for="adPrice">Цена</label>
       <input
-  id="adPrice"
-  type="text"
-  inputmode="numeric"
-  pattern="[0-9]*"
-  maxlength="9"
-  placeholder="Укажите цену"
-  enterkeyhint="done"
-/>
+        id="adPrice"
+        type="text"
+        inputmode="numeric"
+        pattern="[0-9]*"
+        maxlength="9"
+        placeholder="Укажите цену"
+        enterkeyhint="done"
+      />
 
       <label for="adCategory">Категория</label>
       <select id="adCategory">
-  <option value="">Выберите категорию</option>
-  <option value="Электроника">Электроника</option>
-  <option value="Авто">Авто</option>
-  <option value="Одежда">Одежда</option>
-  <option value="Дом">Дом</option>
-</select>
+        <option value="">Выберите категорию</option>
+        <option value="Электроника">Электроника</option>
+        <option value="Авто">Авто</option>
+        <option value="Одежда">Одежда</option>
+        <option value="Дом">Дом</option>
+      </select>
 
       <label for="adDesc">Описание</label>
-     <textarea id="adDesc" placeholder="Подробно опишите товар или услугу" enterkeyhint="done"></textarea>
+      <textarea
+        id="adDesc"
+        placeholder="Подробно опишите товар или услугу"
+        enterkeyhint="done"
+      ></textarea>
 
-      <button id="createStep1Btn" class="primary wide" onclick="goCreateStep2()" type="button" disabled>
-  Вы заполнили не все поля
-</button>
+      <button
+        id="createStep1Btn"
+        class="primary wide"
+        onclick="goCreateStep2()"
+        type="button"
+        disabled
+      >
+        Вы заполнили не все поля
+      </button>
     </section>
 
     <section id="create2" class="page">
@@ -174,11 +185,15 @@
 
       <div id="photoPreview" class="photo-grid"></div>
 
-      <button id="createStep2Btn" class="primary wide" onclick="goCreateStep3()" type="button" disabled>
-  Добавьте хотя бы 1 фото
-</button>
-
-
+      <button
+        id="createStep2Btn"
+        class="primary wide"
+        onclick="goCreateStep3()"
+        type="button"
+        disabled
+      >
+        Добавьте хотя бы 1 фото
+      </button>
     </section>
 
     <section id="create3" class="page">
@@ -205,7 +220,12 @@
       </select>
 
       <label for="adPhone">Телефон</label>
-      <input id="adPhone" placeholder="+7 999 123-45-67" inputmode="tel" enterkeyhint="done" />
+      <input
+        id="adPhone"
+        placeholder="+7 999 123-45-67"
+        inputmode="tel"
+        enterkeyhint="done"
+      />
 
       <div class="toggle-row">
         <span>Разрешить сообщения в Telegram</span>
@@ -215,9 +235,14 @@
       <h4>Предпросмотр</h4>
       <div id="previewCard" class="product-card"></div>
 
-      <button id="publishBtn" class="primary wide" onclick="publishAd()" type="button">
-  Опубликовать объявление
-</button>
+      <button
+        id="publishBtn"
+        class="primary wide"
+        onclick="publishAd()"
+        type="button"
+      >
+        Опубликовать объявление
+      </button>
     </section>
 
     <section id="myAds" class="page">
@@ -301,6 +326,6 @@
 
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">‹</div>
 
-  <script src="script.js?v=119"></script>
+  <script src="script.js?v=132"></script>
 </body>
 </html>
