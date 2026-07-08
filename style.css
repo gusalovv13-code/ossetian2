@@ -1412,3 +1412,23 @@ html body .phone .page button#createStep2Btn:not([disabled]) {
 .page.active {
   display: block !important;
 }
+
+/* =======================
+   FIX CATEGORIES CLICK
+======================= */
+
+.categories {
+  position: relative;
+  z-index: 20;
+}
+
+.categories button {
+  position: relative;
+  z-index: 21;
+  pointer-events: auto;
+}
+
+.product-list {
+  position: relative;
+  z-index: 1;
+}
