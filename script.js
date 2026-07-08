@@ -1187,20 +1187,25 @@ function initEvents() {
   }
 
   document.querySelectorAll(".categories button").forEach(button => {
-    button.addEventListener("click", () => {
-      document.querySelectorAll(".categories button").forEach(item => {
-        item.classList.remove("active");
-      });
+  button.addEventListener("click", event => {
+    event.preventDefault();
+    event.stopPropagation();
 
-      button.classList.add("active");
-
-      state.category = button.innerText
-        .replace(/[📱🚗👕🏠]/g, "")
-        .trim();
-
-      render();
+    document.querySelectorAll(".categories button").forEach(item => {
+      item.classList.remove("active");
     });
+
+    button.classList.add("active");
+
+    state.category = button.innerText
+      .replace(/[📱🚗👕🏠]/g, "")
+      .trim();
+
+    state.page = "catalog";
+
+    renderProducts();
   });
+});
 
   const adPriceInput = document.getElementById("adPrice");
 
