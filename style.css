@@ -1434,23 +1434,27 @@ html body .phone .page button#createStep2Btn:not([disabled]) {
 }
 
 /* =======================
-   FIX CATEGORY SWIPE BUG
+   FIX MAIN MENU CLICKS
 ======================= */
 
-.categories {
+#home {
   position: relative;
-  z-index: 50;
+  z-index: 10;
+}
+
+#home .menu,
+#home .menu-card {
+  position: relative;
+  z-index: 11;
   pointer-events: auto;
 }
 
-.categories button {
-  position: relative;
-  z-index: 51;
-  pointer-events: auto;
-  touch-action: pan-x;
+.page:not(.active) {
+  display: none !important;
+  pointer-events: none !important;
 }
 
-.product-list {
-  position: relative;
-  z-index: 1;
+.page.active {
+  display: block !important;
+  pointer-events: auto !important;
 }

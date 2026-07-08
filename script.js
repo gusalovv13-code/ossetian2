@@ -28,11 +28,6 @@ const draftAd = {
 
 let isPublishingAd = false;
 
-let blockProductOpenUntil = 0;
-
-function blockProductOpen(ms = 700) {
-  blockProductOpenUntil = Date.now() + ms;
-}
 
 /* =======================
    API
@@ -801,9 +796,6 @@ function showProductImage(index) {
 }
 
 async function openProduct(id) {
-   if (Date.now() < blockProductOpenUntil) {
-    return;
-  }
 
   const product =
     state.products.find(item => item.id === id) ||
@@ -1563,31 +1555,7 @@ if (categoriesEl) {
   );
 }
 
-document.querySelectorAll(".categories button").forEach(button => {
-  button.addEventListener("click", event => {
-    event.preventDefault();
-    event.stopPropagation();
 
-    if (categoryMoved) {
-      blockProductOpen(900);
-      return;
-    }
-
-    document.querySelectorAll(".categories button").forEach(item => {
-      item.classList.remove("active");
-    });
-
-    button.classList.add("active");
-
-    state.category = button.innerText
-      .replace(/[📱🚗👕🏠]/g, "")
-      .trim();
-
-    state.page = "catalog";
-
-    renderProducts();
-  });
-});
 
   const adPriceInput = document.getElementById("adPrice");
 
