@@ -178,8 +178,10 @@ function goBack() {
     return;
   }
 
-  if (tg) {
-    tg.close();
+  const webApp = window.Telegram?.WebApp;
+
+  if (webApp) {
+    webApp.close();
   }
 }
 
@@ -211,14 +213,17 @@ function normalizePhoneForTel(phone) {
 
   if (!digits) return "";
 
+  // 89187077474 -> +79187077474
   if (digits.length === 11 && digits.startsWith("8")) {
     return "+7" + digits.slice(1);
   }
 
+  // 79187077474 -> +79187077474
   if (digits.length === 11 && digits.startsWith("7")) {
     return "+" + digits;
   }
 
+  // 9187077474 -> +79187077474
   if (digits.length === 10) {
     return "+7" + digits;
   }
@@ -234,27 +239,24 @@ function openTelLink(phone) {
     return;
   }
 
-  const telLink = `tel:${cleanPhone}`;
-  const telPromptLink = `telprompt:${cleanPhone}`;
   const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
 
+  const telLink = `tel:${cleanPhone}`;
+  const iosTelPrompt = `telprompt:${cleanPhone}`;
+
   try {
-    window.location.href = isIOS ? telPromptLink : telLink;
+    window.location.href = isIOS ? iosTelPrompt : telLink;
   } catch (error) {
-    try {
-      window.location.href = telLink;
-    } catch (secondError) {
-      alert(`Позвоните по номеру: ${cleanPhone}`);
-    }
+    window.location.href = telLink;
   }
 
   setTimeout(() => {
     try {
       window.location.href = telLink;
     } catch (error) {
-      console.warn("Не удалось открыть звонок:", error);
+      alert(`Позвоните по номеру: ${cleanPhone}`);
     }
-  }, 200);
+  }, 150);
 }
 
 function getPriceNumber(value) {
@@ -290,49 +292,45 @@ function normalizePriceInput(input) {
 }
 
 function formatPrice(value) {
-  const onlyNums = String(value || "").replace(/[^\d]/g, "");
+  const onlyNums = String(value).replace(/[^\d]/g, "");
 
   if (!onlyNums) return "";
 
   return Number(onlyNums).toLocaleString("ru-RU") + " ₽";
 }
 
-function hideKeyboard() {
-  const active = document.activeElement;
+function openPhoneCall(phone) {
+  const cleanPhone = String(phone || "").replace(/[^\d+]/g, "");
 
-  if (
-    active &&
-    typeof active.blur === "function" &&
-    ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName)
-  ) {
-    active.blur();
+  if (!cleanPhone) {
+    alert("Телефон продавца не указан");
+    return;
   }
+
+  const link = `tel:${cleanPhone}`;
+
+  const phoneLink = document.createElement("a");
+  phoneLink.href = link;
+  phoneLink.style.display = "none";
+
+  document.body.appendChild(phoneLink);
+  phoneLink.click();
+
+  setTimeout(() => {
+    phoneLink.remove();
+  }, 500);
 }
 
 function hideKeyboardOnEnter(event) {
   if (event.key !== "Enter") return;
 
   event.preventDefault();
-  hideKeyboard();
-}
 
-function initKeyboardAutoHide() {
-  const hideOnOutsideTap = event => {
-    const target = event.target;
+  const target = event.target;
 
-    if (!target) return;
-
-    const isField = target.closest("input, textarea, select");
-
-    if (isField) return;
-
-    setTimeout(() => {
-      hideKeyboard();
-    }, 0);
-  };
-
-  document.addEventListener("pointerdown", hideOnOutsideTap, true);
-  document.addEventListener("touchstart", hideOnOutsideTap, true);
+  if (target && typeof target.blur === "function") {
+    target.blur();
+  }
 }
 
 function getTimeAgo(timestamp) {
@@ -366,14 +364,10 @@ function getFiltered() {
   return state.products.filter(product => {
     const search = state.search.toLowerCase();
 
-    const name = String(product.name || "").toLowerCase();
-    const desc = String(product.desc || "").toLowerCase();
-    const category = String(product.category || "").toLowerCase();
-
     const matchSearch =
-      name.includes(search) ||
-      desc.includes(search) ||
-      category.includes(search);
+      product.name.toLowerCase().includes(search) ||
+      product.desc.toLowerCase().includes(search) ||
+      product.category.toLowerCase().includes(search);
 
     const matchCategory =
       state.category === "Все" || product.category === state.category;
@@ -464,10 +458,10 @@ function getProductCard(product, options = {}) {
 
   return `
     <div class="product-card" onclick="openProduct('${product.id}')">
-      <img src="${images[0]}" alt="${product.name || "Товар"}">
+      <img src="${images[0]}" alt="${product.name}">
       <div>
-        <h4>${product.name || "Без названия"}</h4>
-        <b>${product.price || ""}</b>
+        <h4>${product.name}</h4>
+        <b>${product.price}</b>
         <p>${product.location || "Владикавказ"} · ${getTimeAgo(product.createdAt)}</p>
         ${
           options.showStatus
@@ -689,9 +683,9 @@ async function openProduct(id) {
       .join("");
   }
 
-  if (nameEl) nameEl.innerText = product.name || "";
-  if (priceEl) priceEl.innerText = product.price || "";
-  if (descEl) descEl.innerText = product.desc || "";
+  if (nameEl) nameEl.innerText = product.name;
+  if (priceEl) priceEl.innerText = product.price;
+  if (descEl) descEl.innerText = product.desc;
 
   if (sellerEl) {
     sellerEl.innerText = `📍 ${product.location || "Владикавказ"} · ${getTimeAgo(product.createdAt)} · 👁 ${product.views || 0}`;
@@ -700,7 +694,6 @@ async function openProduct(id) {
   const sellerName = product.ownerName || "Продавец";
   const sellerUsername = product.ownerUsername || "";
   const sellerPhone = product.phone || "";
-  const cleanPhone = normalizePhoneForTel(sellerPhone);
   const allowMessages = product.allowMessages !== false;
 
   if (productSeller) {
@@ -713,10 +706,12 @@ async function openProduct(id) {
     productLocation.innerText = `📍 ${product.location || "Владикавказ"}`;
   }
 
+  const cleanPhone = normalizePhoneForTel(sellerPhone);
+
   if (productPhoneLine) {
     if (cleanPhone) {
       productPhoneLine.innerHTML = `
-        <a href="tel:${cleanPhone}" class="phone-line-link" data-phone="${cleanPhone}">
+        <a href="tel:${cleanPhone}" class="phone-line-link">
           📞 ${sellerPhone}
         </a>
       `;
@@ -729,12 +724,12 @@ async function openProduct(id) {
     if (allowMessages && sellerUsername) {
       messageBtn.disabled = false;
       messageBtn.innerText = "💬 Написать";
-
       messageBtn.onclick = () => {
         const url = `https://t.me/${sellerUsername}`;
+        const webApp = window.Telegram?.WebApp;
 
-        if (tg?.openTelegramLink) {
-          tg.openTelegramLink(url);
+        if (webApp?.openTelegramLink) {
+          webApp.openTelegramLink(url);
         } else {
           window.open(url, "_blank");
         }
@@ -747,34 +742,63 @@ async function openProduct(id) {
   }
 
   if (callBtn) {
-    if (cleanPhone) {
-      callBtn.innerText = "📞 Позвонить";
-      callBtn.href = `tel:${cleanPhone}`;
-      callBtn.dataset.phone = cleanPhone;
+    const cleanPhone = normalizePhoneForTel(sellerPhone);
 
-      callBtn.classList.remove("disabled-btn");
-      callBtn.classList.remove("disabled");
-      callBtn.removeAttribute("disabled");
-      callBtn.removeAttribute("aria-disabled");
+    if (callBtn) {
+      const cleanPhone = normalizePhoneForTel(sellerPhone);
+      const telLink = cleanPhone ? `tel:${cleanPhone}` : "";
 
-      callBtn.onclick = event => {
-        event.preventDefault();
-        event.stopPropagation();
-        openTelLink(cleanPhone);
-      };
-    } else {
-      callBtn.innerText = "📞 Нет номера";
-      callBtn.href = "#";
-      callBtn.dataset.phone = "";
+      if (cleanPhone) {
+        callBtn.innerText = "📞 Позвонить";
 
-      callBtn.classList.add("disabled-btn");
-      callBtn.classList.add("disabled");
-      callBtn.setAttribute("aria-disabled", "true");
+        callBtn.classList.remove("disabled-btn");
+        callBtn.classList.remove("disabled");
+        callBtn.removeAttribute("disabled");
+        callBtn.removeAttribute("aria-disabled");
 
-      callBtn.onclick = event => {
-        event.preventDefault();
-        alert("Телефон продавца не указан");
-      };
+        if (callBtn.tagName.toLowerCase() === "a") {
+          callBtn.href = telLink;
+          callBtn.setAttribute("target", "_self");
+        }
+
+        callBtn.onclick = event => {
+          event.preventDefault();
+          event.stopPropagation();
+
+          try {
+            window.location.href = telLink;
+          } catch (error) {
+            try {
+              window.open(telLink, "_self");
+            } catch (secondError) {
+              alert(`Позвоните по номеру: ${cleanPhone}`);
+            }
+          }
+
+          setTimeout(() => {
+            try {
+              window.location.assign(telLink);
+            } catch (error) {
+              console.warn("Не удалось открыть звонок:", error);
+            }
+          }, 80);
+        };
+      } else {
+        callBtn.innerText = "📞 Нет номера";
+
+        callBtn.classList.add("disabled-btn");
+        callBtn.classList.add("disabled");
+        callBtn.setAttribute("aria-disabled", "true");
+
+        if (callBtn.tagName.toLowerCase() === "a") {
+          callBtn.href = "#";
+        }
+
+        callBtn.onclick = event => {
+          event.preventDefault();
+          alert("Телефон продавца не указан");
+        };
+      }
     }
   }
 
@@ -823,7 +847,6 @@ function updateCreateButtons() {
 
     step1Btn.disabled = !validStep1;
     step1Btn.classList.toggle("disabled-btn", !validStep1);
-
     step1Btn.innerText = validStep1
       ? "Продолжить"
       : "Вы заполнили не все поля";
@@ -834,7 +857,6 @@ function updateCreateButtons() {
 
     step2Btn.disabled = !validStep2;
     step2Btn.classList.toggle("disabled-btn", !validStep2);
-
     step2Btn.innerText = validStep2
       ? "Далее"
       : "Добавьте хотя бы 1 фото";
@@ -928,7 +950,7 @@ function updatePreviewCard() {
     <div>
       <h4>${ad.title || "Название товара"}</h4>
       <b>${formatPrice(ad.price) || ad.price || "Цена не указана"}</b>
-      <p>${ad.category || "Категория"} · ${ad.location}</p>
+      <p>${ad.category} · ${ad.location}</p>
     </div>
   `;
 }
@@ -954,12 +976,13 @@ async function publishAd() {
     }
 
     const ad = getAdFormData();
-    const priceNumber = getPriceNumber(ad.price);
 
     if (!ad.title) {
       alert("Введите название товара");
       return;
     }
+
+    const priceNumber = getPriceNumber(ad.price);
 
     if (priceNumber <= 0) {
       alert("Укажите корректную цену");
@@ -971,8 +994,8 @@ async function publishAd() {
       return;
     }
 
-    if (!ad.category) {
-      alert("Выберите категорию");
+    if (!ad.price) {
+      alert("Укажите цену");
       return;
     }
 
@@ -1084,24 +1107,12 @@ async function deleteAd(id) {
 ======================= */
 
 function initEvents() {
-  const searchForm = document.getElementById("searchForm");
   const searchInput =
     document.getElementById("searchInput") || document.querySelector(".search");
 
   searchInput?.addEventListener("input", event => {
     state.search = event.target.value;
     render();
-  });
-
-  searchInput?.addEventListener("keydown", hideKeyboardOnEnter);
-
-  searchInput?.addEventListener("search", () => {
-    hideKeyboard();
-  });
-
-  searchForm?.addEventListener("submit", event => {
-    event.preventDefault();
-    hideKeyboard();
   });
 
   const addPhotoBtn = document.getElementById("addPhotoBtn");
@@ -1227,26 +1238,6 @@ function initEvents() {
 
     el?.addEventListener("keydown", hideKeyboardOnEnter);
   });
-
-  document.addEventListener(
-    "click",
-    event => {
-      const callTarget = event.target.closest("#callBtn, .phone-line-link");
-
-      if (!callTarget) return;
-
-      const phone =
-        callTarget.dataset.phone ||
-        callTarget.getAttribute("href") ||
-        callTarget.innerText;
-
-      event.preventDefault();
-      event.stopPropagation();
-
-      openTelLink(phone);
-    },
-    true
-  );
 
   renderPhotoPreview();
   updateCreateButtons();
@@ -1472,6 +1463,67 @@ function initSwipeBack() {
     },
     { passive: true }
   );
+
+  document.addEventListener(
+    "touchmove",
+    event => {
+      if (!isEdgeSwipe || !event.touches || event.touches.length !== 1) return;
+
+      const touch = event.touches[0];
+      const deltaX = touch.clientX - startX;
+      const deltaY = Math.abs(touch.clientY - startY);
+
+      if (deltaX > 20 && deltaY < 60) {
+        event.preventDefault();
+
+        const indicator = getSwipeBackIndicator();
+        indicator.classList.add("active");
+        indicatorVisible = true;
+      }
+    },
+    { passive: false }
+  );
+
+  document.addEventListener(
+    "touchend",
+    event => {
+      if (!isEdgeSwipe) return;
+
+      const indicator = getSwipeBackIndicator();
+
+      if (indicatorVisible) {
+        indicator.classList.remove("active");
+      }
+
+      const touch = event.changedTouches?.[0];
+
+      if (!touch) {
+        isEdgeSwipe = false;
+        return;
+      }
+
+      const deltaX = touch.clientX - startX;
+      const deltaY = Math.abs(touch.clientY - startY);
+
+      if (deltaX > 85 && deltaY < 70) {
+        goBack();
+      }
+
+      isEdgeSwipe = false;
+      indicatorVisible = false;
+    },
+    { passive: true }
+  );
+
+  document.addEventListener(
+    "touchcancel",
+    () => {
+      getSwipeBackIndicator().classList.remove("active");
+      isEdgeSwipe = false;
+      indicatorVisible = false;
+    },
+    { passive: true }
+  );
 }
 
 /* =======================
@@ -1565,7 +1617,6 @@ async function initApp() {
   initTelegramAppUI();
   initZoomLock();
   initSwipeBack();
-  initKeyboardAutoHide();
   initEvents();
   initTelegramUser();
 
