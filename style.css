@@ -1346,7 +1346,7 @@ html body .phone .page button#createStep2Btn:not([disabled]) {
 /* Сам текст чуть выше */
 .topbar-title {
   padding-top: 0 !important;
-  transform: translateY(-13px);
+  transform: translateY(-8px);
 }
 
 /* Название */
@@ -1431,30 +1431,4 @@ html body .phone .page button#createStep2Btn:not([disabled]) {
 .product-list {
   position: relative;
   z-index: 1;
-}
-
-/* =======================
-   FIX MAIN MENU CLICKS
-======================= */
-
-#home {
-  position: relative;
-  z-index: 10;
-}
-
-#home .menu,
-#home .menu-card {
-  position: relative;
-  z-index: 11;
-  pointer-events: auto;
-}
-
-.page:not(.active) {
-  display: none !important;
-  pointer-events: none !important;
-}
-
-.page.active {
-  display: block !important;
-  pointer-events: auto !important;
 }

@@ -12,29 +12,7 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=143" />
-
-  <style>
-    /* Аварийная защита страниц */
-    .page {
-      display: none;
-      pointer-events: none;
-    }
-
-    .page.active {
-      display: block;
-      pointer-events: auto;
-    }
-
-    button,
-    a,
-    .menu-card,
-    .bottom-nav button,
-    .profile-row,
-    .categories button {
-      pointer-events: auto;
-    }
-  </style>
+  <link rel="stylesheet" href="style.css?v=135" />
 </head>
 
 <body>
@@ -88,28 +66,28 @@
       </div>
     </section>
 
-    <section id="catalog" class="page">
-      <form id="searchForm" class="search-form" action="javascript:void(0);">
-        <input
-          id="searchInput"
-          class="search"
-          type="search"
-          placeholder="Поиск товаров..."
-          enterkeyhint="done"
-          autocomplete="off"
-        />
-      </form>
+   <section id="catalog" class="page">
+  <form id="searchForm" class="search-form" action="javascript:void(0);">
+    <input
+      id="searchInput"
+      class="search"
+      type="search"
+      placeholder="Поиск товаров..."
+      enterkeyhint="done"
+      autocomplete="off"
+    />
+  </form>
 
-      <div class="categories">
-        <button class="active" type="button">Все</button>
-        <button type="button">📱 Электроника</button>
-        <button type="button">🚗 Авто</button>
-        <button type="button">👕 Одежда</button>
-        <button type="button">🏠 Дом</button>
-      </div>
+  <div class="categories">
+    <button class="active" type="button">Все</button>
+    <button type="button">📱 Электроника</button>
+    <button type="button">🚗 Авто</button>
+    <button type="button">👕 Одежда</button>
+    <button type="button">🏠 Дом</button>
+  </div>
 
-      <div id="productList" class="product-list"></div>
-    </section>
+  <div id="productList" class="product-list"></div>
+</section>
 
     <section id="product" class="page">
       <img id="productImage" class="hero-img" src="" alt="" />
@@ -132,8 +110,8 @@
         <button id="messageBtn" class="outline" type="button">💬 Написать</button>
 
         <a id="callBtn" class="primary call-link" href="#" role="button">
-          📞 Позвонить
-        </a>
+  📞 Позвонить
+</a>
       </div>
     </section>
 
@@ -348,111 +326,6 @@
 
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">‹</div>
 
-  <script src="script.js?v=143"></script>
-
-  <script>
-    // Аварийная навигация. Если основной showPage из script.js сломался,
-    // этот код всё равно будет переключать экраны.
-    (function () {
-      const originalShowPage = window.showPage;
-
-      window.showPage = function (page, addToHistory = true) {
-        try {
-          if (typeof originalShowPage === "function") {
-            originalShowPage(page, addToHistory);
-          }
-        } catch (error) {
-          console.warn("Основной showPage дал ошибку:", error);
-        }
-
-        const targetPage = document.getElementById(page);
-
-        if (!targetPage) {
-          return;
-        }
-
-        document.querySelectorAll(".page").forEach(pageEl => {
-          pageEl.classList.remove("active");
-          pageEl.style.display = "none";
-          pageEl.style.pointerEvents = "none";
-        });
-
-        targetPage.classList.add("active");
-        targetPage.style.display = "block";
-        targetPage.style.pointerEvents = "auto";
-
-        const titles = {
-          home: "Алания Маркет",
-          catalog: "Каталог",
-          product: "Карточка товара",
-          create1: "Новое объявление",
-          create2: "Новое объявление",
-          create3: "Новое объявление",
-          myAds: "Мои объявления",
-          favorites: "Избранное",
-          profile: "Профиль",
-          chats: "Чаты"
-        };
-
-        const titleEl = document.getElementById("pageTitle");
-
-        if (titleEl) {
-          titleEl.innerText = titles[page] || "Алания Маркет";
-        }
-
-        document.querySelectorAll(".bottom-nav button").forEach(button => {
-          button.classList.remove("active");
-
-          const action = button.getAttribute("onclick") || "";
-
-          if (
-            action.includes("'" + page + "'") ||
-            action.includes('"' + page + '"')
-          ) {
-            button.classList.add("active");
-          }
-        });
-
-        if (["create1", "create2", "create3"].includes(page)) {
-          document.querySelector(".add-btn")?.classList.add("active");
-        }
-
-        if (page === "catalog") {
-          try {
-            if (typeof renderProducts === "function") {
-              renderProducts();
-            }
-          } catch (error) {
-            console.warn("Не удалось отрисовать каталог:", error);
-          }
-        }
-
-        if (page === "myAds") {
-          try {
-            if (typeof renderMyAds === "function") {
-              renderMyAds();
-            }
-          } catch (error) {
-            console.warn("Не удалось отрисовать мои объявления:", error);
-          }
-        }
-
-        if (page === "favorites") {
-          try {
-            if (typeof renderFavorites === "function") {
-              renderFavorites();
-            }
-          } catch (error) {
-            console.warn("Не удалось отрисовать избранное:", error);
-          }
-        }
-
-        window.scrollTo({
-          top: 0,
-          behavior: "smooth"
-        });
-      };
-    })();
-  </script>
+  <script src="script.js?v=135"></script>
 </body>
 </html>

@@ -28,7 +28,6 @@ const draftAd = {
 
 let isPublishingAd = false;
 
-
 /* =======================
    API
 ======================= */
@@ -212,133 +211,22 @@ function normalizePhoneForTel(phone) {
 
   if (!digits) return "";
 
+  // 89187077474 -> +79187077474
   if (digits.length === 11 && digits.startsWith("8")) {
     return "+7" + digits.slice(1);
   }
 
+  // 79187077474 -> +79187077474
   if (digits.length === 11 && digits.startsWith("7")) {
     return "+" + digits;
   }
 
+  // 9187077474 -> +79187077474
   if (digits.length === 10) {
     return "+7" + digits;
   }
 
   return "+" + digits;
-}
-
-async function copyPhoneToClipboard(phone) {
-  const cleanPhone = normalizePhoneForTel(phone);
-
-  if (!cleanPhone) {
-    alert("Телефон продавца не указан");
-    return;
-  }
-
-  try {
-    await navigator.clipboard.writeText(cleanPhone);
-    alert(`Номер скопирован: ${cleanPhone}`);
-  } catch (error) {
-    alert(`Скопируйте номер вручную: ${cleanPhone}`);
-  }
-}
-
-function showPhoneFallback(phone) {
-  const cleanPhone = normalizePhoneForTel(phone);
-
-  if (!cleanPhone) {
-    alert("Телефон продавца не указан");
-    return;
-  }
-
-  const message = `Telegram не открыл звонилку автоматически.\n\nНомер продавца:\n${cleanPhone}`;
-
-  const webApp = window.Telegram?.WebApp;
-
-  if (webApp?.showPopup) {
-    webApp.showPopup(
-      {
-        title: "Позвонить продавцу",
-        message,
-        buttons: [
-          {
-            id: "copy",
-            type: "default",
-            text: "Скопировать номер"
-          },
-          {
-            id: "close",
-            type: "cancel",
-            text: "Закрыть"
-          }
-        ]
-      },
-      buttonId => {
-        if (buttonId === "copy") {
-          copyPhoneToClipboard(cleanPhone);
-        }
-      }
-    );
-
-    return;
-  }
-
-  const ok = confirm(`${message}\n\nСкопировать номер?`);
-
-  if (ok) {
-    copyPhoneToClipboard(cleanPhone);
-  }
-}
-
-function openPhoneDialer(phone) {
-  const cleanPhone = normalizePhoneForTel(phone);
-
-  if (!cleanPhone) {
-    alert("Телефон продавца не указан");
-    return;
-  }
-
-  const telLink = `tel:${cleanPhone}`;
-  let pageWasHidden = false;
-
-  const onVisibilityChange = () => {
-    if (document.hidden) {
-      pageWasHidden = true;
-    }
-  };
-
-  document.addEventListener("visibilitychange", onVisibilityChange);
-
-  try {
-    const link = document.createElement("a");
-    link.href = telLink;
-    link.target = "_self";
-    link.rel = "noopener";
-    link.style.position = "fixed";
-    link.style.left = "-9999px";
-    link.style.top = "-9999px";
-
-    document.body.appendChild(link);
-    link.click();
-
-    setTimeout(() => {
-      link.remove();
-    }, 1000);
-  } catch (error) {
-    try {
-      window.location.href = telLink;
-    } catch (secondError) {
-      console.warn("Не удалось открыть tel:", secondError);
-    }
-  }
-
-  setTimeout(() => {
-    document.removeEventListener("visibilitychange", onVisibilityChange);
-
-    if (!pageWasHidden) {
-      showPhoneFallback(cleanPhone);
-    }
-  }, 900);
 }
 
 function openDialerWithNumber(phone) {
@@ -796,7 +684,6 @@ function showProductImage(index) {
 }
 
 async function openProduct(id) {
-
   const product =
     state.products.find(item => item.id === id) ||
     state.myProducts.find(item => item.id === id);
@@ -913,26 +800,25 @@ if (messageBtn) {
 if (callBtn) {
   if (cleanPhone) {
     callBtn.innerText = "📞 Позвонить";
-    callBtn.href = `tel:${cleanPhone}`;
 
     callBtn.classList.remove("disabled-btn");
     callBtn.classList.remove("disabled");
     callBtn.removeAttribute("disabled");
     callBtn.removeAttribute("aria-disabled");
 
-    callBtn.onclick = event => {
-      event.preventDefault();
-      event.stopPropagation();
+    callBtn.href = `tel:${cleanPhone}`;
+    callBtn.target = "_self";
 
-      openPhoneDialer(cleanPhone);
-    };
+    // Важно: не перехватываем клик через JS
+    callBtn.onclick = null;
   } else {
     callBtn.innerText = "📞 Нет номера";
-    callBtn.href = "#";
 
     callBtn.classList.add("disabled-btn");
     callBtn.classList.add("disabled");
     callBtn.setAttribute("aria-disabled", "true");
+
+    callBtn.href = "#";
 
     callBtn.onclick = event => {
       event.preventDefault();
@@ -1323,239 +1209,26 @@ function initEvents() {
     });
   }
 
-  const categoriesEl = document.querySelector(".categories");
+  document.querySelectorAll(".categories button").forEach(button => {
+  button.addEventListener("click", event => {
+    event.preventDefault();
+    event.stopPropagation();
 
-let categoryStartX = 0;
-let categoryStartY = 0;
-let categoryMoved = false;
+    document.querySelectorAll(".categories button").forEach(item => {
+      item.classList.remove("active");
+    });
 
-if (categoriesEl) {
-  categoriesEl.addEventListener(
-    "touchstart",
-    event => {
-      const touch = event.touches?.[0];
+    button.classList.add("active");
 
-      if (!touch) return;
+    state.category = button.innerText
+      .replace(/[📱🚗👕🏠]/g, "")
+      .trim();
 
-      categoryStartX = touch.clientX;
-      categoryStartY = touch.clientY;
-      categoryMoved = false;
-    },
-    { passive: true }
-  );
+    state.page = "catalog";
 
-  categoriesEl.addEventListener(
-    "touchmove",
-    event => {
-      const touch = event.touches?.[0];
-
-      if (!touch) return;
-
-      const deltaX = Math.abs(touch.clientX - categoryStartX);
-      const deltaY = Math.abs(touch.clientY - categoryStartY);
-
-      if (deltaX > 8 || deltaY > 8) {
-        categoryMoved = true;
-        blockProductOpen(900);
-      }
-    },
-    { passive: true }
-  );
-
-  categoriesEl.addEventListener(
-    "click",
-    event => {
-      if (categoryMoved) {
-        event.preventDefault();
-        event.stopPropagation();
-        blockProductOpen(900);
-
-        setTimeout(() => {
-          categoryMoved = false;
-        }, 100);
-
-        return;
-      }
-    },
-    true
-  );
-}
-
-const categoriesEl = document.querySelector(".categories");
-
-let categoryStartX = 0;
-let categoryStartY = 0;
-let categoryMoved = false;
-
-if (categoriesEl) {
-  categoriesEl.addEventListener(
-    "touchstart",
-    event => {
-      const touch = event.touches?.[0];
-
-      if (!touch) return;
-
-      categoryStartX = touch.clientX;
-      categoryStartY = touch.clientY;
-      categoryMoved = false;
-    },
-    { passive: true }
-  );
-
-  categoriesEl.addEventListener(
-    "touchmove",
-    event => {
-      const touch = event.touches?.[0];
-
-      if (!touch) return;
-
-      const deltaX = Math.abs(touch.clientX - categoryStartX);
-      const deltaY = Math.abs(touch.clientY - categoryStartY);
-
-      if (deltaX > 8 || deltaY > 8) {
-        categoryMoved = true;
-        blockProductOpen(900);
-      }
-    },
-    { passive: true }
-  );
-
-  categoriesEl.addEventListener(
-    "click",
-    event => {
-      if (categoryMoved) {
-        event.preventDefault();
-        event.stopPropagation();
-        blockProductOpen(900);
-
-        setTimeout(() => {
-          categoryMoved = false;
-        }, 100);
-
-        return;
-      }
-    },
-    true
-  );
-}
-
-const categoriesEl = document.querySelector(".categories");
-
-let categoryStartX = 0;
-let categoryStartY = 0;
-let categoryMoved = false;
-
-if (categoriesEl) {
-  categoriesEl.addEventListener(
-    "touchstart",
-    event => {
-      const touch = event.touches?.[0];
-
-      if (!touch) return;
-
-      categoryStartX = touch.clientX;
-      categoryStartY = touch.clientY;
-      categoryMoved = false;
-    },
-    { passive: true }
-  );
-
-  categoriesEl.addEventListener(
-    "touchmove",
-    event => {
-      const touch = event.touches?.[0];
-
-      if (!touch) return;
-
-      const deltaX = Math.abs(touch.clientX - categoryStartX);
-      const deltaY = Math.abs(touch.clientY - categoryStartY);
-
-      if (deltaX > 8 || deltaY > 8) {
-        categoryMoved = true;
-        blockProductOpen(900);
-      }
-    },
-    { passive: true }
-  );
-
-  categoriesEl.addEventListener(
-    "click",
-    event => {
-      if (categoryMoved) {
-        event.preventDefault();
-        event.stopPropagation();
-        blockProductOpen(900);
-
-        setTimeout(() => {
-          categoryMoved = false;
-        }, 100);
-
-        return;
-      }
-    },
-    true
-  );
-}
-
-const categoriesEl = document.querySelector(".categories");
-
-let categoryStartX = 0;
-let categoryStartY = 0;
-let categoryMoved = false;
-
-if (categoriesEl) {
-  categoriesEl.addEventListener(
-    "touchstart",
-    event => {
-      const touch = event.touches?.[0];
-
-      if (!touch) return;
-
-      categoryStartX = touch.clientX;
-      categoryStartY = touch.clientY;
-      categoryMoved = false;
-    },
-    { passive: true }
-  );
-
-   categoriesEl.addEventListener(
-    "touchmove",
-    event => {
-      const touch = event.touches?.[0];
-
-      if (!touch) return;
-
-      const deltaX = Math.abs(touch.clientX - categoryStartX);
-      const deltaY = Math.abs(touch.clientY - categoryStartY);
-
-      if (deltaX > 8 || deltaY > 8) {
-        categoryMoved = true;
-        blockProductOpen(900);
-      }
-    },
-    { passive: true }
-  );
-
-  categoriesEl.addEventListener(
-    "click",
-    event => {
-      if (categoryMoved) {
-        event.preventDefault();
-        event.stopPropagation();
-        blockProductOpen(900);
-
-        setTimeout(() => {
-          categoryMoved = false;
-        }, 100);
-
-        return;
-      }
-    },
-    true
-  );
-}
-
-
+    renderProducts();
+  });
+});
 
   const adPriceInput = document.getElementById("adPrice");
 
