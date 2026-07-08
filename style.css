@@ -1346,7 +1346,7 @@ html body .phone .page button#createStep2Btn:not([disabled]) {
 /* Сам текст чуть выше */
 .topbar-title {
   padding-top: 0 !important;
-  transform: translateY(-8px);
+  transform: translateY(-13px);
 }
 
 /* Название */
@@ -1426,6 +1426,28 @@ html body .phone .page button#createStep2Btn:not([disabled]) {
   position: relative;
   z-index: 21;
   pointer-events: auto;
+}
+
+.product-list {
+  position: relative;
+  z-index: 1;
+}
+
+/* =======================
+   FIX CATEGORY SWIPE BUG
+======================= */
+
+.categories {
+  position: relative;
+  z-index: 50;
+  pointer-events: auto;
+}
+
+.categories button {
+  position: relative;
+  z-index: 51;
+  pointer-events: auto;
+  touch-action: pan-x;
 }
 
 .product-list {
