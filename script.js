@@ -206,6 +206,32 @@ function updateBottomNav() {
    HELPERS
 ======================= */
 
+function openDialerWithNumber(phone) {
+  const cleanPhone = normalizePhoneForTel(phone);
+
+  if (!cleanPhone) {
+    alert("Телефон продавца не указан");
+    return;
+  }
+
+  const telUrl = `tel:${cleanPhone}`;
+
+  const link = document.createElement("a");
+  link.href = telUrl;
+  link.style.position = "fixed";
+  link.style.left = "-9999px";
+  link.style.top = "-9999px";
+  link.setAttribute("target", "_self");
+
+  document.body.appendChild(link);
+
+  link.click();
+
+  setTimeout(() => {
+    link.remove();
+  }, 1000);
+}
+
 function normalizePhoneForTel(phone) {
   const digits = String(phone || "").replace(/\D/g, "");
 
@@ -748,36 +774,35 @@ async function openProduct(id) {
   }
 
   if (callBtn) {
-    if (cleanPhone) {
-      callBtn.innerText = "📞 Позвонить";
-      callBtn.href = `tel:${cleanPhone}`;
-      callBtn.dataset.phone = cleanPhone;
+  if (cleanPhone) {
+    callBtn.innerText = "📞 Позвонить";
+    callBtn.href = `tel:${cleanPhone}`;
 
-      callBtn.classList.remove("disabled-btn");
-      callBtn.classList.remove("disabled");
-      callBtn.removeAttribute("disabled");
-      callBtn.removeAttribute("aria-disabled");
+    callBtn.classList.remove("disabled-btn");
+    callBtn.classList.remove("disabled");
+    callBtn.removeAttribute("disabled");
+    callBtn.removeAttribute("aria-disabled");
 
-      callBtn.onclick = event => {
-        event.preventDefault();
-        event.stopPropagation();
-        openTelLink(cleanPhone);
-      };
-    } else {
-      callBtn.innerText = "📞 Нет номера";
-      callBtn.href = "#";
-      callBtn.dataset.phone = "";
+    callBtn.onclick = event => {
+      event.preventDefault();
+      event.stopPropagation();
 
-      callBtn.classList.add("disabled-btn");
-      callBtn.classList.add("disabled");
-      callBtn.setAttribute("aria-disabled", "true");
+      openDialerWithNumber(cleanPhone);
+    };
+  } else {
+    callBtn.innerText = "📞 Нет номера";
+    callBtn.href = "#";
 
-      callBtn.onclick = event => {
-        event.preventDefault();
-        alert("Телефон продавца не указан");
-      };
-    }
+    callBtn.classList.add("disabled-btn");
+    callBtn.classList.add("disabled");
+    callBtn.setAttribute("aria-disabled", "true");
+
+    callBtn.onclick = event => {
+      event.preventDefault();
+      alert("Телефон продавца не указан");
+    };
   }
+}
 
   showPage("product");
 }
