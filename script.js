@@ -206,6 +206,29 @@ function updateBottomNav() {
    HELPERS
 ======================= */
 
+function normalizePhoneForTel(phone) {
+  const digits = String(phone || "").replace(/\D/g, "");
+
+  if (!digits) return "";
+
+  // 89187077474 -> +79187077474
+  if (digits.length === 11 && digits.startsWith("8")) {
+    return "+7" + digits.slice(1);
+  }
+
+  // 79187077474 -> +79187077474
+  if (digits.length === 11 && digits.startsWith("7")) {
+    return "+" + digits;
+  }
+
+  // 9187077474 -> +79187077474
+  if (digits.length === 10) {
+    return "+7" + digits;
+  }
+
+  return "+" + digits;
+}
+
 function openDialerWithNumber(phone) {
   const cleanPhone = normalizePhoneForTel(phone);
 
@@ -725,10 +748,10 @@ async function openProduct(id) {
   }
 
   const sellerName = product.ownerName || "Продавец";
-  const sellerUsername = product.ownerUsername || "";
-  const sellerPhone = product.phone || "";
-  const cleanPhone = normalizePhoneForTel(sellerPhone);
-  const allowMessages = product.allowMessages !== false;
+const sellerUsername = product.ownerUsername || "";
+const sellerPhone = product.phone || "";
+const cleanPhone = normalizePhoneForTel(sellerPhone);
+const allowMessages = product.allowMessages !== false;
 
   if (productSeller) {
     productSeller.innerText = sellerUsername
@@ -740,62 +763,62 @@ async function openProduct(id) {
     productLocation.innerText = `📍 ${product.location || "Владикавказ"}`;
   }
 
-  if (productPhoneLine) {
-    if (cleanPhone) {
-      productPhoneLine.innerHTML = `
-        <a href="tel:${cleanPhone}" class="phone-line-link" data-phone="${cleanPhone}">
-          📞 ${sellerPhone}
-        </a>
-      `;
-    } else {
-      productPhoneLine.innerText = "📞 Телефон не указан";
-    }
+if (productPhoneLine) {
+  if (cleanPhone) {
+    productPhoneLine.innerHTML = `
+      <a href="tel:${cleanPhone}" class="phone-line-link">
+        📞 ${sellerPhone}
+      </a>
+    `;
+  } else {
+    productPhoneLine.innerText = "📞 Телефон не указан";
   }
+}
 
-  if (messageBtn) {
-    if (allowMessages && sellerUsername) {
-      messageBtn.disabled = false;
-      messageBtn.innerText = "💬 Написать";
+if (messageBtn) {
+  if (allowMessages && sellerUsername) {
+    messageBtn.disabled = false;
+    messageBtn.innerText = "💬 Написать";
 
-      messageBtn.onclick = () => {
-        const url = `https://t.me/${sellerUsername}`;
+    messageBtn.onclick = () => {
+      const url = `https://t.me/${sellerUsername}`;
+      const webApp = window.Telegram?.WebApp;
 
-        if (tg?.openTelegramLink) {
-          tg.openTelegramLink(url);
-        } else {
-          window.open(url, "_blank");
-        }
-      };
-    } else {
-      messageBtn.disabled = true;
-      messageBtn.innerText = "💬 Недоступно";
-      messageBtn.onclick = null;
-    }
+      if (webApp?.openTelegramLink) {
+        webApp.openTelegramLink(url);
+      } else {
+        window.open(url, "_blank");
+      }
+    };
+  } else {
+    messageBtn.disabled = true;
+    messageBtn.innerText = "💬 Недоступно";
+    messageBtn.onclick = null;
   }
+}
 
-  if (callBtn) {
+if (callBtn) {
   if (cleanPhone) {
     callBtn.innerText = "📞 Позвонить";
-    callBtn.href = `tel:${cleanPhone}`;
 
     callBtn.classList.remove("disabled-btn");
     callBtn.classList.remove("disabled");
     callBtn.removeAttribute("disabled");
     callBtn.removeAttribute("aria-disabled");
 
-    callBtn.onclick = event => {
-      event.preventDefault();
-      event.stopPropagation();
+    callBtn.href = `tel:${cleanPhone}`;
+    callBtn.target = "_self";
 
-      openDialerWithNumber(cleanPhone);
-    };
+    // Важно: не перехватываем клик через JS
+    callBtn.onclick = null;
   } else {
     callBtn.innerText = "📞 Нет номера";
-    callBtn.href = "#";
 
     callBtn.classList.add("disabled-btn");
     callBtn.classList.add("disabled");
     callBtn.setAttribute("aria-disabled", "true");
+
+    callBtn.href = "#";
 
     callBtn.onclick = event => {
       event.preventDefault();
