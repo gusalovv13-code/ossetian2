@@ -45,3 +45,4 @@ Authorization: tma <Telegram.WebApp.initData>
 - `GET /api/favorites`
 - `POST /api/favorites`
 - `POST /api/products/:id/view`
+ 
