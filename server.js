@@ -427,6 +427,13 @@ app.post("/api/products", requireTelegramAuth, async (req, res) => {
       ]
     );
 
+    for (let i = 0; i < cleanImages.length; i++) {
+      await pool.query(
+        `INSERT INTO product_images (product_id, url, position) VALUES ($1, $2, $3)`,
+        [id, cleanImages[i], i]
+      );
+    }
+
     res.json({
       ok: true,
       product: mapProduct(result.rows[0])

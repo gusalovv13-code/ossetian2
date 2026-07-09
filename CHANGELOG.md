@@ -13,3 +13,8 @@
 - Удалены дублирующая функция телефона и неиспользуемый клиентский генератор ID.
 - `package-lock.json` синхронизирован, Docker переведён на `npm ci` и запуск не от root.
 - Добавлены автоматические тесты Telegram-аутентификации.
+
+## v1.2.1-stage2
+- Removed eruda debug console from production
+- New product photos are synchronized into product_images
+- Improved product gallery styling
