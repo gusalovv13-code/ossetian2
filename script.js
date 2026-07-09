@@ -740,6 +740,7 @@ if (callBtn) {
 
     callBtn.href = `tel:${cleanPhone}`;
 callBtn.removeAttribute("target");
+callBtn.setAttribute("rel", "noopener");
 
 
     // Важно: не перехватываем клик через JS
