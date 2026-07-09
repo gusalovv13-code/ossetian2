@@ -1346,7 +1346,7 @@ html body .phone .page button#createStep2Btn:not([disabled]) {
 /* Сам текст чуть выше */
 .topbar-title {
   padding-top: 0 !important;
-  transform: translateY(-8px);
+  transform: translateY(-30px);
 }
 
 /* Название */
@@ -1431,4 +1431,14 @@ html body .phone .page button#createStep2Btn:not([disabled]) {
 .product-list {
   position: relative;
   z-index: 1;
+}
+
+/* TEST FIX TELEGRAM KEYBOARD */
+.swipe-back-indicator {
+    display: none !important;
+}
+
+.bottom-nav {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
 }
