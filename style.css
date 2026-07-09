@@ -1316,7 +1316,7 @@ html body .phone .page button#createStep2Btn:not([disabled]) {
 /* Сам текст чуть выше */
 .topbar-title {
   padding-top: 0 !important;
-  transform: translateY(-30px);
+  transform: translateY(-35px);
 }
 
 /* Название */
