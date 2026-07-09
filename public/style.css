@@ -1457,3 +1457,12 @@ button:disabled { opacity:.6; pointer-events:none; }
 
 .seller-page-card{margin-bottom:16px;text-align:center;}
 #sellerProducts{margin-top:12px;}
+
+
+.seller-profile-card {
+  background:#fff;
+  padding:18px;
+  margin:15px;
+  border-radius:18px;
+  border:1px solid #edf0f5;
+}

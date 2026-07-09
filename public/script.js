@@ -704,6 +704,8 @@ const allowMessages = product.allowMessages !== false;
     productSeller.innerText = sellerUsername
       ? `👤 ${sellerName} · @${sellerUsername}`
       : `👤 ${sellerName}`;
+    productSeller.style.cursor = "pointer";
+    productSeller.onclick = () => openSellerProfile(product.ownerId || product.owner_id);
   }
 
   if (productLocation) {
@@ -1602,4 +1604,36 @@ async function openSellerProfile(userId){
     if(list) list.innerHTML = (data.products || []).map(p => getProductCard(p)).join("") || "Нет объявлений";
     showPage("sellerProfile");
   } catch(e){ console.error(e); }
+}
+
+
+async function openSellerProfile(userId) {
+  if (!userId) return;
+  const page = document.getElementById("sellerProfile");
+  if (!page) return;
+
+  const name = document.getElementById("sellerProfileName");
+  const username = document.getElementById("sellerProfileUsername");
+  const count = document.getElementById("sellerProfileCount");
+  const list = document.getElementById("sellerProducts");
+
+  try {
+    const data = await apiRequest(`/api/users/${userId}/products`);
+    const products = data.products || [];
+
+    name.innerText = products[0]?.ownerName || "Продавец";
+    username.innerText = products[0]?.ownerUsername ? "@" + products[0].ownerUsername : "";
+    count.innerText = `📦 Объявлений: ${products.length}`;
+
+    list.innerHTML = products.map(p => `
+      <div class="product-card" onclick="openProduct('${p.id}')">
+        <b>${escapeHTML(p.name || "")}</b>
+        <div>${escapeHTML(String(p.price || ""))}</div>
+      </div>
+    `).join("");
+
+    showPage("sellerProfile");
+  } catch(e) {
+    console.error(e);
+  }
 }
