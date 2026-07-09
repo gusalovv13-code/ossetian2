@@ -738,12 +738,14 @@ if (callBtn) {
     callBtn.removeAttribute("disabled");
     callBtn.removeAttribute("aria-disabled");
 
-    callBtn.href = `tel:${cleanPhone}`;
-callBtn.removeAttribute("target");
-
-
-    // Важно: не перехватываем клик через JS
-    callBtn.onclick = null;
+    callBtn.dataset.phone = cleanPhone;
+    callBtn.onclick = function(event) {
+      event.preventDefault();
+      const phone = callBtn.dataset.phone;
+      if (phone) {
+        window.location.assign("tel:" + phone);
+      }
+    };
   } else {
     callBtn.innerText = "📞 Нет номера";
 
