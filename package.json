@@ -1,10 +1,11 @@
 {
   "name": "ossetian-market",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "test": "node --test"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

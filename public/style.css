@@ -1,0 +1,1434 @@
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #111;
+  font-family: Inter, Arial, sans-serif;
+  color: #1f2430;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* ===== APP WRAPPER ===== */
+.phone {
+  max-width: 430px;
+  min-height: 100vh;
+  margin: 0 auto;
+  background: #f7f8fc;
+  position: relative;
+
+  /* FIX: safe area for Telegram bottom bar */
+  padding-bottom: calc(92px + env(safe-area-inset-bottom));
+}
+
+/* ===== TOP BAR ===== */
+.topbar {
+  height: 64px;
+  background: white;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid #edf0f5;
+
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.topbar h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.topbar p {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: #9aa2b1;
+}
+
+.ghost {
+  border: 0;
+  background: transparent;
+  color: #6d5dfc;
+}
+
+.circle {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid #dfe3ee;
+  background: white;
+}
+
+/* ===== PAGES ===== */
+.page {
+  display: none;
+  padding: 22px 18px 110px;
+}
+
+.page.active {
+  display: block;
+}
+
+/* ===== TEXT ===== */
+h1 {
+  font-size: 28px;
+  margin-bottom: 4px;
+}
+
+h2 {
+  margin: 0 0 10px;
+}
+
+.muted {
+  color: #8a93a5;
+  font-size: 14px;
+}
+
+/* ===== MENU ===== */
+.menu {
+  display: grid;
+  gap: 14px;
+  margin-top: 28px;
+}
+
+.menu-card {
+  border: 0;
+  background: white;
+  border-radius: 18px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  text-align: left;
+
+  box-shadow: 0 10px 25px rgba(35, 41, 60, .05);
+}
+
+.menu-card span {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  color: white;
+  font-size: 22px;
+}
+
+.menu-card small {
+  display: block;
+  color: #8a93a5;
+  margin-top: 3px;
+}
+
+.purple span { background: #6d5dfc; }
+.blue span { background: #4c7dff; }
+.cyan span { background: #31c4d9; }
+.red span { background: #ff5c7a; }
+
+/* ===== INPUTS ===== */
+.search,
+input,
+select,
+textarea {
+  width: 100%;
+  border: 0;
+  background: white;
+  border-radius: 14px;
+  padding: 15px;
+  margin: 8px 0 14px;
+  font-size: 14px;
+  outline: none;
+}
+
+textarea {
+  min-height: 120px;
+  resize: none;
+}
+
+/* ===== FILTERS ===== */
+.categories,
+.tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 6px 0 14px;
+}
+
+.categories button,
+.tabs button {
+  border: 0;
+  background: white;
+  padding: 10px 13px;
+  border-radius: 14px;
+  white-space: nowrap;
+  color: #596073;
+}
+
+.categories .active,
+.tabs .active {
+  background: #6d5dfc;
+  color: white;
+}
+
+/* ===== PRODUCT LIST ===== */
+.product-list {
+  display: grid;
+  gap: 12px;
+}
+
+/* ===== CARD ===== */
+.product-card {
+  background: white;
+  border-radius: 18px;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: 82px 1fr auto;
+  gap: 12px;
+  align-items: center;
+
+  box-shadow: 0 10px 25px rgba(35, 41, 60, .05);
+}
+
+.product-card img {
+  width: 82px;
+  height: 82px;
+  border-radius: 14px;
+  object-fit: cover;
+}
+
+.product-card h4 {
+  margin: 0 0 5px;
+  font-size: 15px;
+}
+
+.product-card p {
+  margin: 3px 0;
+  font-size: 12px;
+  color: #8a93a5;
+}
+
+.product-card b {
+  color: #222;
+}
+
+/* ===== FAVORITE BUTTON ===== */
+.heart {
+  border: 0;
+  background: transparent;
+  font-size: 22px;
+  color: #b5bdca;
+}
+
+/* ===== PRODUCT PAGE ===== */
+.hero-img {
+  width: 100%;
+  height: 280px;
+  border-radius: 22px;
+  object-fit: cover;
+}
+
+.price {
+  color: #6d5dfc;
+  margin-top: 6px;
+}
+
+.seller,
+.desc {
+  color: #687083;
+  line-height: 1.4;
+}
+
+/* ===== ACTIONS (FIXED SAFE) ===== */
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.primary,
+.outline {
+  border: 0;
+  border-radius: 15px;
+  padding: 15px;
+  font-weight: 700;
+}
+
+.primary {
+  background: linear-gradient(135deg, #7b61ff, #5f4af6);
+  color: white;
+}
+
+.outline {
+  background: white;
+  color: #6d5dfc;
+  border: 1px solid #d8d4ff;
+}
+
+/* ===== STEPS ===== */
+.steps {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.steps b {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #6d5dfc;
+  color: white;
+  display: grid;
+  place-items: center;
+}
+
+/* ===== PHOTO GRID ===== */
+.photo-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.photo-grid button,
+.photo-grid div {
+  aspect-ratio: 1;
+  border-radius: 16px;
+  border: 1px dashed #cbd2e1;
+  background: white;
+}
+
+/* ===== PROFILE ===== */
+.profile-card {
+  background: white;
+  border-radius: 22px;
+  text-align: center;
+  padding: 24px;
+}
+
+.avatar {
+  width: 72px;
+  height: 72px;
+  background: #edeaff;
+  color: #6d5dfc;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 32px;
+  margin: auto;
+}
+
+.profile-row {
+  width: 100%;
+  border: 0;
+  background: white;
+  border-radius: 15px;
+  padding: 16px;
+  margin-top: 10px;
+  display: flex;
+  justify-content: space-between;
+}
+
+/* ===== BOTTOM NAV (FIXED + SAFE AREA) ===== */
+.bottom-nav {
+  position: fixed;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+
+  width: min(430px, 100%);
+  height: 72px;
+
+  background: white;
+  border-top: 1px solid #edf0f5;
+
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+
+  z-index: 50;
+
+  /* FIX: Telegram safe area */
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.bottom-nav button {
+  border: 0;
+  background: transparent;
+  color: #8a93a5;
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+}
+
+.bottom-nav small {
+  font-size: 10px;
+  margin-top: 2px;
+}
+
+/* ===== ADD BUTTON ===== */
+.add-btn {
+  width: 52px;
+  height: 52px;
+  border-radius: 18px !important;
+  background: #6d5dfc !important;
+  color: white !important;
+  font-size: 30px !important;
+  margin-top: -28px;
+  box-shadow: 0 10px 24px rgba(109, 93, 252, .35);
+}
+
+.wide {
+  width: 100%;
+}
+
+.empty-state {
+  background: white;
+  border-radius: 18px;
+  padding: 22px;
+  text-align: center;
+  box-shadow: 0 10px 25px rgba(35, 41, 60, .05);
+}
+
+.empty-state h3 {
+  margin: 0 0 6px;
+}
+
+.photo-grid div.filled {
+  border-style: solid;
+  overflow: hidden;
+}
+
+.photo-grid img {
+  width: 100%;
+  height: 100%;
+  border-radius: 16px;
+  object-fit: cover;
+}
+
+.bottom-nav button.active {
+  color: #6d5dfc;
+}
+
+.add-btn.active {
+  color: white !important;
+}
+
+.profile-card .avatar {
+  width: 72px !important;
+  height: 72px !important;
+  min-width: 72px !important;
+  max-width: 72px !important;
+  min-height: 72px !important;
+  max-height: 72px !important;
+
+  margin: 0 auto 12px !important;
+
+  border-radius: 50% !important;
+  overflow: hidden !important;
+
+  background: #edeaff;
+  color: #6d5dfc;
+
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+
+  font-size: 32px;
+  line-height: 1;
+}
+
+.profile-card .avatar img {
+  width: 100% !important;
+  height: 100% !important;
+
+  min-width: 100% !important;
+  min-height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+
+  border-radius: 50% !important;
+  object-fit: cover !important;
+  object-position: center center !important;
+
+  display: block !important;
+}
+
+.seller-info {
+  background: white;
+  border-radius: 18px;
+  padding: 14px;
+  margin: 12px 0 16px;
+  box-shadow: 0 10px 25px rgba(35, 41, 60, .05);
+}
+
+.seller-info p {
+  margin: 6px 0;
+  color: #687083;
+  font-size: 14px;
+}
+
+.actions button:disabled {
+  opacity: 0.5;
+}
+
+.photo-box {
+  margin: 18px 0;
+}
+
+.photo-preview {
+  width: 100%;
+  min-height: 220px;
+  border-radius: 24px;
+  background: #f4f5f8;
+  border: 2px dashed #d8dce5;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+
+  overflow: hidden;
+  text-align: center;
+  color: #7a8191;
+}
+
+.photo-preview img {
+  width: 100%;
+  height: 260px;
+  object-fit: cover;
+  display: block;
+}
+
+.photo-plus {
+  width: 62px;
+  height: 62px;
+  border-radius: 50%;
+  background: white;
+  color: #6d5dfc;
+  font-size: 42px;
+  line-height: 58px;
+  margin-bottom: 10px;
+  box-shadow: 0 10px 25px rgba(35, 41, 60, .08);
+}
+
+.muted {
+  color: #7a8191;
+  font-size: 14px;
+}
+
+.photo-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.photo-empty {
+  grid-column: 1 / -1;
+  min-height: 180px;
+  border-radius: 22px;
+  background: #f4f5f8;
+  border: 2px dashed #d8dce5;
+  color: #7a8191;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.photo-empty p {
+  margin: 8px 0 2px;
+}
+
+.photo-empty small {
+  color: #9aa1af;
+}
+
+.photo-plus {
+  width: 62px;
+  height: 62px;
+  border-radius: 50%;
+  background: white;
+  color: #6d5dfc;
+  font-size: 42px;
+  line-height: 58px;
+  text-align: center;
+  box-shadow: 0 10px 25px rgba(35, 41, 60, .08);
+}
+
+.photo-item {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  border-radius: 18px;
+  overflow: hidden;
+  background: #f4f5f8;
+}
+
+.photo-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.photo-item button {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 50%;
+
+  background: rgba(0, 0, 0, .65);
+  color: white;
+  font-size: 18px;
+  line-height: 24px;
+}
+
+.photo-add {
+  aspect-ratio: 1 / 1;
+  border-radius: 18px;
+  border: 2px dashed #d8dce5;
+  background: #f4f5f8;
+  color: #6d5dfc;
+  font-size: 34px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.product-thumbs {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0 16px;
+  overflow-x: auto;
+}
+
+.product-thumbs img {
+  width: 58px;
+  height: 58px;
+  border-radius: 12px;
+  object-fit: cover;
+  opacity: .55;
+  border: 2px solid transparent;
+}
+
+.product-thumbs img.active {
+  opacity: 1;
+  border-color: #6d5dfc;
+}
+
+/* =======================
+   TELEGRAM MINI APP UX
+======================= */
+
+html,
+body {
+  width: 100%;
+  min-height: 100%;
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+  touch-action: manipulation;
+}
+
+/* Чтобы верхний текст не залезал под шторку iPhone / Telegram */
+body {
+  padding-top: calc(
+    12px + env(safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px)
+  );
+}
+
+/* Верхняя панель */
+.topbar.safe-top,
+.topbar {
+  padding-top: calc(
+    18px + env(safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px)
+  );
+}
+
+/* Пустое место слева вместо старой кнопки назад */
+.topbar-spacer {
+  width: 42px;
+  min-width: 42px;
+}
+
+/* Центрируем название */
+.topbar-title {
+  flex: 1;
+  text-align: center;
+}
+
+/* Стрелка при свайпе слева направо */
+.swipe-back-indicator {
+  position: fixed;
+  left: 14px;
+  top: 50%;
+  z-index: 9999;
+
+  width: 46px;
+  height: 46px;
+  border-radius: 999px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1;
+
+  background: rgba(0, 0, 0, 0.22);
+  color: #ffffff;
+
+  opacity: 0;
+  transform: translate(-24px, -50%) scale(0.85);
+  pointer-events: none;
+
+  transition: opacity 0.16s ease, transform 0.16s ease;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.swipe-back-indicator.active {
+  opacity: 1;
+  transform: translate(0, -50%) scale(1);
+}
+
+/* На всякий случай скрываем старую кнопку закрыть/назад, если где-то осталась */
+.close-btn,
+.closeButton,
+#closeBtn {
+  display: none !important;
+}
+
+/* =======================
+   FIX: LONG TEXT / OVERFLOW
+======================= */
+
+/* Запрещаем всему приложению уезжать вправо */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.phone {
+  width: 100%;
+  max-width: 430px;
+  overflow-x: hidden;
+}
+
+/* Все страницы внутри mini app не должны раздвигать экран */
+.page {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+/* Карточка товара */
+.product-card {
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+/* Если карточка сделана flex-строкой */
+.product-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Картинка не должна сжимать/ломать сетку */
+.product-card > img {
+  flex: 0 0 72px;
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 12px;
+}
+
+/* Текстовый блок внутри карточки должен уметь сжиматься */
+.product-card > div {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Название объявления — максимум 2 строки */
+.product-card h4 {
+  max-width: 100%;
+  margin: 0 0 4px;
+
+  overflow: hidden;
+  text-overflow: ellipsis;
+
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Цена и описание тоже не должны ломать экран */
+.product-card b,
+.product-card p {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Кнопка сердечка/удаления не должна выталкивать карточку */
+.product-card .heart {
+  flex: 0 0 auto;
+}
+
+/* Страница товара */
+#productName,
+#productPrice,
+#productDesc,
+#productSeller,
+#productLocation,
+#productPhoneLine {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Верхняя панель тоже не должна ломаться */
+.topbar {
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.topbar-title {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.topbar-title h3,
+.topbar-title p,
+#pageTitle {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* =======================
+   PRODUCT GRID: 2 COLUMNS
+======================= */
+
+/* Сетка объявлений в 2 столбика */
+.product-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  width: 100%;
+}
+
+/* Карточка товара теперь вертикальная */
+.product-card {
+  position: relative;
+
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+
+  padding: 10px;
+  border-radius: 18px;
+
+  overflow: hidden;
+}
+
+/* Фото товара сверху */
+.product-card > img {
+  display: block;
+
+  width: 100%;
+  height: 120px;
+
+  object-fit: cover;
+  border-radius: 14px;
+
+  margin: 0 0 8px 0;
+
+  flex: none;
+}
+
+/* Текстовый блок */
+.product-card > div {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Название товара */
+.product-card h4 {
+  margin: 0 0 5px 0;
+
+  font-size: 14px;
+  line-height: 1.2;
+  font-weight: 700;
+
+  max-width: 100%;
+
+  display: -webkit-box;
+  line-clamp: 2;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+
+  overflow: hidden;
+  text-overflow: ellipsis;
+
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+/* Цена */
+.product-card b {
+  display: block;
+
+  font-size: 14px;
+  line-height: 1.2;
+
+  margin-bottom: 4px;
+
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Город / время / статус */
+.product-card p {
+  margin: 0;
+
+  font-size: 11px;
+  line-height: 1.25;
+
+  max-width: 100%;
+
+  color: #8b8b9a;
+
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Сердце / удалить */
+.product-card .heart {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+
+  width: 32px;
+  height: 32px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  border: none;
+  border-radius: 999px;
+
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+
+  font-size: 17px;
+  z-index: 2;
+}
+
+/* Чтобы кнопка + Добавить объявление не ломала сетку */
+.fixed-btn,
+.product-list + .fixed-btn {
+  width: 100%;
+  grid-column: 1 / -1;
+}
+
+/* На очень маленьких экранах чуть уменьшаем фото */
+@media (max-width: 360px) {
+  .product-list {
+    gap: 10px;
+  }
+
+  .product-card {
+    padding: 8px;
+    border-radius: 16px;
+  }
+
+  .product-card > img {
+    height: 105px;
+    border-radius: 12px;
+  }
+
+  .product-card h4 {
+    font-size: 13px;
+  }
+
+  .product-card b {
+    font-size: 13px;
+  }
+
+  .product-card p {
+    font-size: 10px;
+  }
+}
+
+/* =======================
+   FIX: TELEGRAM BLACK PULL STRIP
+======================= */
+
+html {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #f5f6fb;
+  overscroll-behavior: none;
+}
+
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+
+  overflow: hidden;
+  background: #f5f6fb;
+
+  overscroll-behavior: none;
+  overscroll-behavior-y: none;
+
+  -webkit-overflow-scrolling: auto;
+}
+
+/* Скролл должен быть внутри приложения, а не у body */
+.phone {
+  height: 100vh;
+  max-height: 100vh;
+
+  overflow-y: auto;
+  overflow-x: hidden;
+
+  overscroll-behavior: contain;
+  overscroll-behavior-y: contain;
+
+  -webkit-overflow-scrolling: touch;
+
+  background: #f5f6fb;
+}
+
+/* Чтобы верх не показывал черноту при микросвайпе */
+.phone::before {
+  content: "";
+  position: fixed;
+  top: -120px;
+  left: 0;
+  right: 0;
+
+  height: 160px;
+  background: #f5f6fb;
+  z-index: -1;
+}
+
+/* Верхняя панель пусть будет белой/светлой */
+.topbar {
+  background: #ffffff;
+}
+
+/* =======================
+   FIX: TOPBAR POSITION + REMOVE DOTS
+======================= */
+
+/* Убираем лишний общий отступ, из-за которого текст уехал вниз */
+body {
+  padding-top: 0 !important;
+}
+
+/* Верхняя панель — ниже шторки, но не слишком низко */
+.topbar,
+.topbar.safe-top {
+  padding-top: calc(
+    6px + env(safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px)
+  ) !important;
+
+  padding-left: 14px;
+  padding-right: 14px;
+  padding-bottom: 8px;
+
+  min-height: 58px;
+}
+
+/* Заголовок аккуратно по центру */
+.topbar-title {
+  flex: 1;
+  text-align: center;
+  min-width: 0;
+}
+
+/* Левый и правый пустые блоки одинаковые */
+.topbar-spacer {
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
+}
+
+/* Убираем внутренние три точки приложения */
+.circle {
+  display: none !important;
+}
+
+/* Текст заголовка компактнее */
+.topbar-title h3,
+#pageTitle {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.15;
+}
+
+.topbar-title p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 1.1;
+}
+
+/* =======================
+   FIX: CENTER BOTTOM PLUS BUTTON
+======================= */
+
+.bottom-nav {
+  display: grid !important;
+  grid-template-columns: repeat(5, 1fr) !important;
+  align-items: center !important;
+
+  width: 100% !important;
+  left: 0 !important;
+  right: 0 !important;
+
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+
+/* Все кнопки в нижнем меню по центру своей колонки */
+.bottom-nav button {
+  width: 100% !important;
+  min-width: 0 !important;
+
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+
+  text-align: center !important;
+  margin: 0 !important;
+}
+
+/* Центральная кнопка плюс */
+.bottom-nav .add-btn {
+  grid-column: 3 !important;
+  justify-self: center !important;
+  align-self: center !important;
+
+  width: 58px !important;
+  height: 58px !important;
+
+  margin: -26px auto 0 auto !important;
+
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+
+  border-radius: 22px !important;
+
+  transform: none !important;
+  left: auto !important;
+  right: auto !important;
+  position: relative !important;
+}
+
+/* Сам символ плюса ровно по центру */
+.bottom-nav .add-btn {
+  font-size: 34px !important;
+  line-height: 1 !important;
+  padding: 0 !important;
+}
+
+/* =======================
+   FIX: BOTTOM NAV WIDTH AFTER GRID BUG
+======================= */
+
+/* Контейнер приложения */
+.phone {
+  position: relative !important;
+
+  width: 100% !important;
+  max-width: 430px !important;
+
+  margin-left: auto !important;
+  margin-right: auto !important;
+
+  overflow-x: hidden !important;
+}
+
+/* Нижняя навигация строго по ширине приложения, а не всего экрана */
+.bottom-nav {
+  position: fixed !important;
+
+  left: 50% !important;
+  right: auto !important;
+  bottom: 0 !important;
+
+  transform: translateX(-50%) !important;
+
+  width: min(100vw, 430px) !important;
+  max-width: 430px !important;
+
+  display: grid !important;
+  grid-template-columns: repeat(5, 1fr) !important;
+  align-items: center !important;
+
+  padding: 8px 0 calc(8px + env(safe-area-inset-bottom, 0px)) !important;
+
+  background: #ffffff !important;
+  border-radius: 24px 24px 0 0 !important;
+
+  z-index: 1000 !important;
+}
+
+/* Кнопки внутри нижнего меню */
+.bottom-nav button {
+  width: 100% !important;
+  min-width: 0 !important;
+
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+
+  margin: 0 !important;
+  padding: 0 !important;
+
+  text-align: center !important;
+
+  position: relative !important;
+  left: auto !important;
+  right: auto !important;
+  transform: none !important;
+}
+
+/* Центральная кнопка плюс */
+.bottom-nav .add-btn {
+  grid-column: 3 !important;
+
+  justify-self: center !important;
+  align-self: center !important;
+
+  width: 58px !important;
+  height: 58px !important;
+
+  margin-top: -28px !important;
+
+  border-radius: 22px !important;
+
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+
+  font-size: 34px !important;
+  line-height: 1 !important;
+
+  position: relative !important;
+  left: auto !important;
+  right: auto !important;
+  transform: none !important;
+}
+
+/* Чтобы контент не залезал под нижнее меню */
+.page {
+  padding-bottom: 100px !important;
+}
+
+/* =======================
+   FIX: DISABLED CREATE BUTTONS
+======================= */
+
+#createStep1Btn:disabled,
+#createStep2Btn:disabled,
+#createStep1Btn.disabled-btn,
+#createStep2Btn.disabled-btn {
+  background: #d7d9e2 !important;
+  color: #7f8494 !important;
+  border-color: #d7d9e2 !important;
+  box-shadow: none !important;
+  opacity: 1 !important;
+  cursor: not-allowed !important;
+  pointer-events: none !important;
+}
+
+/* Активная кнопка */
+#createStep1Btn:not(:disabled),
+#createStep2Btn:not(:disabled) {
+  background: linear-gradient(135deg, #6d5dfc, #744cff) !important;
+  color: #ffffff !important;
+  border-color: transparent !important;
+  box-shadow: 0 12px 24px rgba(109, 93, 252, 0.25) !important;
+  cursor: pointer !important;
+  pointer-events: auto !important;
+}
+
+/* =======================
+   FINAL FIX: DISABLED CREATE BUTTONS
+======================= */
+
+html body .phone .page button#createStep1Btn[disabled],
+html body .phone .page button#createStep2Btn[disabled],
+html body .phone .page button#createStep1Btn.disabled-btn,
+html body .phone .page button#createStep2Btn.disabled-btn {
+  background: #d7d9e2 !important;
+  background-image: none !important;
+  color: #7f8494 !important;
+  border: 1px solid #d7d9e2 !important;
+  box-shadow: none !important;
+  opacity: 1 !important;
+  filter: none !important;
+  cursor: not-allowed !important;
+  pointer-events: none !important;
+}
+
+/* Когда кнопка активна */
+html body .phone .page button#createStep1Btn:not([disabled]),
+html body .phone .page button#createStep2Btn:not([disabled]) {
+  background: linear-gradient(135deg, #6d5dfc, #744cff) !important;
+  background-image: linear-gradient(135deg, #6d5dfc, #744cff) !important;
+  color: #ffffff !important;
+  border: 1px solid transparent !important;
+  box-shadow: 0 12px 24px rgba(109, 93, 252, 0.25) !important;
+  opacity: 1 !important;
+  cursor: pointer !important;
+  pointer-events: auto !important;
+}
+
+/* =======================
+   FIX: MOVE TOP TITLE UP
+======================= */
+
+.topbar,
+.topbar.safe-top {
+  padding-top: calc(
+    0px + env(safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px)
+  ) !important;
+
+  padding-bottom: 4px !important;
+  min-height: 44px !important;
+  height: 48px !important;
+
+  display: flex !important;
+  align-items: flex-start !important;
+}
+
+/* Сам текст чуть выше */
+.topbar-title {
+  padding-top: 0 !important;
+  transform: translateY(-8px);
+}
+
+/* Название */
+.topbar-title h3,
+#pageTitle {
+  margin: 0 !important;
+  font-size: 16px !important;
+  line-height: 1.1 !important;
+}
+
+/* Подпись мини-приложение, если есть */
+.topbar-title p {
+  margin: 1px 0 0 !important;
+  font-size: 11px !important;
+  line-height: 1.1 !important;
+}
+
+/* =======================
+   CALL LINK BUTTON
+======================= */
+
+.actions .call-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  text-decoration: none;
+  text-align: center;
+
+  min-height: 48px;
+  border-radius: 16px;
+
+  font-weight: 700;
+}
+
+.actions .call-link.disabled,
+.actions .call-link.disabled-btn {
+  background: #d7d9e2 !important;
+  background-image: none !important;
+  color: #7f8494 !important;
+  box-shadow: none !important;
+  pointer-events: none !important;
+  cursor: not-allowed !important;
+}
+
+.phone-line-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.phone-line-link:active {
+  opacity: 0.7;
+}
+
+/* =======================
+   EMERGENCY PAGE FIX
+======================= */
+
+.page {
+  display: none !important;
+}
+
+.page.active {
+  display: block !important;
+}
+
+/* =======================
+   FIX CATEGORIES CLICK
+======================= */
+
+.categories {
+  position: relative;
+  z-index: 20;
+}
+
+.categories button {
+  position: relative;
+  z-index: 21;
+  pointer-events: auto;
+}
+
+.product-list {
+  position: relative;
+  z-index: 1;
+}

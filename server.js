@@ -2,20 +2,28 @@ import express from "express";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
+import { randomUUID } from "crypto";
 import pg from "pg";
+import { createTelegramAuthMiddleware } from "./telegram-auth.js";
 
 dotenv.config();
 
 const app = express();
-
 const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
+const configuredAuthMaxAge = Number(
+  process.env.TELEGRAM_AUTH_MAX_AGE_SECONDS || 86400
+);
+const TELEGRAM_AUTH_MAX_AGE_SECONDS =
+  Number.isFinite(configuredAuthMaxAge) && configuredAuthMaxAge > 0
+    ? Math.floor(configuredAuthMaxAge)
+    : 86400;
 
 const { Pool } = pg;
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const publicDir = path.join(__dirname, "public");
 
 if (!BOT_TOKEN) {
   console.error("Ошибка: BOT_TOKEN не найден в переменных окружения");
@@ -34,12 +42,14 @@ const pool = new Pool({
   }
 });
 
-app.use(express.json({ limit: "80mb" }));
-app.use(express.static(__dirname));
+const requireTelegramAuth = createTelegramAuthMiddleware({
+  botToken: BOT_TOKEN,
+  maxAgeSeconds: TELEGRAM_AUTH_MAX_AGE_SECONDS
+});
 
-function generateId() {
-  return "_" + Math.random().toString(36).substr(2, 9);
-}
+app.disable("x-powered-by");
+app.use(express.json({ limit: "80mb" }));
+app.use(express.static(publicDir));
 
 function normalizeImages(row) {
   if (Array.isArray(row.images) && row.images.length > 0) {
@@ -58,7 +68,6 @@ function mapProduct(row) {
 
   return {
     id: row.id,
-    ownerId: row.owner_id,
     ownerName: row.owner_name,
     ownerUsername: row.owner_username,
     name: row.name,
@@ -74,6 +83,56 @@ function mapProduct(row) {
     status: row.status,
     createdAt: new Date(row.created_at).getTime()
   };
+}
+
+function getTelegramDisplayName(user) {
+  return `${user.firstName || ""} ${user.lastName || ""}`.trim();
+}
+
+async function fetchTelegramJson(method, searchParams) {
+  const url = new URL(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`);
+
+  for (const [key, value] of Object.entries(searchParams || {})) {
+    url.searchParams.set(key, String(value));
+  }
+
+  const response = await fetch(url);
+  const data = await response.json();
+
+  if (!response.ok || !data.ok) {
+    throw new Error(`Telegram Bot API method ${method} failed`);
+  }
+
+  return data.result;
+}
+
+async function resolveTelegramAvatarUrl(user) {
+  if (user.photoUrl) {
+    return user.photoUrl;
+  }
+
+  const profilePhotos = await fetchTelegramJson("getUserProfilePhotos", {
+    user_id: user.id,
+    limit: 1
+  });
+
+  const photos = profilePhotos?.photos || [];
+
+  if (photos.length === 0) {
+    return null;
+  }
+
+  const sizes = photos[0];
+  const biggestPhoto = sizes[sizes.length - 1];
+  const file = await fetchTelegramJson("getFile", {
+    file_id: biggestPhoto.file_id
+  });
+
+  if (!file?.file_path) {
+    return null;
+  }
+
+  return `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
 }
 
 async function initDb() {
@@ -132,7 +191,7 @@ app.get("/api/health", async (req, res) => {
     res.json({
       ok: true,
       message: "Server and database are working",
-      version: "products-5-photos"
+      version: "telegram-auth-v1"
     });
   } catch (error) {
     console.error("Health check error:", error);
@@ -144,82 +203,63 @@ app.get("/api/health", async (req, res) => {
   }
 });
 
-app.get("/api/avatar/:userId", async (req, res) => {
+app.get("/api/me", requireTelegramAuth, (req, res) => {
+  res.json({
+    ok: true,
+    user: req.telegramUser
+  });
+});
+
+app.get("/api/avatar", requireTelegramAuth, async (req, res) => {
   try {
-    const userId = req.params.userId;
+    const avatarUrl = await resolveTelegramAvatarUrl(req.telegramUser);
 
-    if (!userId) {
-      return res.status(400).json({
+    if (!avatarUrl) {
+      return res.status(404).json({
         ok: false,
-        error: "userId is required"
+        error: "Фото профиля не найдено"
       });
     }
 
-    const photosUrl =
-      `https://api.telegram.org/bot${BOT_TOKEN}/getUserProfilePhotos?user_id=${userId}&limit=1`;
+    const avatarResponse = await fetch(avatarUrl);
 
-    const photosResponse = await fetch(photosUrl);
-    const photosData = await photosResponse.json();
-
-    if (!photosData.ok) {
-      return res.status(400).json({
+    if (!avatarResponse.ok) {
+      return res.status(502).json({
         ok: false,
-        error: "getUserProfilePhotos failed",
-        details: photosData
+        error: "Не удалось загрузить фото Telegram"
       });
     }
 
-    const photos = photosData.result?.photos || [];
+    const contentLength = Number(avatarResponse.headers.get("content-length") || 0);
 
-    if (photos.length === 0) {
-      return res.json({
-        ok: true,
-        avatarUrl: null,
-        message: "Фото профиля не найдено"
-      });
-    }
-
-    const sizes = photos[0];
-    const biggestPhoto = sizes[sizes.length - 1];
-    const fileId = biggestPhoto.file_id;
-
-    const fileUrl =
-      `https://api.telegram.org/bot${BOT_TOKEN}/getFile?file_id=${fileId}`;
-
-    const fileResponse = await fetch(fileUrl);
-    const fileData = await fileResponse.json();
-
-    if (!fileData.ok) {
-      return res.status(400).json({
+    if (contentLength > 5 * 1024 * 1024) {
+      return res.status(413).json({
         ok: false,
-        error: "getFile failed",
-        details: fileData
+        error: "Фото Telegram слишком большое"
       });
     }
 
-    const filePath = fileData.result?.file_path;
+    const avatarBuffer = Buffer.from(await avatarResponse.arrayBuffer());
 
-    if (!filePath) {
-      return res.json({
-        ok: true,
-        avatarUrl: null,
-        message: "Telegram не вернул file_path"
+    if (avatarBuffer.length > 5 * 1024 * 1024) {
+      return res.status(413).json({
+        ok: false,
+        error: "Фото Telegram слишком большое"
       });
     }
 
-    const avatarUrl =
-      `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
-
-    return res.json({
-      ok: true,
-      avatarUrl
-    });
+    res.setHeader(
+      "Content-Type",
+      avatarResponse.headers.get("content-type") || "image/jpeg"
+    );
+    res.setHeader("Cache-Control", "private, max-age=300");
+    return res.send(avatarBuffer);
   } catch (error) {
     console.error("Avatar API error:", error);
 
     return res.status(500).json({
       ok: false,
-      error: "Server error"
+      error: "Не удалось получить фото Telegram"
     });
   }
 });
@@ -247,10 +287,8 @@ app.get("/api/products", async (req, res) => {
   }
 });
 
-app.get("/api/my-products/:userId", async (req, res) => {
+app.get("/api/my-products", requireTelegramAuth, async (req, res) => {
   try {
-    const userId = req.params.userId;
-
     const result = await pool.query(
       `
         SELECT *
@@ -258,7 +296,7 @@ app.get("/api/my-products/:userId", async (req, res) => {
         WHERE owner_id = $1 AND status != 'deleted'
         ORDER BY created_at DESC;
       `,
-      [String(userId)]
+      [req.telegramUser.id]
     );
 
     res.json({
@@ -275,12 +313,9 @@ app.get("/api/my-products/:userId", async (req, res) => {
   }
 });
 
-app.post("/api/products", async (req, res) => {
+app.post("/api/products", requireTelegramAuth, async (req, res) => {
   try {
     const {
-      ownerId,
-      ownerName,
-      ownerUsername,
       name,
       price,
       category,
@@ -292,7 +327,7 @@ app.post("/api/products", async (req, res) => {
       allowMessages
     } = req.body;
 
-    if (!ownerId || !name || !price || !category || !desc) {
+    if (!name || !price || !category || !desc) {
       return res.status(400).json({
         ok: false,
         error: "Не все обязательные поля заполнены"
@@ -308,7 +343,8 @@ app.post("/api/products", async (req, res) => {
     }
 
     const mainImage = cleanImages[0] || image || "";
-    const id = generateId();
+    const id = randomUUID();
+    const ownerName = getTelegramDisplayName(req.telegramUser);
 
     const result = await pool.query(
       `
@@ -334,9 +370,9 @@ app.post("/api/products", async (req, res) => {
       `,
       [
         id,
-        String(ownerId),
-        ownerName || "",
-        ownerUsername || "",
+        req.telegramUser.id,
+        ownerName || "Пользователь Telegram",
+        req.telegramUser.username || "",
         name,
         price,
         category,
@@ -363,18 +399,16 @@ app.post("/api/products", async (req, res) => {
   }
 });
 
-app.post("/api/products/:id/view", async (req, res) => {
+app.post("/api/products/:id/view", requireTelegramAuth, async (req, res) => {
   try {
-    const id = req.params.id;
-
     const result = await pool.query(
       `
         UPDATE products
         SET views = views + 1
-        WHERE id = $1
+        WHERE id = $1 AND status != 'deleted'
         RETURNING *;
       `,
-      [id]
+      [req.params.id]
     );
 
     if (result.rows.length === 0) {
@@ -398,25 +432,15 @@ app.post("/api/products/:id/view", async (req, res) => {
   }
 });
 
-app.delete("/api/products/:id", async (req, res) => {
+app.delete("/api/products/:id", requireTelegramAuth, async (req, res) => {
   try {
-    const id = req.params.id;
-    const ownerId = req.query.ownerId;
-
-    if (!ownerId) {
-      return res.status(400).json({
-        ok: false,
-        error: "ownerId is required"
-      });
-    }
-
     const result = await pool.query(
       `
         DELETE FROM products
         WHERE id = $1 AND owner_id = $2
         RETURNING id;
       `,
-      [id, String(ownerId)]
+      [req.params.id, req.telegramUser.id]
     );
 
     if (result.rows.length === 0) {
@@ -439,17 +463,15 @@ app.delete("/api/products/:id", async (req, res) => {
   }
 });
 
-app.get("/api/favorites/:userId", async (req, res) => {
+app.get("/api/favorites", requireTelegramAuth, async (req, res) => {
   try {
-    const userId = req.params.userId;
-
     const result = await pool.query(
       `
         SELECT product_id
         FROM favorites
         WHERE user_id = $1;
       `,
-      [String(userId)]
+      [req.telegramUser.id]
     );
 
     res.json({
@@ -466,24 +488,24 @@ app.get("/api/favorites/:userId", async (req, res) => {
   }
 });
 
-app.post("/api/favorites", async (req, res) => {
+app.post("/api/favorites", requireTelegramAuth, async (req, res) => {
   try {
-    const { userId, productId } = req.body;
+    const { productId } = req.body;
 
-    if (!userId || !productId) {
+    if (!productId) {
       return res.status(400).json({
         ok: false,
-        error: "userId and productId are required"
+        error: "productId is required"
       });
     }
 
     const exists = await pool.query(
       `
-        SELECT *
+        SELECT 1
         FROM favorites
         WHERE user_id = $1 AND product_id = $2;
       `,
-      [String(userId), productId]
+      [req.telegramUser.id, productId]
     );
 
     if (exists.rows.length > 0) {
@@ -492,7 +514,7 @@ app.post("/api/favorites", async (req, res) => {
           DELETE FROM favorites
           WHERE user_id = $1 AND product_id = $2;
         `,
-        [String(userId), productId]
+        [req.telegramUser.id, productId]
       );
 
       return res.json({
@@ -506,7 +528,7 @@ app.post("/api/favorites", async (req, res) => {
         INSERT INTO favorites (user_id, product_id)
         VALUES ($1, $2);
       `,
-      [String(userId), productId]
+      [req.telegramUser.id, productId]
     );
 
     res.json({
@@ -516,11 +538,29 @@ app.post("/api/favorites", async (req, res) => {
   } catch (error) {
     console.error("Toggle favorite error:", error);
 
+    if (error?.code === "23503") {
+      return res.status(404).json({
+        ok: false,
+        error: "Товар не найден"
+      });
+    }
+
     res.status(500).json({
       ok: false,
       error: "Не удалось обновить избранное"
     });
   }
+});
+
+app.use("/api", (req, res) => {
+  res.status(404).json({
+    ok: false,
+    error: "API-маршрут не найден"
+  });
+});
+
+app.get("*", (req, res) => {
+  res.sendFile(path.join(publicDir, "index.html"));
 });
 
 initDb()

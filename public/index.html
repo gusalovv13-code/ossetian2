@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+  />
+
+  <title>Алания Маркет</title>
+
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+  <link rel="stylesheet" href="style.css?v=136" />
+</head>
+
+<body>
+  <main class="phone">
+    <header class="topbar safe-top">
+      <div class="topbar-spacer"></div>
+
+      <div class="topbar-title">
+        <h3 id="pageTitle">Алания Маркет</h3>
+      </div>
+
+      <div class="topbar-spacer"></div>
+    </header>
+
+    <section id="home" class="page active">
+      <h1>Добро пожаловать!</h1>
+      <p class="muted">Что вы хотите сделать?</p>
+
+      <div class="menu">
+        <button onclick="showPage('catalog')" class="menu-card purple" type="button">
+          <span>🔍</span>
+          <div>
+            <b>Найти товар</b>
+            <small>Поиск по всем объявлениям</small>
+          </div>
+        </button>
+
+        <button onclick="showPage('create1')" class="menu-card blue" type="button">
+          <span>＋</span>
+          <div>
+            <b>Разместить объявление</b>
+            <small>Добавьте свой товар</small>
+          </div>
+        </button>
+
+        <button onclick="showPage('myAds')" class="menu-card cyan" type="button">
+          <span>📦</span>
+          <div>
+            <b>Мои объявления</b>
+            <small>Управление товарами</small>
+          </div>
+        </button>
+
+        <button onclick="showPage('favorites')" class="menu-card red" type="button">
+          <span>♡</span>
+          <div>
+            <b>Избранное</b>
+            <small>Сохранённые товары</small>
+          </div>
+        </button>
+      </div>
+    </section>
+
+   <section id="catalog" class="page">
+  <form id="searchForm" class="search-form" action="javascript:void(0);">
+    <input
+      id="searchInput"
+      class="search"
+      type="search"
+      placeholder="Поиск товаров..."
+      enterkeyhint="done"
+      autocomplete="off"
+    />
+  </form>
+
+  <div class="categories">
+    <button class="active" type="button">Все</button>
+    <button type="button">📱 Электроника</button>
+    <button type="button">🚗 Авто</button>
+    <button type="button">👕 Одежда</button>
+    <button type="button">🏠 Дом</button>
+  </div>
+
+  <div id="productList" class="product-list"></div>
+</section>
+
+    <section id="product" class="page">
+      <img id="productImage" class="hero-img" src="" alt="" />
+
+      <h2 id="productName"></h2>
+      <h2 id="productPrice" class="price"></h2>
+
+      <p class="seller">👤 Владикавказ · 5 мин. назад</p>
+
+      <div class="seller-info">
+        <p id="productSeller">Продавец</p>
+        <p id="productLocation">Город</p>
+        <p id="productPhoneLine">Телефон</p>
+      </div>
+
+      <h4>Описание</h4>
+      <p id="productDesc" class="desc"></p>
+
+      <div class="actions">
+        <button id="messageBtn" class="outline" type="button">💬 Написать</button>
+
+        <a id="callBtn" class="primary call-link" href="#" role="button">
+  📞 Позвонить
+</a>
+      </div>
+    </section>
+
+    <section id="create1" class="page">
+      <div class="steps">
+        <b>1</b>
+        <span></span>
+        <b>2</b>
+        <span></span>
+        <b>3</b>
+      </div>
+
+      <label for="adTitle">Название товара</label>
+      <input id="adTitle" placeholder="Введите название" enterkeyhint="done" />
+
+      <label for="adPrice">Цена</label>
+      <input
+        id="adPrice"
+        type="text"
+        inputmode="numeric"
+        pattern="[0-9]*"
+        maxlength="9"
+        placeholder="Укажите цену"
+        enterkeyhint="done"
+      />
+
+      <label for="adCategory">Категория</label>
+      <select id="adCategory">
+        <option value="">Выберите категорию</option>
+        <option value="Электроника">Электроника</option>
+        <option value="Авто">Авто</option>
+        <option value="Одежда">Одежда</option>
+        <option value="Дом">Дом</option>
+      </select>
+
+      <label for="adDesc">Описание</label>
+      <textarea
+        id="adDesc"
+        placeholder="Подробно опишите товар или услугу"
+        enterkeyhint="done"
+      ></textarea>
+
+      <button
+        id="createStep1Btn"
+        class="primary wide"
+        onclick="goCreateStep2()"
+        type="button"
+        disabled
+      >
+        Вы заполнили не все поля
+      </button>
+    </section>
+
+    <section id="create2" class="page">
+      <div class="steps">
+        <b>✓</b>
+        <span></span>
+        <b>2</b>
+        <span></span>
+        <b>3</b>
+      </div>
+
+      <h3>Фото объявления</h3>
+      <p class="muted">Добавьте до 5 фото товара.</p>
+
+      <input id="photoInput" type="file" accept="image/*" multiple hidden />
+
+      <button id="addPhotoBtn" type="button" class="outline wide">
+        ＋ Добавить фото
+      </button>
+
+      <div id="photoPreview" class="photo-grid"></div>
+
+      <button
+        id="createStep2Btn"
+        class="primary wide"
+        onclick="goCreateStep3()"
+        type="button"
+        disabled
+      >
+        Добавьте хотя бы 1 фото
+      </button>
+    </section>
+
+    <section id="create3" class="page">
+      <div class="steps">
+        <b>✓</b>
+        <span></span>
+        <b>✓</b>
+        <span></span>
+        <b>3</b>
+      </div>
+
+      <h3>Публикация</h3>
+
+      <label for="adLocation">Город</label>
+      <select id="adLocation">
+        <option>Владикавказ</option>
+        <option>Беслан</option>
+        <option>Алагир</option>
+        <option>Ардон</option>
+        <option>Дигора</option>
+        <option>Моздок</option>
+        <option>Чикола</option>
+        <option>Другое</option>
+      </select>
+
+      <label for="adPhone">Телефон</label>
+      <input
+        id="adPhone"
+        placeholder="+7 999 123-45-67"
+        inputmode="tel"
+        enterkeyhint="done"
+      />
+
+      <div class="toggle-row">
+        <span>Разрешить сообщения в Telegram</span>
+        <input id="adAllowMessages" type="checkbox" checked />
+      </div>
+
+      <h4>Предпросмотр</h4>
+      <div id="previewCard" class="product-card"></div>
+
+      <button
+        id="publishBtn"
+        class="primary wide"
+        onclick="publishAd()"
+        type="button"
+      >
+        Опубликовать объявление
+      </button>
+    </section>
+
+    <section id="myAds" class="page">
+      <div class="tabs">
+        <button class="active" type="button">Активные</button>
+        <button type="button">Проданные</button>
+        <button type="button">Черновики</button>
+      </div>
+
+      <div id="myAdsList" class="product-list"></div>
+
+      <button class="primary wide fixed-btn" onclick="showPage('create1')" type="button">
+        ＋ Добавить объявление
+      </button>
+    </section>
+
+    <section id="favorites" class="page">
+      <h2>Избранное</h2>
+      <p class="muted">Пока пусто. Сердечки ждут своего героя.</p>
+    </section>
+
+    <section id="chats" class="page">
+      <h2>Чаты</h2>
+      <p class="muted">Позже подключим Telegram-чаты.</p>
+    </section>
+
+    <section id="profile" class="page">
+      <div class="profile-card">
+        <div class="avatar">?</div>
+        <h3 id="profileName">Пользователь</h3>
+        <p id="profileUsername">Telegram</p>
+      </div>
+
+      <button onclick="showPage('myAds')" class="profile-row" type="button">
+        📦 Мои объявления <b>5</b>
+      </button>
+
+      <button onclick="showPage('favorites')" class="profile-row" type="button">
+        ♡ Избранное <b>12</b>
+      </button>
+
+      <button onclick="showPage('chats')" class="profile-row" type="button">
+        💬 Чаты
+      </button>
+
+      <button class="profile-row" type="button">
+        ⚙️ Настройки
+      </button>
+
+      <button class="profile-row" type="button">
+        🛟 Поддержка
+      </button>
+    </section>
+
+    <nav class="bottom-nav">
+      <button onclick="showPage('home')" type="button">
+        ⌂
+        <small>Главная</small>
+      </button>
+
+      <button onclick="showPage('favorites')" type="button">
+        ♡
+        <small>Избранное</small>
+      </button>
+
+      <button onclick="showPage('create1')" class="add-btn" type="button">
+        ＋
+      </button>
+
+      <button onclick="showPage('chats')" type="button">
+        💬
+        <small>Чаты</small>
+      </button>
+
+      <button onclick="showPage('profile')" type="button">
+        👤
+        <small>Профиль</small>
+      </button>
+    </nav>
+  </main>
+
+  <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">‹</div>
+
+  <script src="script.js?v=136"></script>
+</body>
+</html>
