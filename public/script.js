@@ -1583,6 +1583,17 @@ async function loadTelegramAvatar(firstName, fullName) {
   }
 }
 
+if (window.Telegram?.WebApp) {
+    Telegram.WebApp.ready();
+    Telegram.WebApp.expand();
+}
+
+window.addEventListener("resize", () => {
+    setTimeout(() => {
+        window.scrollTo(0, 0);
+    }, 200);
+});
+
 /* =======================
    INIT
 ======================= */
