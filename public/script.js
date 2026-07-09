@@ -705,7 +705,8 @@ const allowMessages = product.allowMessages !== false;
       ? `👤 ${sellerName} · @${sellerUsername}`
       : `👤 ${sellerName}`;
     productSeller.style.cursor = "pointer";
-    productSeller.onclick = () => openSellerProfile(product.ownerId || product.owner_id);
+    productSeller.classList.add("clickable-seller");
+    productSeller.onclick = () => openSellerProfile(product.ownerId || product.owner_id || product.user_id || product.owner);
   }
 
   if (productLocation) {

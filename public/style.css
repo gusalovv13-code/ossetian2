@@ -1466,3 +1466,7 @@ button:disabled { opacity:.6; pointer-events:none; }
   border-radius:18px;
   border:1px solid #edf0f5;
 }
+
+
+.clickable-seller { cursor:pointer; transition:opacity .2s; }
+.clickable-seller:active { opacity:.7; }
