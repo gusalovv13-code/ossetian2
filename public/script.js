@@ -1620,13 +1620,26 @@ async function openSellerProfile(userId) {
 
         sellerProducts.innerHTML = "Загрузка...";
 
+        if (!userId) {
+            sellerProducts.innerHTML = `
+                <div class="empty-state">
+                    Ошибка: не найден продавец
+                </div>`;
+            return;
+        }
+
 
         // получаем товары продавца
 
         const profileData = await apiRequest(`/api/users/${userId}`);
         const data = await apiRequest(`/api/users/${userId}/products`);
 
-        const products = data.products || [];
+        const products =
+            data.products ||
+            data.items ||
+            (Array.isArray(data) ? data : []);
+
+        console.log("SELLER PRODUCTS:", userId, products);
         const user = profileData.user || {};
 
 
