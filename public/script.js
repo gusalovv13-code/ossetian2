@@ -743,7 +743,7 @@ if (callBtn) {
       event.preventDefault();
       const phone = callBtn.dataset.phone;
       if (phone) {
-        window.location.assign("tel:" + phone);
+        window.location.href = "/call?phone=" + encodeURIComponent(phone);
       }
     };
   } else {

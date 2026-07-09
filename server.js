@@ -559,6 +559,29 @@ app.use("/api", (req, res) => {
   });
 });
 
+
+// iOS Telegram Mini App call bridge
+app.get("/call", (req, res) => {
+  const phone = req.query.phone;
+
+  if (!phone) {
+    return res.status(400).send("Phone missing");
+  }
+
+  res.send(`<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Call</title>
+</head>
+<body>
+<script>
+window.location.href = "tel:${phone}";
+</script>
+</body>
+</html>`);
+});
+
 app.get("*", (req, res) => {
   res.sendFile(path.join(publicDir, "index.html"));
 });
