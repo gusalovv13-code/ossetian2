@@ -1656,7 +1656,13 @@ async function openSellerProfile(userId) {
 
 
         sellerCount.textContent =
-            "📦 Объявлений: " + products.length;
+            "📦 " + products.length + " объявлений";
+
+        const sellerAvatar = document.getElementById("sellerAvatar");
+
+        if (seller.ownerAvatar) {
+            sellerAvatar.innerHTML = `<img src="${seller.ownerAvatar}">`;
+        }
 
 
 
