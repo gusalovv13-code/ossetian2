@@ -1,3 +1,14 @@
+
+function escapeHTML(value = "") {
+  return String(value).replace(/[&<>"']/g, char => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;"
+  }[char]));
+}
+
 const DEFAULT_IMAGE =
   "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=500";
 
@@ -14,6 +25,8 @@ function getTelegramAuthHeaders() {
     ? { Authorization: `tma ${initData}` }
     : {};
 }
+
+const favoritesSet = new Set();
 
 const state = {
   page: "home",
@@ -100,6 +113,8 @@ async function loadFavorites() {
   try {
     const data = await apiRequest("/api/favorites");
     state.favorites = data.favorites || [];
+    favoritesSet.clear();
+    state.favorites.forEach(id => favoritesSet.add(id));
     render();
   } catch (error) {
     console.error("Не удалось загрузить избранное:", error);
@@ -689,6 +704,9 @@ const allowMessages = product.allowMessages !== false;
     productSeller.innerText = sellerUsername
       ? `👤 ${sellerName} · @${sellerUsername}`
       : `👤 ${sellerName}`;
+    productSeller.style.cursor = "pointer";
+    productSeller.classList.add("clickable-seller");
+    productSeller.onclick = () => openSellerProfile(product.ownerId || product.owner_id || product.user_id || product.owner);
   }
 
   if (productLocation) {
@@ -738,12 +756,19 @@ if (callBtn) {
     callBtn.removeAttribute("disabled");
     callBtn.removeAttribute("aria-disabled");
 
-    callBtn.href = `tel:${cleanPhone}`;
-callBtn.removeAttribute("target");
-
-
-    // Важно: не перехватываем клик через JS
-    callBtn.onclick = null;
+    callBtn.dataset.phone = cleanPhone;
+    callBtn.onclick = function(event) {
+      event.preventDefault();
+      const phone = callBtn.dataset.phone;
+      if (phone) {
+        const url = "/call?phone=" + encodeURIComponent(phone);
+        if (tg && typeof tg.openLink === "function") {
+          tg.openLink(window.location.origin + url);
+        } else {
+          window.open(url, "_blank");
+        }
+      }
+    };
   } else {
     callBtn.innerText = "📞 Нет номера";
 
@@ -1571,3 +1596,113 @@ async function initApp() {
 }
 
 initApp();
+
+
+
+async function openSellerProfile(userId) {
+    try {
+        showPage("sellerProfile");
+
+        const sellerProducts = document.getElementById("sellerProducts");
+        const sellerName = document.getElementById("sellerName");
+        const sellerUsername = document.getElementById("sellerUsername");
+        const sellerAvatar = document.getElementById("sellerAvatar");
+
+        sellerProducts.innerHTML = "Загрузка товаров...";
+
+        const response = await fetch(`/api/users/${userId}/products`);
+        const data = await response.json();
+
+        const products = data.products || data || [];
+
+        if (products.length > 0) {
+            const seller = products[0];
+
+            sellerName.textContent =
+                seller.owner_name ||
+                seller.ownerName ||
+                "Продавец";
+
+            sellerUsername.textContent =
+                seller.owner_username
+                    ? "@" + seller.owner_username
+                    : "";
+
+            if (seller.owner_avatar) {
+                sellerAvatar.innerHTML = `
+                    <img src="${seller.owner_avatar}" class="seller-avatar-img">
+                `;
+            }
+
+        } else {
+            sellerName.textContent = "Продавец";
+            sellerUsername.textContent = "";
+        }
+
+
+        if (!products.length) {
+            sellerProducts.innerHTML = `
+                <div class="empty-state">
+                    У продавца пока нет объявлений
+                </div>
+            `;
+            return;
+        }
+
+
+        sellerProducts.innerHTML = products.map(product => {
+
+            let image = "";
+
+            if (product.images) {
+                try {
+                    const imgs = typeof product.images === "string"
+                        ? JSON.parse(product.images)
+                        : product.images;
+
+                    image = imgs[0] || "";
+                } catch(e){}
+            }
+
+            return `
+            <div class="seller-product-card"
+                 onclick="openProduct('${product.id}')">
+
+                ${
+                    image
+                    ? `<img src="${image}" class="seller-product-image">`
+                    : `<div class="seller-no-image">Нет фото</div>`
+                }
+
+                <div class="seller-product-info">
+
+                    <div class="seller-product-name">
+                        ${product.name}
+                    </div>
+
+                    <div class="seller-product-price">
+                        ${product.price || 0} ₽
+                    </div>
+
+                    <div class="seller-product-city">
+                        📍 ${product.location || ""}
+                    </div>
+
+                </div>
+
+            </div>
+            `;
+        }).join("");
+
+    } catch(error) {
+
+        console.error(
+            "Seller profile error:",
+            error
+        );
+
+        alert(
+            "Ошибка загрузки профиля продавца"
+        );
+    }
+}

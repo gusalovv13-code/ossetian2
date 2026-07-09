@@ -3,9 +3,7 @@
 }
 
 html, body {
-  min-height: 100%;
-  width: 100%;
-  overflow-x: hidden;
+  height: 100%;
 }
 
 body {
@@ -338,7 +336,28 @@ textarea {
   justify-content: space-between;
 }
 
+/* ===== BOTTOM NAV (FIXED + SAFE AREA) ===== */
+.bottom-nav {
+  position: fixed;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
 
+  width: min(430px, 100%);
+  height: 72px;
+
+  background: white;
+  border-top: 1px solid #edf0f5;
+
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+
+  z-index: 50;
+
+  /* FIX: Telegram safe area */
+  padding-bottom: env(safe-area-inset-bottom);
+}
 
 .bottom-nav button {
   border: 0;
@@ -1002,21 +1021,32 @@ body {
 
 /* Скролл должен быть внутри приложения, а не у body */
 .phone {
-  min-height: 100dvh;
-  height: auto;
-  max-height: none;
+  height: 100vh;
+  max-height: 100vh;
 
   overflow-y: auto;
   overflow-x: hidden;
 
   overscroll-behavior: contain;
+  overscroll-behavior-y: contain;
 
   -webkit-overflow-scrolling: touch;
 
   background: #f5f6fb;
 }
 
+/* Чтобы верх не показывал черноту при микросвайпе */
+.phone::before {
+  content: "";
+  position: fixed;
+  top: -120px;
+  left: 0;
+  right: 0;
 
+  height: 160px;
+  background: #f5f6fb;
+  z-index: -1;
+}
 
 /* Верхняя панель пусть будет белой/светлой */
 .topbar {
@@ -1316,7 +1346,7 @@ html body .phone .page button#createStep2Btn:not([disabled]) {
 /* Сам текст чуть выше */
 .topbar-title {
   padding-top: 0 !important;
-  transform: translateY(-35px);
+  transform: translateY(-30px);
 }
 
 /* Название */
@@ -1403,30 +1433,143 @@ html body .phone .page button#createStep2Btn:not([disabled]) {
   z-index: 1;
 }
 
-/* ===== TELEGRAM WEBAPP KEYBOARD / VIEWPORT FIX ===== */
-
-/* Do not lock the Telegram viewport with 100vh */
-.phone {
-  min-height: 100dvh !important;
-  height: auto !important;
-  max-height: none !important;
-  overflow-y: visible !important;
-  overflow-x: hidden !important;
-}
-
-/* Let Telegram control page scrolling */
-.page {
-  overflow: visible !important;
-  height: auto !important;
-  min-height: 100% !important;
-}
-
-/* Avoid fixed layers leaving artifacts after keyboard closes */
+/* TEST FIX TELEGRAM KEYBOARD */
 .swipe-back-indicator {
-  display: none !important;
+    display: none !important;
 }
 
-/* Force compositing for fixed navigation */
 .bottom-nav {
-  transform: translateX(-50%) translateZ(0) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+}
+
+.fixed,
+.overlay,
+.modal,
+.backdrop,
+.sheet {
+    display: none !important;
+}
+
+/* Alania Market UX improvements */
+.card, .product-card { border-radius: 18px; box-shadow: 0 4px 14px rgba(0,0,0,.08); }
+button:disabled { opacity:.6; pointer-events:none; }
+
+.seller-page-card{margin-bottom:16px;text-align:center;}
+#sellerProducts{margin-top:12px;}
+
+
+.seller-profile-card {
+  background:#fff;
+  padding:18px;
+  margin:15px;
+  border-radius:18px;
+  border:1px solid #edf0f5;
+}
+
+
+.clickable-seller { cursor:pointer; transition:opacity .2s; }
+.clickable-seller:active { opacity:.7; }
+
+
+/* Seller profile upgrade */
+
+.seller-avatar-img {
+    width:80px;
+    height:80px;
+    border-radius:50%;
+    object-fit:cover;
+}
+
+
+.seller-product-card {
+
+    display:flex;
+    gap:12px;
+
+    background:var(--card-bg, #fff);
+
+    border-radius:16px;
+
+    padding:12px;
+
+    margin-bottom:12px;
+
+    cursor:pointer;
+
+    box-shadow:
+    0 2px 8px rgba(0,0,0,0.08);
+
+}
+
+
+.seller-product-image {
+
+    width:90px;
+    height:90px;
+
+    border-radius:12px;
+
+    object-fit:cover;
+
+}
+
+
+.seller-no-image {
+
+    width:90px;
+    height:90px;
+
+    background:#eee;
+
+    border-radius:12px;
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:center;
+
+    font-size:12px;
+
+}
+
+
+.seller-product-info {
+
+    flex:1;
+
+}
+
+
+.seller-product-name {
+
+    font-size:16px;
+
+    font-weight:600;
+
+    margin-bottom:8px;
+
+}
+
+
+.seller-product-price {
+
+    font-size:18px;
+
+    font-weight:700;
+
+    color:#2563eb;
+
+}
+
+
+.seller-product-city {
+
+    margin-top:8px;
+
+    color:#666;
+
+    font-size:14px;
+
 }
