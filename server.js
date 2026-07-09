@@ -562,7 +562,7 @@ app.use("/api", (req, res) => {
 
 // iOS Telegram Mini App call bridge
 app.get("/call", (req, res) => {
-  const phone = req.query.phone;
+  const phone = String(req.query.phone || "").replace(/[^0-9+]/g, "");
 
   if (!phone) {
     return res.status(400).send("Phone missing");
@@ -572,12 +572,28 @@ app.get("/call", (req, res) => {
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Call</title>
+<title>Позвонить</title>
+<style>
+body {
+  font-family: Arial, sans-serif;
+  text-align:center;
+  padding-top:80px;
+}
+a {
+ display:inline-block;
+ padding:18px 35px;
+ background:#635bff;
+ color:white;
+ border-radius:14px;
+ text-decoration:none;
+ font-size:20px;
+}
+</style>
 </head>
 <body>
-<script>
-window.location.href = "tel:${phone}";
-</script>
+<h2>Позвонить продавцу</h2>
+<p>${phone}</p>
+<a href="tel:${phone}">📞 Позвонить</a>
 </body>
 </html>`);
 });

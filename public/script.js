@@ -743,7 +743,12 @@ if (callBtn) {
       event.preventDefault();
       const phone = callBtn.dataset.phone;
       if (phone) {
-        window.location.href = "/call?phone=" + encodeURIComponent(phone);
+        const url = "/call?phone=" + encodeURIComponent(phone);
+        if (tg && typeof tg.openLink === "function") {
+          tg.openLink(window.location.origin + url);
+        } else {
+          window.open(url, "_blank");
+        }
       }
     };
   } else {
