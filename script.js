@@ -237,36 +237,7 @@ function normalizePhoneForTel(phone) {
   return "+" + digits;
 }
 
-function openTelLink(phone) {
-  const cleanPhone = normalizePhoneForTel(phone);
 
-  if (!cleanPhone) {
-    alert("Телефон продавца не указан");
-    return;
-  }
-
-  const telLink = `tel:${cleanPhone}`;
-  const telPromptLink = `telprompt:${cleanPhone}`;
-  const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
-
-  try {
-    window.location.href = isIOS ? telPromptLink : telLink;
-  } catch (error) {
-    try {
-      window.location.href = telLink;
-    } catch (secondError) {
-      alert(`Позвоните по номеру: ${cleanPhone}`);
-    }
-  }
-
-  setTimeout(() => {
-    try {
-      window.location.href = telLink;
-    } catch (error) {
-      console.warn("Не удалось открыть звонок:", error);
-    }
-  }, 200);
-}
 
 function getPriceNumber(value) {
   const onlyNums = String(value || "").replace(/[^\d]/g, "");
@@ -769,7 +740,7 @@ if (callBtn) {
 
     callBtn.href = `tel:${cleanPhone}`;
 callBtn.removeAttribute("target");
-callBtn.onclick = null;
+
 
     // Важно: не перехватываем клик через JS
     callBtn.onclick = null;
