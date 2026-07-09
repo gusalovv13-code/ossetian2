@@ -355,33 +355,6 @@ app.get("/api/my-products", requireTelegramAuth, async (req, res) => {
   }
 });
 
-
-app.get("/api/users/:id/products", async (req, res) => {
-  try {
-    const result = await pool.query(
-      `
-        SELECT *
-        FROM products
-        WHERE owner_id = $1 AND status = 'active'
-        ORDER BY created_at DESC
-        LIMIT 50;
-      `,
-      [req.params.id]
-    );
-
-    res.json({
-      ok: true,
-      products: result.rows.map(mapProduct)
-    });
-  } catch (error) {
-    console.error("Get seller products error:", error);
-    res.status(500).json({
-      ok: false,
-      error: "Не удалось получить товары продавца"
-    });
-  }
-});
-
 app.post("/api/products", requireTelegramAuth, async (req, res) => {
   try {
     const {

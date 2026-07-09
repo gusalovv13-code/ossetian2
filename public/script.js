@@ -1593,3 +1593,13 @@ async function initApp() {
 }
 
 initApp();
+
+
+async function openSellerProfile(userId){
+  try {
+    const data = await apiRequest(`/api/users/${userId}/products`);
+    const list = document.getElementById("sellerProducts");
+    if(list) list.innerHTML = (data.products || []).map(p => getProductCard(p)).join("") || "Нет объявлений";
+    showPage("sellerProfile");
+  } catch(e){ console.error(e); }
+}

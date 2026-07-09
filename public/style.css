@@ -1454,3 +1454,6 @@ html body .phone .page button#createStep2Btn:not([disabled]) {
 /* Alania Market UX improvements */
 .card, .product-card { border-radius: 18px; box-shadow: 0 4px 14px rgba(0,0,0,.08); }
 button:disabled { opacity:.6; pointer-events:none; }
+
+.seller-page-card{margin-bottom:16px;text-align:center;}
+#sellerProducts{margin-top:12px;}
