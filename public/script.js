@@ -1623,9 +1623,11 @@ async function openSellerProfile(userId) {
 
         // получаем товары продавца
 
+        const profileData = await apiRequest(`/api/users/${userId}`);
         const data = await apiRequest(`/api/users/${userId}/products`);
 
         const products = data.products || [];
+        const user = profileData.user || {};
 
 
         if(products.length === 0){
@@ -1646,13 +1648,24 @@ async function openSellerProfile(userId) {
 
 
         sellerName.textContent =
-            seller.ownerName || "Продавец";
+            user.first_name ||
+            seller.ownerName ||
+            "Продавец";
 
 
         sellerUsername.textContent =
-            seller.ownerUsername
-            ? "@" + seller.ownerUsername
+            user.username
+            ? "@" + user.username
             : "Telegram";
+
+
+        const sellerAvatar = document.getElementById("sellerAvatar");
+
+        if (user.avatar) {
+            sellerAvatar.innerHTML = `
+                <img src="${user.avatar}" alt="avatar">
+            `;
+        }
 
 
         sellerCount.textContent =
