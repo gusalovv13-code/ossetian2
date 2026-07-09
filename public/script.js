@@ -706,7 +706,13 @@ const allowMessages = product.allowMessages !== false;
       : `👤 ${sellerName}`;
     productSeller.style.cursor = "pointer";
     productSeller.classList.add("clickable-seller");
-    productSeller.onclick = () => openSellerProfile(product.ownerId || product.owner_id || product.user_id || product.owner);
+    productSeller.onclick = () => {
+
+    console.log("OPEN SELLER:", product);
+
+    openSellerProfile(product.ownerId);
+
+};
   }
 
   if (productLocation) {
