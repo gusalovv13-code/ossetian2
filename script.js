@@ -1,7 +1,3 @@
-function generateId() {
-  return "_" + Math.random().toString(36).substr(2, 9);
-}
-
 const DEFAULT_IMAGE =
   "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=500";
 
@@ -9,6 +5,15 @@ const MAX_PHOTOS = 5;
 const MAX_PRICE = 100000000;
 
 const tg = window.Telegram?.WebApp || null;
+let telegramAvatarObjectUrl = null;
+
+function getTelegramAuthHeaders() {
+  const initData = tg?.initData?.trim();
+
+  return initData
+    ? { Authorization: `tma ${initData}` }
+    : {};
+}
 
 const state = {
   page: "home",
@@ -33,12 +38,15 @@ let isPublishingAd = false;
 ======================= */
 
 async function apiRequest(url, options = {}) {
+  const { headers = {}, ...fetchOptions } = options;
+
   const response = await fetch(url, {
+    ...fetchOptions,
     headers: {
       "Content-Type": "application/json",
-      ...(options.headers || {})
-    },
-    ...options
+      ...getTelegramAuthHeaders(),
+      ...headers
+    }
   });
 
   let data;
@@ -74,7 +82,7 @@ async function loadMyProducts() {
   }
 
   try {
-    const data = await apiRequest(`/api/my-products/${state.telegramUser.id}`);
+    const data = await apiRequest("/api/my-products");
     state.myProducts = data.products || [];
     render();
   } catch (error) {
@@ -90,7 +98,7 @@ async function loadFavorites() {
   }
 
   try {
-    const data = await apiRequest(`/api/favorites/${state.telegramUser.id}`);
+    const data = await apiRequest("/api/favorites");
     state.favorites = data.favorites || [];
     render();
   } catch (error) {
@@ -222,52 +230,6 @@ function normalizePhoneForTel(phone) {
   }
 
   // 9187077474 -> +79187077474
-  if (digits.length === 10) {
-    return "+7" + digits;
-  }
-
-  return "+" + digits;
-}
-
-function openDialerWithNumber(phone) {
-  const cleanPhone = normalizePhoneForTel(phone);
-
-  if (!cleanPhone) {
-    alert("Телефон продавца не указан");
-    return;
-  }
-
-  const telUrl = `tel:${cleanPhone}`;
-
-  const link = document.createElement("a");
-  link.href = telUrl;
-  link.style.position = "fixed";
-  link.style.left = "-9999px";
-  link.style.top = "-9999px";
-  link.setAttribute("target", "_self");
-
-  document.body.appendChild(link);
-
-  link.click();
-
-  setTimeout(() => {
-    link.remove();
-  }, 1000);
-}
-
-function normalizePhoneForTel(phone) {
-  const digits = String(phone || "").replace(/\D/g, "");
-
-  if (!digits) return "";
-
-  if (digits.length === 11 && digits.startsWith("8")) {
-    return "+7" + digits.slice(1);
-  }
-
-  if (digits.length === 11 && digits.startsWith("7")) {
-    return "+" + digits;
-  }
-
   if (digits.length === 10) {
     return "+7" + digits;
   }
@@ -640,7 +602,6 @@ async function toggleFav(id) {
     const data = await apiRequest("/api/favorites", {
       method: "POST",
       body: JSON.stringify({
-        userId: state.telegramUser.id,
         productId: id
       })
     });
@@ -1030,16 +991,12 @@ async function publishAd() {
       return;
     }
 
-    const ownerName = `${state.telegramUser.firstName || ""} ${state.telegramUser.lastName || ""}`.trim();
     const images = draftAd.images.slice(0, MAX_PHOTOS);
     const mainImage = images[0] || DEFAULT_IMAGE;
 
     const data = await apiRequest("/api/products", {
       method: "POST",
       body: JSON.stringify({
-        ownerId: state.telegramUser.id,
-        ownerName,
-        ownerUsername: state.telegramUser.username || "",
         name: ad.title,
         price: formatPrice(priceNumber),
         category: ad.category,
@@ -1113,7 +1070,7 @@ async function deleteAd(id) {
   if (!ok) return;
 
   try {
-    await apiRequest(`/api/products/${id}?ownerId=${state.telegramUser.id}`, {
+    await apiRequest(`/api/products/${id}`, {
       method: "DELETE"
     });
 
@@ -1532,7 +1489,7 @@ function initSwipeBack() {
    TELEGRAM USER + AVATAR
 ======================= */
 
-function initTelegramUser() {
+async function initTelegramUser() {
   const webApp = tg;
 
   const avatar = document.querySelector(".profile-card .avatar");
@@ -1543,70 +1500,85 @@ function initTelegramUser() {
     document.getElementById("profileUsername") ||
     document.querySelector(".profile-card p");
 
-  if (!webApp) {
+  const showUnavailableProfile = message => {
+    state.telegramUser = null;
     if (avatar) avatar.innerText = "?";
     if (name) name.innerText = "Пользователь";
-    if (nick) nick.innerText = "Откройте через Telegram";
-    return;
+    if (nick) nick.innerText = message;
+  };
+
+  if (!webApp?.initData) {
+    showUnavailableProfile("Откройте через Telegram");
+    return false;
   }
 
   webApp.ready();
   webApp.expand();
 
-  const user = webApp.initDataUnsafe?.user;
+  try {
+    const data = await apiRequest("/api/me");
+    const user = data.user;
+    const firstName = user.firstName || "Пользователь";
+    const lastName = user.lastName || "";
+    const username = user.username || "";
+    const fullName = `${firstName} ${lastName}`.trim();
 
-  if (!user) {
-    if (avatar) avatar.innerText = "?";
-    if (name) name.innerText = "Пользователь";
-    if (nick) nick.innerText = "Telegram не передал профиль";
-    return;
+    state.telegramUser = {
+      id: user.id,
+      firstName,
+      lastName,
+      username,
+      photoUrl: user.photoUrl || ""
+    };
+
+    if (avatar) avatar.innerText = firstName[0]?.toUpperCase() || "?";
+    if (name) name.innerText = fullName;
+    if (nick) nick.innerText = username ? `@${username}` : "без username";
+
+    loadTelegramAvatar(firstName, fullName);
+    return true;
+  } catch (error) {
+    console.error("Telegram-авторизация не прошла:", error);
+    showUnavailableProfile("Ошибка Telegram-авторизации");
+    return false;
   }
-
-  const firstName = user.first_name || "Пользователь";
-  const lastName = user.last_name || "";
-  const username = user.username || "";
-  const fullName = `${firstName} ${lastName}`.trim();
-
-  state.telegramUser = {
-    id: user.id,
-    firstName,
-    lastName,
-    username,
-    photoUrl: user.photo_url || ""
-  };
-
-  if (avatar) avatar.innerText = firstName[0]?.toUpperCase() || "?";
-  if (name) name.innerText = fullName;
-  if (nick) nick.innerText = username ? `@${username}` : "без username";
-
-  loadTelegramAvatar(user.id, firstName, fullName);
 }
 
-async function loadTelegramAvatar(userId, firstName, fullName) {
+async function loadTelegramAvatar(firstName, fullName) {
   const avatar = document.querySelector(".profile-card .avatar");
 
-  if (!avatar || !userId) return;
+  if (!avatar || !state.telegramUser?.id) return;
 
   try {
-    const response = await fetch(`/api/avatar/${userId}`);
-    const data = await response.json();
+    const response = await fetch("/api/avatar", {
+      headers: getTelegramAuthHeaders()
+    });
 
-    if (!data.ok || !data.avatarUrl) {
-      avatar.innerHTML = "";
-      avatar.innerText = firstName[0]?.toUpperCase() || "?";
-      return;
+    if (!response.ok) {
+      throw new Error(`Статус загрузки аватара: ${response.status}`);
     }
 
-    avatar.innerHTML = `
-      <img
-        src="${data.avatarUrl}"
-        alt="${fullName || "Фото профиля"}"
-        class="telegram-avatar-img"
-      >
-    `;
+    const avatarBlob = await response.blob();
+
+    if (!avatarBlob.type.startsWith("image/")) {
+      throw new Error("Сервер вернул не изображение");
+    }
+
+    if (telegramAvatarObjectUrl) {
+      URL.revokeObjectURL(telegramAvatarObjectUrl);
+    }
+
+    telegramAvatarObjectUrl = URL.createObjectURL(avatarBlob);
+
+    const image = document.createElement("img");
+    image.src = telegramAvatarObjectUrl;
+    image.alt = fullName || "Фото профиля";
+    image.className = "telegram-avatar-img";
+
+    avatar.replaceChildren(image);
   } catch (error) {
     console.error("Не удалось загрузить аватар:", error);
-    avatar.innerHTML = "";
+    avatar.replaceChildren();
     avatar.innerText = firstName[0]?.toUpperCase() || "?";
   }
 }
@@ -1621,7 +1593,7 @@ async function initApp() {
   initSwipeBack();
   initKeyboardAutoHide();
   initEvents();
-  initTelegramUser();
+  await initTelegramUser();
 
   await Promise.all([
     loadProducts(),
@@ -1634,3 +1606,18 @@ async function initApp() {
 }
 
 initApp();
+
+// Telegram keyboard close viewport refresh
+(function () {
+  function refreshTelegramViewport() {
+    setTimeout(() => {
+      if (window.Telegram?.WebApp) {
+        Telegram.WebApp.expand();
+      }
+      window.scrollTo(0, 0);
+    }, 250);
+  }
+
+  document.addEventListener("focusout", refreshTelegramViewport);
+  window.addEventListener("resize", refreshTelegramViewport);
+})();

@@ -1316,7 +1316,7 @@ html body .phone .page button#createStep2Btn:not([disabled]) {
 /* Сам текст чуть выше */
 .topbar-title {
   padding-top: 0 !important;
-  transform: translateY(-40px);
+  transform: translateY(-35px);
 }
 
 /* Название */
@@ -1403,13 +1403,30 @@ html body .phone .page button#createStep2Btn:not([disabled]) {
   z-index: 1;
 }
 
-/* TEST FIX TELEGRAM KEYBOARD */
+/* ===== TELEGRAM WEBAPP KEYBOARD / VIEWPORT FIX ===== */
+
+/* Do not lock the Telegram viewport with 100vh */
+.phone {
+  min-height: 100dvh !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow-y: visible !important;
+  overflow-x: hidden !important;
+}
+
+/* Let Telegram control page scrolling */
+.page {
+  overflow: visible !important;
+  height: auto !important;
+  min-height: 100% !important;
+}
+
+/* Avoid fixed layers leaving artifacts after keyboard closes */
 .swipe-back-indicator {
-    display: none !important;
+  display: none !important;
 }
 
+/* Force compositing for fixed navigation */
 .bottom-nav {
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
+  transform: translateX(-50%) translateZ(0) !important;
 }
-
