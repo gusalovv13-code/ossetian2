@@ -1021,18 +1021,16 @@ body {
 
 /* Скролл должен быть внутри приложения, а не у body */
 .phone {
-  height: 100vh;
-  max-height: 100vh;
+    min-height: 100dvh;
+    max-height: none;
 
-  overflow-y: auto;
-  overflow-x: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
 
-  overscroll-behavior: contain;
-  overscroll-behavior-y: contain;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
 
-  -webkit-overflow-scrolling: touch;
-
-  background: #f5f6fb;
+    background: #f5f6fb;
 }
 
 /* Чтобы верх не показывал черноту при микросвайпе */
@@ -1346,7 +1344,7 @@ html body .phone .page button#createStep2Btn:not([disabled]) {
 /* Сам текст чуть выше */
 .topbar-title {
   padding-top: 0 !important;
-  transform: translateY(-35px);
+  transform: translateY(-45px);
 }
 
 /* Название */
