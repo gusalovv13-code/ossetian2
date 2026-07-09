@@ -68,6 +68,7 @@ function mapProduct(row) {
 
   return {
     id: row.id,
+    ownerId: row.owner_id,
     ownerName: row.owner_name,
     ownerUsername: row.owner_username,
     name: row.name,
@@ -302,6 +303,32 @@ app.get("/api/avatar", requireTelegramAuth, async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: "Не удалось получить фото Telegram"
+    });
+  }
+});
+
+
+app.get("/api/users/:id/products", async (req, res) => {
+  try {
+    const result = await pool.query(
+      `
+      SELECT *
+      FROM products
+      WHERE owner_id = $1 AND status != 'deleted'
+      ORDER BY created_at DESC;
+      `,
+      [req.params.id]
+    );
+
+    res.json({
+      ok: true,
+      products: result.rows.map(mapProduct)
+    });
+  } catch (error) {
+    console.error("Get seller products error:", error);
+    res.status(500).json({
+      ok: false,
+      error: "Не удалось получить товары продавца"
     });
   }
 });
