@@ -1598,7 +1598,8 @@ async function initApp() {
 initApp();
 
 
-async async function openSellerProfile(userId) {
+
+async function openSellerProfile(userId) {
   if (!userId) return;
   const page = document.getElementById("sellerProfile");
   if (!page) return;
