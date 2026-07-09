@@ -1403,15 +1403,3 @@ html body .phone .page button#createStep2Btn:not([disabled]) {
   z-index: 1;
 }
 
-* {
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-}
-
-.modal,
-.overlay,
-.popup,
-.sheet,
-.drawer {
-    display: none !important;
-}
