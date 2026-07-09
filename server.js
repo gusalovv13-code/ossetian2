@@ -237,41 +237,58 @@ app.get("/api/health", async (req, res) => {
   }
 });
 
-app.use(async (req, res, next) => {
+app.use("/api", requireTelegramAuth);
+
+
+
+
+
+app.use("/api", async (req, res, next) => {
+
   try {
 
     if (req.telegramUser) {
 
       await pool.query(`
         INSERT INTO users
-        (
-          telegram_id,
-          first_name,
-          avatar,
-          last_seen
-        )
-
-        VALUES ($1,$2,$3,NOW())
+(
+ telegram_id,
+ first_name,
+ last_name,
+ username,
+ avatar,
+ last_seen
+)
+VALUES ($1,$2,$3,$4,$5,NOW())
 
         ON CONFLICT (telegram_id)
 
         DO UPDATE SET
 
         first_name = EXCLUDED.first_name,
-        avatar = EXCLUDED.avatar,
-        last_seen = NOW()
+last_name = EXCLUDED.last_name,
+username = EXCLUDED.username,
+avatar = EXCLUDED.avatar,
+last_seen = NOW()
       `,
       [
-        String(req.telegramUser.id),
-        req.telegramUser.firstName || '',
-        req.telegramUser.photo_url || ''
+        
+ String(req.telegramUser.id),
+ req.telegramUser.firstName || "",
+ req.telegramUser.lastName || "",
+ req.telegramUser.username || "",
+ req.telegramUser.photoUrl || ""
+
       ]);
 
     }
 
-  } catch(e) {
+  } catch(error) {
 
-    console.log("USER SAVE ERROR:", e.message);
+    console.error(
+      "USER SAVE ERROR:",
+      error.message
+    );
 
   }
 
