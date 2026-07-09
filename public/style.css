@@ -1756,3 +1756,272 @@ button:disabled { opacity:.6; pointer-events:none; }
 .seller-stats small {
   color:#8b93a3;
 }
+
+
+/* ===== DARK MODE ===== */
+
+body.dark-mode {
+  background: #000;
+  color: #f5f5f5;
+}
+
+body.dark-mode .phone {
+  background: #111827;
+}
+
+body.dark-mode .topbar {
+  background: #111827;
+  border-color: #273244;
+}
+
+body.dark-mode .topbar h3,
+body.dark-mode h1,
+body.dark-mode h2,
+body.dark-mode h3,
+body.dark-mode b {
+  color: #f5f5f5;
+}
+
+body.dark-mode .profile-row,
+body.dark-mode .seller-profile-card,
+body.dark-mode .product-card,
+body.dark-mode .seller-product-card,
+body.dark-mode .settings-card {
+  background: #1f2937;
+  color: #f5f5f5;
+}
+
+body.dark-mode .muted,
+body.dark-mode small {
+  color: #9ca3af;
+}
+
+.settings-card {
+  background: white;
+  border-radius: 18px;
+  padding: 16px;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-row small {
+  display: block;
+  margin-top: 5px;
+  color: #888;
+}
+
+.switch input {
+  display:none;
+}
+
+.switch span {
+  display:block;
+  width:52px;
+  height:30px;
+  background:#ccc;
+  border-radius:30px;
+  position:relative;
+}
+
+.switch span:after {
+  content:"";
+  width:24px;
+  height:24px;
+  background:white;
+  border-radius:50%;
+  position:absolute;
+  top:3px;
+  left:3px;
+  transition:.2s;
+}
+
+.switch input:checked + span {
+  background:#635bff;
+}
+
+.switch input:checked + span:after {
+  transform:translateX(22px);
+}
+
+
+/* ===== iOS STYLE DARK MODE v2 ===== */
+
+body.dark-mode {
+  background: #000000;
+  color: #f2f2f7;
+}
+
+body.dark-mode .phone {
+  background: #000000;
+}
+
+body.dark-mode .topbar {
+  background: rgba(28,28,30,0.96);
+  border-color: #38383a;
+}
+
+body.dark-mode .topbar h3,
+body.dark-mode h1,
+body.dark-mode h2,
+body.dark-mode h3,
+body.dark-mode h4,
+body.dark-mode b {
+  color: #f2f2f7;
+}
+
+body.dark-mode p,
+body.dark-mode .muted,
+body.dark-mode small {
+  color: #98989d;
+}
+
+/* Cards */
+body.dark-mode .menu-card,
+body.dark-mode .product-card,
+body.dark-mode .seller-profile-card,
+body.dark-mode .seller-product-card,
+body.dark-mode .profile-card,
+body.dark-mode .profile-row,
+body.dark-mode .settings-card {
+  background: #1c1c1e;
+  border-color: #38383a;
+  color: #f2f2f7;
+  box-shadow: 0 8px 25px rgba(0,0,0,.35);
+}
+
+body.dark-mode input,
+body.dark-mode textarea,
+body.dark-mode select {
+  background: #1c1c1e;
+  color: #f2f2f7;
+  border-color: #38383a;
+}
+
+body.dark-mode .bottom-nav {
+  background: rgba(28,28,30,.95);
+  border-color: #38383a;
+}
+
+body.dark-mode .bottom-nav small {
+  color: #8e8e93;
+}
+
+body.dark-mode .bottom-nav button {
+  color: #f2f2f7;
+}
+
+body.dark-mode .seller-stats,
+body.dark-mode .seller-info {
+  background: #2c2c2e;
+}
+
+body.dark-mode .price,
+body.dark-mode .seller-product-price {
+  color: #0a84ff;
+}
+
+body.dark-mode .primary {
+  background: #0a84ff;
+}
+
+body.dark-mode .outline {
+  background: transparent;
+  color: #0a84ff;
+  border-color: #0a84ff;
+}
+
+/* iOS style switch */
+body.dark-mode .switch {
+  background:#0a84ff;
+}
+
+
+
+/* ===== FINAL iOS DARK MODE OVERRIDES ===== */
+
+body.dark-mode {
+  background:#000 !important;
+  color:#f2f2f7 !important;
+}
+
+body.dark-mode .phone,
+body.dark-mode .page {
+  background:#000 !important;
+}
+
+body.dark-mode .bottom-nav {
+  background:rgba(28,28,30,.96) !important;
+  border-top:1px solid #38383a !important;
+}
+
+body.dark-mode .bottom-nav button,
+body.dark-mode .bottom-nav small {
+  color:#f2f2f7 !important;
+}
+
+body.dark-mode .menu-card,
+body.dark-mode .product-card,
+body.dark-mode .profile-card,
+body.dark-mode .profile-row,
+body.dark-mode .seller-profile-card,
+body.dark-mode .seller-product-card,
+body.dark-mode .empty-state,
+body.dark-mode .settings-card,
+body.dark-mode .tabs,
+body.dark-mode .categories button:not(.active) {
+  background:#1c1c1e !important;
+  color:#f2f2f7 !important;
+  border-color:#38383a !important;
+}
+
+body.dark-mode .categories button {
+  color:#f2f2f7 !important;
+}
+
+body.dark-mode .categories button.active,
+body.dark-mode .tabs button.active {
+  background:#635bff !important;
+  color:white !important;
+}
+
+body.dark-mode .search,
+body.dark-mode input,
+body.dark-mode textarea,
+body.dark-mode select {
+  background:#1c1c1e !important;
+  color:#f2f2f7 !important;
+  border-color:#38383a !important;
+}
+
+body.dark-mode .desc,
+body.dark-mode .muted,
+body.dark-mode small {
+  color:#98989d !important;
+}
+
+body.dark-mode .empty-state {
+  color:#98989d !important;
+}
+
+body.dark-mode .fixed-btn {
+  background:#0a84ff !important;
+  color:white !important;
+}
+
+body.dark-mode .product-name,
+body.dark-mode .seller-product-name {
+  color:#f2f2f7 !important;
+}
+
+/* remove remaining white blocks */
+body.dark-mode .white,
+body.dark-mode .card,
+body.dark-mode .modal,
+body.dark-mode .sheet {
+  background:#1c1c1e !important;
+  color:#f2f2f7 !important;
+}

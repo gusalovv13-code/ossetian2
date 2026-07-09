@@ -1671,13 +1671,6 @@ async function openSellerProfile(userId) {
         sellerCount.textContent =
             "📦 " + products.length + " объявлений";
 
-        const sellerAvatar = document.getElementById("sellerAvatar");
-
-        if (seller.ownerAvatar) {
-            sellerAvatar.innerHTML = `<img src="${seller.ownerAvatar}">`;
-        }
-
-
 
         sellerProducts.innerHTML =
         products.map(product => {
@@ -1756,3 +1749,18 @@ async function openSellerProfile(userId) {
     }
 
 }
+
+// ===== THEME =====
+
+function toggleDarkMode(enabled) {
+  document.body.classList.toggle("dark-mode", enabled);
+  localStorage.setItem("darkMode", enabled ? "1" : "0");
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  const enabled = localStorage.getItem("darkMode") === "1";
+  document.body.classList.toggle("dark-mode", enabled);
+
+  const toggle = document.getElementById("darkModeToggle");
+  if (toggle) toggle.checked = enabled;
+});

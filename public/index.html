@@ -262,6 +262,26 @@
       <p class="muted">Пока пусто. Сердечки ждут своего героя.</p>
     </section>
 
+
+
+    <section id="settings" class="page">
+      <h2>Настройки</h2>
+
+      <div class="settings-card">
+        <div class="settings-row">
+          <div>
+            <b>🌙 Темная тема</b>
+            <small>Переключение оформления приложения</small>
+          </div>
+
+          <label class="switch">
+            <input id="darkModeToggle" type="checkbox" onchange="toggleDarkMode(this.checked)">
+            <span></span>
+          </label>
+        </div>
+      </div>
+    </section>
+
     <section id="chats" class="page">
       <h2>Чаты</h2>
       <p class="muted">Позже подключим Telegram-чаты.</p>
@@ -286,7 +306,7 @@
         💬 Чаты
       </button>
 
-      <button class="profile-row" type="button">
+      <button onclick="showPage('settings')" class="profile-row" type="button">
         ⚙️ Настройки
       </button>
 
