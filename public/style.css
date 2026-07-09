@@ -1470,3 +1470,106 @@ button:disabled { opacity:.6; pointer-events:none; }
 
 .clickable-seller { cursor:pointer; transition:opacity .2s; }
 .clickable-seller:active { opacity:.7; }
+
+
+/* Seller profile upgrade */
+
+.seller-avatar-img {
+    width:80px;
+    height:80px;
+    border-radius:50%;
+    object-fit:cover;
+}
+
+
+.seller-product-card {
+
+    display:flex;
+    gap:12px;
+
+    background:var(--card-bg, #fff);
+
+    border-radius:16px;
+
+    padding:12px;
+
+    margin-bottom:12px;
+
+    cursor:pointer;
+
+    box-shadow:
+    0 2px 8px rgba(0,0,0,0.08);
+
+}
+
+
+.seller-product-image {
+
+    width:90px;
+    height:90px;
+
+    border-radius:12px;
+
+    object-fit:cover;
+
+}
+
+
+.seller-no-image {
+
+    width:90px;
+    height:90px;
+
+    background:#eee;
+
+    border-radius:12px;
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:center;
+
+    font-size:12px;
+
+}
+
+
+.seller-product-info {
+
+    flex:1;
+
+}
+
+
+.seller-product-name {
+
+    font-size:16px;
+
+    font-weight:600;
+
+    margin-bottom:8px;
+
+}
+
+
+.seller-product-price {
+
+    font-size:18px;
+
+    font-weight:700;
+
+    color:#2563eb;
+
+}
+
+
+.seller-product-city {
+
+    margin-top:8px;
+
+    color:#666;
+
+    font-size:14px;
+
+}

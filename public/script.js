@@ -1600,32 +1600,109 @@ initApp();
 
 
 async function openSellerProfile(userId) {
-  if (!userId) return;
-  const page = document.getElementById("sellerProfile");
-  if (!page) return;
+    try {
+        showPage("sellerProfile");
 
-  const name = document.getElementById("sellerProfileName");
-  const username = document.getElementById("sellerProfileUsername");
-  const count = document.getElementById("sellerProfileCount");
-  const list = document.getElementById("sellerProducts");
+        const sellerProducts = document.getElementById("sellerProducts");
+        const sellerName = document.getElementById("sellerName");
+        const sellerUsername = document.getElementById("sellerUsername");
+        const sellerAvatar = document.getElementById("sellerAvatar");
 
-  try {
-    const data = await apiRequest(`/api/users/${userId}/products`);
-    const products = data.products || [];
+        sellerProducts.innerHTML = "Загрузка товаров...";
 
-    name.innerText = products[0]?.ownerName || "Продавец";
-    username.innerText = products[0]?.ownerUsername ? "@" + products[0].ownerUsername : "";
-    count.innerText = `📦 Объявлений: ${products.length}`;
+        const response = await fetch(`/api/users/${userId}/products`);
+        const data = await response.json();
 
-    list.innerHTML = products.map(p => `
-      <div class="product-card" onclick="openProduct('${p.id}')">
-        <b>${escapeHTML(p.name || "")}</b>
-        <div>${escapeHTML(String(p.price || ""))}</div>
-      </div>
-    `).join("");
+        const products = data.products || data || [];
 
-    showPage("sellerProfile");
-  } catch(e) {
-    console.error(e);
-  }
+        if (products.length > 0) {
+            const seller = products[0];
+
+            sellerName.textContent =
+                seller.owner_name ||
+                seller.ownerName ||
+                "Продавец";
+
+            sellerUsername.textContent =
+                seller.owner_username
+                    ? "@" + seller.owner_username
+                    : "";
+
+            if (seller.owner_avatar) {
+                sellerAvatar.innerHTML = `
+                    <img src="${seller.owner_avatar}" class="seller-avatar-img">
+                `;
+            }
+
+        } else {
+            sellerName.textContent = "Продавец";
+            sellerUsername.textContent = "";
+        }
+
+
+        if (!products.length) {
+            sellerProducts.innerHTML = `
+                <div class="empty-state">
+                    У продавца пока нет объявлений
+                </div>
+            `;
+            return;
+        }
+
+
+        sellerProducts.innerHTML = products.map(product => {
+
+            let image = "";
+
+            if (product.images) {
+                try {
+                    const imgs = typeof product.images === "string"
+                        ? JSON.parse(product.images)
+                        : product.images;
+
+                    image = imgs[0] || "";
+                } catch(e){}
+            }
+
+            return `
+            <div class="seller-product-card"
+                 onclick="openProduct('${product.id}')">
+
+                ${
+                    image
+                    ? `<img src="${image}" class="seller-product-image">`
+                    : `<div class="seller-no-image">Нет фото</div>`
+                }
+
+                <div class="seller-product-info">
+
+                    <div class="seller-product-name">
+                        ${product.name}
+                    </div>
+
+                    <div class="seller-product-price">
+                        ${product.price || 0} ₽
+                    </div>
+
+                    <div class="seller-product-city">
+                        📍 ${product.location || ""}
+                    </div>
+
+                </div>
+
+            </div>
+            `;
+        }).join("");
+
+    } catch(error) {
+
+        console.error(
+            "Seller profile error:",
+            error
+        );
+
+        alert(
+            "Ошибка загрузки профиля продавца"
+        );
+    }
 }
