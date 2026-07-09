@@ -1600,52 +1600,33 @@ initApp();
 
 
 async function openSellerProfile(userId) {
+
     try {
+
         showPage("sellerProfile");
 
-        const sellerProducts = document.getElementById("sellerProducts");
 
         const sellerName = document.getElementById("sellerProfileName");
         const sellerUsername = document.getElementById("sellerProfileUsername");
         const sellerCount = document.getElementById("sellerProfileCount");
+        const sellerProducts = document.getElementById("sellerProducts");
 
-        sellerProducts.innerHTML = "Загрузка товаров...";
+
+        sellerProducts.innerHTML = "Загрузка...";
+
+
+        // получаем товары продавца
 
         const response = await fetch(`/api/users/${userId}/products`);
+
         const data = await response.json();
 
-        const products = data.products || data || [];
-
-        if (products.length > 0) {
-
-            const seller = products[0];
-
-            sellerName.textContent =
-                seller.owner_name ||
-                seller.ownerName ||
-                seller.ownerUsername ||
-                "Продавец";
+        const products = data.products || [];
 
 
-            sellerUsername.textContent =
-                seller.owner_username
-                    ? "@" + seller.owner_username
-                    : "Telegram";
+        if(products.length === 0){
 
-
-            sellerCount.textContent =
-                `📦 Объявлений: ${products.length}`;
-
-        } else {
-
-            sellerName.textContent = "Продавец";
-            sellerUsername.textContent = "";
             sellerCount.textContent = "Нет объявлений";
-
-        }
-
-
-        if (!products.length) {
 
             sellerProducts.innerHTML = `
                 <div class="empty-state">
@@ -1657,22 +1638,43 @@ async function openSellerProfile(userId) {
         }
 
 
-        sellerProducts.innerHTML = products.map(product => {
+        const seller = products[0];
+
+
+        sellerName.textContent =
+            seller.ownerName || "Продавец";
+
+
+        sellerUsername.textContent =
+            seller.ownerUsername
+            ? "@" + seller.ownerUsername
+            : "Telegram";
+
+
+        sellerCount.textContent =
+            "📦 Объявлений: " + products.length;
+
+
+
+        sellerProducts.innerHTML =
+        products.map(product => {
+
 
             let image = "";
 
-            if (product.images) {
+            if(product.images){
 
                 try {
 
                     const imgs =
-                        typeof product.images === "string"
-                        ? JSON.parse(product.images)
-                        : product.images;
+                    typeof product.images === "string"
+                    ? JSON.parse(product.images)
+                    : product.images;
+
 
                     image = imgs[0] || "";
 
-                } catch(e) {}
+                } catch(e){}
 
             }
 
@@ -1680,7 +1682,8 @@ async function openSellerProfile(userId) {
             return `
 
             <div class="seller-product-card"
-                 onclick="openProduct('${product.id}')">
+            onclick="openProduct('${product.id}')">
+
 
                 ${
                     image
@@ -1688,45 +1691,45 @@ async function openSellerProfile(userId) {
                     `<img src="${image}" class="seller-product-image">`
                     :
                     `<div class="seller-no-image">
-                        Нет фото
-                     </div>`
+                    Нет фото
+                    </div>`
                 }
 
 
                 <div class="seller-product-info">
 
                     <div class="seller-product-name">
-                        ${product.name || ""}
+                    ${product.name}
                     </div>
 
 
                     <div class="seller-product-price">
-                        ${product.price || 0} ₽
+                    ${product.price} ₽
                     </div>
 
 
                     <div class="seller-product-city">
-                        📍 ${product.location || ""}
+                    📍 ${product.location || ""}
                     </div>
 
                 </div>
+
 
             </div>
 
             `;
 
+
         }).join("");
 
 
-    } catch(error) {
+    } catch(error){
 
         console.error(
             "Seller profile error:",
             error
         );
 
-        alert(
-            "Ошибка загрузки профиля продавца"
-        );
     }
+
 }
