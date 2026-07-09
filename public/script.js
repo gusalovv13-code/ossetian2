@@ -1623,9 +1623,7 @@ async function openSellerProfile(userId) {
 
         // получаем товары продавца
 
-        const response = await fetch(`/api/users/${userId}/products`);
-
-        const data = await response.json();
+        const data = await apiRequest(`/api/users/${userId}/products`);
 
         const products = data.products || [];
 
