@@ -237,36 +237,7 @@ function normalizePhoneForTel(phone) {
   return "+" + digits;
 }
 
-function openTelLink(phone) {
-  const cleanPhone = normalizePhoneForTel(phone);
 
-  if (!cleanPhone) {
-    alert("Телефон продавца не указан");
-    return;
-  }
-
-  const telLink = `tel:${cleanPhone}`;
-  const telPromptLink = `telprompt:${cleanPhone}`;
-  const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
-
-  try {
-    window.location.href = isIOS ? telPromptLink : telLink;
-  } catch (error) {
-    try {
-      window.location.href = telLink;
-    } catch (secondError) {
-      alert(`Позвоните по номеру: ${cleanPhone}`);
-    }
-  }
-
-  setTimeout(() => {
-    try {
-      window.location.href = telLink;
-    } catch (error) {
-      console.warn("Не удалось открыть звонок:", error);
-    }
-  }, 200);
-}
 
 function getPriceNumber(value) {
   const onlyNums = String(value || "").replace(/[^\d]/g, "");
@@ -768,7 +739,8 @@ if (callBtn) {
     callBtn.removeAttribute("aria-disabled");
 
     callBtn.href = `tel:${cleanPhone}`;
-    callBtn.target = "_self";
+callBtn.removeAttribute("target");
+
 
     // Важно: не перехватываем клик через JS
     callBtn.onclick = null;
@@ -1239,25 +1211,7 @@ function initEvents() {
     el?.addEventListener("keydown", hideKeyboardOnEnter);
   });
 
-  document.addEventListener(
-    "click",
-    event => {
-      const callTarget = event.target.closest("#callBtn, .phone-line-link");
-
-      if (!callTarget) return;
-
-      const phone =
-        callTarget.dataset.phone ||
-        callTarget.getAttribute("href") ||
-        callTarget.innerText;
-
-      event.preventDefault();
-      event.stopPropagation();
-
-      openTelLink(phone);
-    },
-    true
-  );
+  
 
   renderPhotoPreview();
   updateCreateButtons();
