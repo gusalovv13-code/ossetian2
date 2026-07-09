@@ -1604,9 +1604,10 @@ async function openSellerProfile(userId) {
         showPage("sellerProfile");
 
         const sellerProducts = document.getElementById("sellerProducts");
-        const sellerName = document.getElementById("sellerName");
-        const sellerUsername = document.getElementById("sellerUsername");
-        const sellerAvatar = document.getElementById("sellerAvatar");
+
+        const sellerName = document.getElementById("sellerProfileName");
+        const sellerUsername = document.getElementById("sellerProfileUsername");
+        const sellerCount = document.getElementById("sellerProfileCount");
 
         sellerProducts.innerHTML = "Загрузка товаров...";
 
@@ -1616,36 +1617,42 @@ async function openSellerProfile(userId) {
         const products = data.products || data || [];
 
         if (products.length > 0) {
+
             const seller = products[0];
 
             sellerName.textContent =
                 seller.owner_name ||
                 seller.ownerName ||
+                seller.ownerUsername ||
                 "Продавец";
+
 
             sellerUsername.textContent =
                 seller.owner_username
                     ? "@" + seller.owner_username
-                    : "";
+                    : "Telegram";
 
-            if (seller.owner_avatar) {
-                sellerAvatar.innerHTML = `
-                    <img src="${seller.owner_avatar}" class="seller-avatar-img">
-                `;
-            }
+
+            sellerCount.textContent =
+                `📦 Объявлений: ${products.length}`;
 
         } else {
+
             sellerName.textContent = "Продавец";
             sellerUsername.textContent = "";
+            sellerCount.textContent = "Нет объявлений";
+
         }
 
 
         if (!products.length) {
+
             sellerProducts.innerHTML = `
                 <div class="empty-state">
                     У продавца пока нет объявлений
                 </div>
             `;
+
             return;
         }
 
@@ -1655,34 +1662,48 @@ async function openSellerProfile(userId) {
             let image = "";
 
             if (product.images) {
+
                 try {
-                    const imgs = typeof product.images === "string"
+
+                    const imgs =
+                        typeof product.images === "string"
                         ? JSON.parse(product.images)
                         : product.images;
 
                     image = imgs[0] || "";
-                } catch(e){}
+
+                } catch(e) {}
+
             }
 
+
             return `
+
             <div class="seller-product-card"
                  onclick="openProduct('${product.id}')">
 
                 ${
                     image
-                    ? `<img src="${image}" class="seller-product-image">`
-                    : `<div class="seller-no-image">Нет фото</div>`
+                    ?
+                    `<img src="${image}" class="seller-product-image">`
+                    :
+                    `<div class="seller-no-image">
+                        Нет фото
+                     </div>`
                 }
+
 
                 <div class="seller-product-info">
 
                     <div class="seller-product-name">
-                        ${product.name}
+                        ${product.name || ""}
                     </div>
+
 
                     <div class="seller-product-price">
                         ${product.price || 0} ₽
                     </div>
+
 
                     <div class="seller-product-city">
                         📍 ${product.location || ""}
@@ -1691,8 +1712,11 @@ async function openSellerProfile(userId) {
                 </div>
 
             </div>
+
             `;
+
         }).join("");
+
 
     } catch(error) {
 
