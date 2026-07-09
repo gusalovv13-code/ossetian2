@@ -173,12 +173,45 @@ async function initDb() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      telegram_id TEXT PRIMARY KEY,
+      username TEXT,
+      first_name TEXT,
+      last_name TEXT,
+      avatar TEXT,
+      last_seen TIMESTAMPTZ DEFAULT NOW(),
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS favorites (
       user_id TEXT NOT NULL,
       product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       PRIMARY KEY (user_id, product_id)
     );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS product_images (
+      id TEXT PRIMARY KEY,
+      product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      url TEXT NOT NULL,
+      preview_url TEXT DEFAULT '',
+      position INTEGER DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    ALTER TABLE products
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+  `);
+
+  await pool.query(`
+    ALTER TABLE products
+    ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
   `);
 
   console.log("Database initialized");
@@ -201,6 +234,15 @@ app.get("/api/health", async (req, res) => {
       error: "Database error"
     });
   }
+});
+
+app.use(async (req, res, next) => {
+  try {
+    if (req.telegramUser) {
+      await pool.query(`INSERT INTO users (telegram_id, username, first_name, last_name, last_seen) VALUES ($1,$2,$3,$4,NOW()) ON CONFLICT (telegram_id) DO UPDATE SET username=EXCLUDED.username, first_name=EXCLUDED.first_name, last_name=EXCLUDED.last_name, last_seen=NOW()`, [String(req.telegramUser.id), req.telegramUser.username || '', req.telegramUser.firstName || '', req.telegramUser.lastName || '']);
+    }
+  } catch(e) {}
+  next();
 });
 
 app.get("/api/me", requireTelegramAuth, (req, res) => {

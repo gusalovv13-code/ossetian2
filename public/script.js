@@ -1,3 +1,14 @@
+
+function escapeHTML(value = "") {
+  return String(value).replace(/[&<>"']/g, char => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;"
+  }[char]));
+}
+
 const DEFAULT_IMAGE =
   "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=500";
 
@@ -14,6 +25,8 @@ function getTelegramAuthHeaders() {
     ? { Authorization: `tma ${initData}` }
     : {};
 }
+
+const favoritesSet = new Set();
 
 const state = {
   page: "home",
@@ -100,6 +113,8 @@ async function loadFavorites() {
   try {
     const data = await apiRequest("/api/favorites");
     state.favorites = data.favorites || [];
+    favoritesSet.clear();
+    state.favorites.forEach(id => favoritesSet.add(id));
     render();
   } catch (error) {
     console.error("Не удалось загрузить избранное:", error);
