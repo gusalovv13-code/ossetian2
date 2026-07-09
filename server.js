@@ -427,10 +427,24 @@ app.post("/api/products", requireTelegramAuth, async (req, res) => {
       ]
     );
 
-    for (let i = 0; i < cleanImages.length; i++) {
-      await pool.query(
-        `INSERT INTO product_images (product_id, url, position) VALUES ($1, $2, $3)`,
-        [id, cleanImages[i], i]
+    // Сохраняем изображения отдельно в новой таблице, если она доступна.
+    if (cleanImages.length > 0) {
+      await Promise.all(
+        cleanImages.map((url, index) =>
+          pool.query(
+            `
+              INSERT INTO product_images (
+                id,
+                product_id,
+                url,
+                position
+              )
+              VALUES ($1, $2, $3, $4)
+              ON CONFLICT DO NOTHING;
+            `,
+            [randomUUID(), id, url, index]
+          )
+        )
       );
     }
 
@@ -443,7 +457,7 @@ app.post("/api/products", requireTelegramAuth, async (req, res) => {
 
     res.status(500).json({
       ok: false,
-      error: "Не удалось создать объявление"
+      error: error.message || "Не удалось создать объявление"
     });
   }
 });

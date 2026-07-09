@@ -1454,22 +1454,3 @@ html body .phone .page button#createStep2Btn:not([disabled]) {
 /* Alania Market UX improvements */
 .card, .product-card { border-radius: 18px; box-shadow: 0 4px 14px rgba(0,0,0,.08); }
 button:disabled { opacity:.6; pointer-events:none; }
-
-/* v1.2.1 product improvements */
-.product-thumbs img {
-  width: 58px;
-  height: 58px;
-  object-fit: cover;
-  border-radius: 12px;
-  margin-right: 8px;
-  opacity: .7;
-}
-.product-thumbs img.active {
-  opacity: 1;
-  outline: 2px solid var(--tg-theme-button-color, #2563eb);
-}
-.seller-info {
-  background: rgba(128,128,128,.08);
-  padding: 12px;
-  border-radius: 16px;
-}
