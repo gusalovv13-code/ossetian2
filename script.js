@@ -768,7 +768,8 @@ if (callBtn) {
     callBtn.removeAttribute("aria-disabled");
 
     callBtn.href = `tel:${cleanPhone}`;
-    callBtn.target = "_self";
+callBtn.removeAttribute("target");
+callBtn.onclick = null;
 
     // Важно: не перехватываем клик через JS
     callBtn.onclick = null;
@@ -1239,25 +1240,7 @@ function initEvents() {
     el?.addEventListener("keydown", hideKeyboardOnEnter);
   });
 
-  document.addEventListener(
-    "click",
-    event => {
-      const callTarget = event.target.closest("#callBtn, .phone-line-link");
-
-      if (!callTarget) return;
-
-      const phone =
-        callTarget.dataset.phone ||
-        callTarget.getAttribute("href") ||
-        callTarget.innerText;
-
-      event.preventDefault();
-      event.stopPropagation();
-
-      openTelLink(phone);
-    },
-    true
-  );
+  
 
   renderPhotoPreview();
   updateCreateButtons();
@@ -1583,6 +1566,17 @@ async function loadTelegramAvatar(firstName, fullName) {
   }
 }
 
+if (window.Telegram?.WebApp) {
+    Telegram.WebApp.ready();
+    Telegram.WebApp.expand();
+}
+
+window.addEventListener("resize", () => {
+    setTimeout(() => {
+        window.scrollTo(0, 0);
+    }, 200);
+});
+
 /* =======================
    INIT
 ======================= */
@@ -1606,18 +1600,3 @@ async function initApp() {
 }
 
 initApp();
-
-// Telegram keyboard close viewport refresh
-(function () {
-  function refreshTelegramViewport() {
-    setTimeout(() => {
-      if (window.Telegram?.WebApp) {
-        Telegram.WebApp.expand();
-      }
-      window.scrollTo(0, 0);
-    }, 250);
-  }
-
-  document.addEventListener("focusout", refreshTelegramViewport);
-  window.addEventListener("resize", refreshTelegramViewport);
-})();
