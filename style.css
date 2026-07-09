@@ -3,7 +3,9 @@
 }
 
 html, body {
-  height: 100%;
+  min-height: 100%;
+  width: 100%;
+  overflow-x: hidden;
 }
 
 body {
@@ -336,28 +338,7 @@ textarea {
   justify-content: space-between;
 }
 
-/* ===== BOTTOM NAV (FIXED + SAFE AREA) ===== */
-.bottom-nav {
-  position: fixed;
-  left: 50%;
-  bottom: 0;
-  transform: translateX(-50%);
 
-  width: min(430px, 100%);
-  height: 72px;
-
-  background: white;
-  border-top: 1px solid #edf0f5;
-
-  display: flex;
-  justify-content: space-around;
-  align-items: center;
-
-  z-index: 50;
-
-  /* FIX: Telegram safe area */
-  padding-bottom: env(safe-area-inset-bottom);
-}
 
 .bottom-nav button {
   border: 0;
@@ -1021,30 +1002,21 @@ body {
 
 /* Скролл должен быть внутри приложения, а не у body */
 .phone {
-    min-height: 100dvh;
-    max-height: none;
+  min-height: 100dvh;
+  height: auto;
+  max-height: none;
 
-    overflow-y: auto;
-    overflow-x: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 
-    overscroll-behavior: contain;
-    -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 
-    background: #f5f6fb;
-}
+  -webkit-overflow-scrolling: touch;
 
-/* Чтобы верх не показывал черноту при микросвайпе */
-.phone::before {
-  content: "";
-  position: fixed;
-  top: -120px;
-  left: 0;
-  right: 0;
-
-  height: 160px;
   background: #f5f6fb;
-  z-index: -1;
 }
+
+
 
 /* Верхняя панель пусть будет белой/светлой */
 .topbar {
@@ -1344,7 +1316,7 @@ html body .phone .page button#createStep2Btn:not([disabled]) {
 /* Сам текст чуть выше */
 .topbar-title {
   padding-top: 0 !important;
-  transform: translateY(-45px);
+  transform: translateY(-30px);
 }
 
 /* Название */
