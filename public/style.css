@@ -1857,3 +1857,44 @@ body.dark-mode .switch input:checked + span {
     font-size: 13px;
   }
 }
+
+
+/* Admin dashboard */
+.admin-grid{
+ display:grid;
+ grid-template-columns:1fr 1fr;
+ gap:12px;
+ margin:12px 0;
+}
+.admin-box{
+ background:white;
+ border-radius:18px;
+ padding:16px;
+ display:flex;
+ flex-direction:column;
+ gap:4px;
+ box-shadow:0 4px 18px rgba(0,0,0,.06);
+}
+.admin-box b{font-size:24px}
+.admin-box span{color:#777;font-size:12px}
+.admin-item{
+ background:white;
+ border-radius:16px;
+ padding:14px;
+ margin:10px 0;
+ display:flex;
+ justify-content:space-between;
+ align-items:center;
+ box-shadow:0 4px 15px rgba(0,0,0,.05);
+}
+.admin-item small,.admin-item strong{
+ display:block;
+ color:#777;
+ margin-top:4px;
+}
+.danger-btn{
+ background:#ffeded;
+ border:0;
+ border-radius:12px;
+ padding:10px;
+}

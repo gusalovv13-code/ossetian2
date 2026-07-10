@@ -1802,24 +1802,42 @@ function updateAdminMenu() {
     });
 }
 
-async function loadAdminPanel(){
+async async function loadAdminPanel(){
   try{
     const stats=await apiRequest("/api/admin/stats");
-    document.getElementById("adminStats").innerHTML =
-      `Пользователи: ${stats.users}<br>Объявления: ${stats.products}`;
+    document.getElementById("adminStats").innerHTML = `
+      <div class="admin-grid">
+        <div class="admin-box">👥<b>${stats.users}</b><span>Пользователи</span></div>
+        <div class="admin-box">📦<b>${stats.products}</b><span>Объявления</span></div>
+      </div>`;
 
     const data=await apiRequest("/api/admin/products");
-    document.getElementById("adminContent").innerHTML =
+    document.getElementById("adminContent").innerHTML = `
+      <h3>📦 Последние объявления</h3>` +
       data.products.map(p=>`
-        <div class="card">
-          <b>${escapeHTML(p.name)}</b><br>
-          ${escapeHTML(p.price)} ₽
-          <button onclick="deleteAdminProduct(${p.id})">Удалить</button>
+        <div class="admin-item">
+          <div>
+            <b>${escapeHTML(p.name)}</b>
+            <small>${escapeHTML(p.owner_name || "Без имени")} • ${escapeHTML(p.category || "Без категории")}</small>
+            <strong>${escapeHTML(p.price)} ₽</strong>
+          </div>
+          <button class="danger-btn" onclick="deleteAdminProduct(${p.id})">🗑</button>
         </div>
       `).join("");
   }catch(e){
     document.getElementById("adminContent").innerHTML="Нет доступа";
   }
+}
+
+async function loadAdminUsers(){
+  const data=await apiRequest("/api/admin/users");
+  document.getElementById("adminContent").innerHTML =
+    `<h3>👥 Пользователи</h3>` +
+    data.users.map(u=>`
+      <div class="admin-item">
+        <div><b>${escapeHTML(u.username || u.first_name || "Пользователь")}</b>
+        <small>ID: ${escapeHTML(u.telegram_id)}</small></div>
+      </div>`).join("");
 }
 
 async function deleteAdminProduct(id){
