@@ -1615,6 +1615,7 @@ async function initApp() {
   initKeyboardAutoHide();
   initEvents();
   await initTelegramUser();
+  updateAdminMenu();
 
   await Promise.all([
     loadProducts(),
@@ -1784,6 +1785,22 @@ initApp().catch(error => {
 });
 
 
+
+
+
+function updateAdminMenu() {
+  const adminMenu = document.getElementById("adminMenu");
+  if (!adminMenu) return;
+
+  // Проверка делается через API, потому что ID администратора хранится только на сервере.
+  apiRequest("/api/admin/stats")
+    .then(() => {
+      adminMenu.style.display = "flex";
+    })
+    .catch(() => {
+      adminMenu.style.display = "none";
+    });
+}
 
 async function loadAdminPanel(){
   try{
