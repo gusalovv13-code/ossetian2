@@ -1803,6 +1803,7 @@ function updateAdminMenu() {
 }
 
 async function loadAdminPanel(){
+  const root=document.getElementById("adminContent");
   try{
     const stats=await apiRequest("/api/admin/stats");
     document.getElementById("adminStats").innerHTML = `
@@ -1812,20 +1813,30 @@ async function loadAdminPanel(){
       </div>`;
 
     const data=await apiRequest("/api/admin/products");
-    document.getElementById("adminContent").innerHTML = `
-      <h3>📦 Последние объявления</h3>` +
+    root.innerHTML=`
+      <div class="admin-tabs">
+        <button onclick="loadAdminPanel()">📦 Товары</button>
+        <button onclick="loadAdminUsers()">👥 Пользователи</button>
+        <button onclick="loadAdminLogs()">📋 Логи</button>
+        <button onclick="loadAdminGrowth()">📈 Аналитика</button>
+      </div>
+      <h3>📦 Последние объявления</h3>`+
       data.products.map(p=>`
-        <div class="admin-item">
-          <div>
-            <b>${escapeHTML(p.name)}</b>
-            <small>${escapeHTML(p.owner_name || "Без имени")} • ${escapeHTML(p.category || "Без категории")}</small>
-            <strong>${escapeHTML(p.price)} ₽</strong>
-          </div>
-          <button class="danger-btn" onclick="hideAdminProduct(${p.id})">👁</button><button class="danger-btn" onclick="deleteAdminProduct(${p.id})">🗑</button>
+      <div class="admin-card">
+        <div>
+          <b>${escapeHTML(p.name)}</b>
+          <small>${escapeHTML(p.owner_name||"Без имени")} · ${escapeHTML(p.category||"")}</small>
+          <strong>${escapeHTML(p.price)} ₽</strong>
+          ${p.hidden?'<span class="status-bad">Скрыто</span>':''}
         </div>
-      `).join("");
+        <div class="admin-actions">
+          <button onclick="hideAdminProduct('${p.id}')">${p.hidden?'👁 Показать':'🙈 Скрыть'}</button>
+          <button onclick="deleteAdminProduct('${p.id}')">🗑</button>
+        </div>
+      </div>`).join("");
   }catch(e){
-    document.getElementById("adminContent").innerHTML="Нет доступа";
+    console.error(e);
+    root.innerHTML="Ошибка загрузки админки";
   }
 }
 
@@ -1861,5 +1872,5 @@ async function loadAdminLogs(){
 }
 async function loadAdminGrowth(){
  const d=await apiRequest("/api/admin/growth");
- document.getElementById("adminContent").innerHTML=`<h3>📈 Рост</h3><pre>${JSON.stringify(d,null,2)}</pre>`;
+ document.getElementById("adminContent").innerHTML=`<h3>📈 Аналитика</h3><div class="admin-card">👥 Пользователи<br>${d.users.map(x=>x.day+": "+x.count).join("<br>")}</div><div class="admin-card">📦 Объявления<br>${d.products.map(x=>x.day+": "+x.count).join("<br>")}</div>`;
 }

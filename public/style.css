@@ -1898,3 +1898,5 @@ body.dark-mode .switch input:checked + span {
  border-radius:12px;
  padding:10px;
 }
+
+.admin-card{background:white;border-radius:18px;padding:16px;margin:12px 0;box-shadow:0 5px 20px #0001;display:flex;justify-content:space-between;gap:10px}.admin-card small,.admin-card strong{display:block}.admin-actions button{border:0;border-radius:12px;padding:8px;background:#eee}.admin-tabs{display:flex;gap:6px;flex-wrap:wrap}.admin-tabs button{border:0;border-radius:14px;padding:10px;background:#eef}.status-bad{color:#d33;font-size:12px}
