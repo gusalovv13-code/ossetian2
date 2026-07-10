@@ -4,9 +4,10 @@ Telegram Mini App локального маркетплейса на Node.js, Ex
 
 ## Структура
 
-- `public/` — клиентские HTML, CSS и JavaScript.
-- `server.js` — API, PostgreSQL и проксирование Telegram-аватара.
+- `public/` — единственная рабочая версия клиентских HTML, CSS и JavaScript.
+- `server.js` — API, инициализация PostgreSQL и проксирование Telegram-аватара.
 - `telegram-auth.js` — проверка подписи `Telegram.WebApp.initData`.
+- `test/` — тесты авторизации и целостности основных маршрутов проекта.
 - `Dockerfile` — production-сборка контейнера.
 
 ## Переменные окружения
@@ -25,17 +26,24 @@ npm ci
 npm start
 ```
 
-## Защищённые маршруты
+Проверка синтаксиса и тесты:
 
-Клиент передаёт подписанную строку Telegram в заголовке:
-
-```text
-Authorization: tma <Telegram.WebApp.initData>
+```bash
+npm run check
+npm test
 ```
 
-Сервер проверяет подпись и сам определяет пользователя. ID пользователя, имя и username из тела запроса не принимаются.
+## API
 
-Основные защищённые маршруты:
+Публичные маршруты чтения:
+
+- `GET /api/health`
+- `GET /api/products`
+- `GET /api/users/:id`
+- `GET /api/users/:id/products`
+- `POST /api/products/:id/view`
+
+Маршруты, требующие Telegram-авторизацию:
 
 - `GET /api/me`
 - `GET /api/avatar`
@@ -44,5 +52,11 @@ Authorization: tma <Telegram.WebApp.initData>
 - `DELETE /api/products/:id`
 - `GET /api/favorites`
 - `POST /api/favorites`
-- `POST /api/products/:id/view`
- 
+
+Клиент передаёт подписанную строку Telegram в заголовке:
+
+```text
+Authorization: tma <Telegram.WebApp.initData>
+```
+
+Сервер проверяет подпись и сам определяет пользователя. ID, имя и username владельца из тела запроса не принимаются.

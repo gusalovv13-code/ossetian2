@@ -48,7 +48,7 @@ const requireTelegramAuth = createTelegramAuthMiddleware({
 });
 
 app.disable("x-powered-by");
-app.use(express.json({ limit: "80mb" }));
+app.use(express.json({ limit: "30mb" }));
 app.use(express.static(publicDir));
 
 function normalizeImages(row) {
@@ -79,15 +79,68 @@ function mapProduct(row) {
     images,
     location: row.location,
     phone: row.phone || "",
-    allowMessages: row.allow_messages,
-    views: row.views,
-    status: row.status,
-    createdAt: new Date(row.created_at).getTime()
+    allowMessages: row.allow_messages !== false,
+    views: Number(row.views) || 0,
+    status: row.status || "active",
+    createdAt: row.created_at ? new Date(row.created_at).getTime() : null
   };
 }
 
 function getTelegramDisplayName(user) {
   return `${user.firstName || ""} ${user.lastName || ""}`.trim();
+}
+
+
+function mapPublicUser(row) {
+  const firstName = row.first_name || "";
+  const lastName = row.last_name || "";
+
+  return {
+    id: String(row.telegram_id || row.owner_id || ""),
+    username: row.username || row.owner_username || "",
+    firstName,
+    lastName,
+    displayName:
+      `${firstName} ${lastName}`.trim() || row.owner_name || "Продавец",
+    avatar: row.avatar || "",
+    lastSeen: row.last_seen ? new Date(row.last_seen).getTime() : null,
+    createdAt: row.created_at ? new Date(row.created_at).getTime() : null
+  };
+}
+
+function normalizeText(value, maxLength) {
+  return String(value ?? "").trim().slice(0, maxLength);
+}
+
+function normalizeProductImage(value) {
+  const image = String(value ?? "").trim();
+
+  if (!image) return "";
+
+  const isDataImage = /^data:image\/(jpeg|jpg|png|webp);base64,[a-z0-9+/=\s]+$/i.test(image);
+  const isHttpsImage = /^https:\/\/[^\s"'<>]+$/i.test(image);
+
+  if (!isDataImage && !isHttpsImage) {
+    return "";
+  }
+
+  // Ограничиваем одно изображение примерно шестью мегабайтами в base64.
+  if (image.length > 8_500_000) {
+    return "";
+  }
+
+  return image;
+}
+
+function formatStoredPrice(value) {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  const number = Number(digits);
+
+  if (!Number.isSafeInteger(number) || number <= 0 || number > 100_000_000) {
+    return "";
+  }
+
+  return `${number.toLocaleString("ru-RU")} ₽`;
 }
 
 async function fetchTelegramJson(method, searchParams) {
@@ -186,6 +239,36 @@ async function initDb() {
   `);
 
   await pool.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS username TEXT;
+  `);
+
+  await pool.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS first_name TEXT;
+  `);
+
+  await pool.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS last_name TEXT;
+  `);
+
+  await pool.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS avatar TEXT;
+  `);
+
+  await pool.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ DEFAULT NOW();
+  `);
+
+  await pool.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS favorites (
       user_id TEXT NOT NULL,
       product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
@@ -215,6 +298,21 @@ async function initDb() {
     ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
   `);
 
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_products_status_created_at
+    ON products (status, created_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_products_owner_created_at
+    ON products (owner_id, created_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_favorites_user_id
+    ON favorites (user_id);
+  `);
+
   console.log("Database initialized");
 }
 
@@ -237,73 +335,60 @@ app.get("/api/health", async (req, res) => {
   }
 });
 
-app.use("/api", requireTelegramAuth);
-
-
-
-
-
-app.use("/api", async (req, res, next) => {
-
+// Сохраняем или обновляем профиль после успешной Telegram-авторизации.
+async function syncTelegramUser(req, res, next) {
   try {
+    const user = req.telegramUser;
 
-    if (req.telegramUser) {
-
-      await pool.query(`
-        INSERT INTO users
-(
- telegram_id,
- first_name,
- last_name,
- username,
- avatar,
- last_seen
-)
-VALUES ($1,$2,$3,$4,$5,NOW())
-
+    await pool.query(
+      `
+        INSERT INTO users (
+          telegram_id,
+          first_name,
+          last_name,
+          username,
+          avatar,
+          last_seen
+        )
+        VALUES ($1, $2, $3, $4, $5, NOW())
         ON CONFLICT (telegram_id)
-
         DO UPDATE SET
-
-        first_name = EXCLUDED.first_name,
-last_name = EXCLUDED.last_name,
-username = EXCLUDED.username,
-avatar = EXCLUDED.avatar,
-last_seen = NOW()
+          first_name = EXCLUDED.first_name,
+          last_name = EXCLUDED.last_name,
+          username = EXCLUDED.username,
+          avatar = CASE
+            WHEN EXCLUDED.avatar <> '' THEN EXCLUDED.avatar
+            ELSE users.avatar
+          END,
+          last_seen = NOW();
       `,
       [
-        
- String(req.telegramUser.id),
- req.telegramUser.firstName || "",
- req.telegramUser.lastName || "",
- req.telegramUser.username || "",
- req.telegramUser.photoUrl || ""
-
-      ]);
-
-    }
-
-  } catch(error) {
-
-    console.error(
-      "USER SAVE ERROR:",
-      error.message
+        String(user.id),
+        user.firstName || "",
+        user.lastName || "",
+        user.username || "",
+        user.photoUrl || ""
+      ]
     );
-
+  } catch (error) {
+    console.error("User profile sync error:", error);
+    return res.status(500).json({
+      ok: false,
+      error: "Не удалось обновить профиль пользователя"
+    });
   }
 
   next();
+}
 
-});
-
-app.get("/api/me", requireTelegramAuth, (req, res) => {
+app.get("/api/me", requireTelegramAuth, syncTelegramUser, (req, res) => {
   res.json({
     ok: true,
     user: req.telegramUser
   });
 });
 
-app.get("/api/avatar", requireTelegramAuth, async (req, res) => {
+app.get("/api/avatar", requireTelegramAuth, syncTelegramUser, async (req, res) => {
   try {
     const avatarUrl = await resolveTelegramAvatarUrl(req.telegramUser);
 
@@ -358,16 +443,85 @@ app.get("/api/avatar", requireTelegramAuth, async (req, res) => {
 });
 
 
+app.get("/api/users/:id", async (req, res) => {
+  try {
+    const userId = normalizeText(req.params.id, 64);
+
+    if (!userId) {
+      return res.status(400).json({
+        ok: false,
+        error: "Некорректный ID продавца"
+      });
+    }
+
+    const userResult = await pool.query(
+      `
+        SELECT telegram_id, username, first_name, last_name, avatar, last_seen, created_at
+        FROM users
+        WHERE telegram_id = $1
+        LIMIT 1;
+      `,
+      [userId]
+    );
+
+    if (userResult.rows.length > 0) {
+      return res.json({
+        ok: true,
+        user: mapPublicUser(userResult.rows[0])
+      });
+    }
+
+    // Поддержка старых объявлений, созданных до появления таблицы users.
+    const fallbackResult = await pool.query(
+      `
+        SELECT owner_id, owner_name, owner_username, created_at
+        FROM products
+        WHERE owner_id = $1 AND COALESCE(status, 'active') <> 'deleted'
+        ORDER BY created_at DESC
+        LIMIT 1;
+      `,
+      [userId]
+    );
+
+    if (fallbackResult.rows.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        error: "Продавец не найден"
+      });
+    }
+
+    return res.json({
+      ok: true,
+      user: mapPublicUser(fallbackResult.rows[0])
+    });
+  } catch (error) {
+    console.error("Get seller profile error:", error);
+    return res.status(500).json({
+      ok: false,
+      error: "Не удалось получить профиль продавца"
+    });
+  }
+});
+
 app.get("/api/users/:id/products", async (req, res) => {
   try {
+    const userId = normalizeText(req.params.id, 64);
+
+    if (!userId) {
+      return res.status(400).json({
+        ok: false,
+        error: "Некорректный ID продавца"
+      });
+    }
+
     const result = await pool.query(
       `
       SELECT *
       FROM products
-      WHERE owner_id = $1 AND status != 'deleted'
+      WHERE owner_id = $1 AND COALESCE(status, 'active') <> 'deleted'
       ORDER BY created_at DESC;
       `,
-      [req.params.id]
+      [userId]
     );
 
     res.json({
@@ -388,7 +542,7 @@ app.get("/api/products", async (req, res) => {
     const result = await pool.query(`
       SELECT *
       FROM products
-      WHERE status != 'deleted'
+      WHERE COALESCE(status, 'active') <> 'deleted'
       ORDER BY created_at DESC;
     `);
 
@@ -406,13 +560,13 @@ app.get("/api/products", async (req, res) => {
   }
 });
 
-app.get("/api/my-products", requireTelegramAuth, async (req, res) => {
+app.get("/api/my-products", requireTelegramAuth, syncTelegramUser, async (req, res) => {
   try {
     const result = await pool.query(
       `
         SELECT *
         FROM products
-        WHERE owner_id = $1 AND status != 'deleted'
+        WHERE owner_id = $1 AND COALESCE(status, 'active') <> 'deleted'
         ORDER BY created_at DESC;
       `,
       [req.telegramUser.id]
@@ -432,7 +586,7 @@ app.get("/api/my-products", requireTelegramAuth, async (req, res) => {
   }
 });
 
-app.post("/api/products", requireTelegramAuth, async (req, res) => {
+app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res) => {
   try {
     const {
       name,
@@ -446,22 +600,32 @@ app.post("/api/products", requireTelegramAuth, async (req, res) => {
       allowMessages
     } = req.body;
 
-    if (!name || !price || !category || !desc) {
+    const cleanName = normalizeText(name, 120);
+    const cleanPrice = formatStoredPrice(price);
+    const cleanCategory = normalizeText(category, 60);
+    const cleanDescription = normalizeText(desc, 5000);
+    const cleanLocation = normalizeText(location, 80) || "Владикавказ";
+    const cleanPhone = normalizeText(phone, 30);
+
+    if (!cleanName || !cleanPrice || !cleanCategory || !cleanDescription) {
       return res.status(400).json({
         ok: false,
-        error: "Не все обязательные поля заполнены"
+        error: "Проверьте название, цену, категорию и описание"
       });
     }
 
-    const cleanImages = Array.isArray(images)
-      ? images.filter(Boolean).slice(0, 5)
-      : [];
+    const sourceImages = Array.isArray(images) ? images : [];
+    const cleanImages = sourceImages
+      .map(normalizeProductImage)
+      .filter(Boolean)
+      .slice(0, 5);
 
-    if (cleanImages.length === 0 && image) {
-      cleanImages.push(image);
+    const fallbackImage = normalizeProductImage(image);
+    if (cleanImages.length === 0 && fallbackImage) {
+      cleanImages.push(fallbackImage);
     }
 
-    const mainImage = cleanImages[0] || image || "";
+    const mainImage = cleanImages[0] || "";
     const id = randomUUID();
     const ownerName = getTelegramDisplayName(req.telegramUser);
 
@@ -492,14 +656,14 @@ app.post("/api/products", requireTelegramAuth, async (req, res) => {
         req.telegramUser.id,
         ownerName || "Пользователь Telegram",
         req.telegramUser.username || "",
-        name,
-        price,
-        category,
-        desc,
+        cleanName,
+        cleanPrice,
+        cleanCategory,
+        cleanDescription,
         mainImage,
         JSON.stringify(cleanImages),
-        location || "Владикавказ",
-        phone || "",
+        cleanLocation,
+        cleanPhone,
         allowMessages !== false
       ]
     );
@@ -534,21 +698,27 @@ app.post("/api/products", requireTelegramAuth, async (req, res) => {
 
     res.status(500).json({
       ok: false,
-      error: error.message || "Не удалось создать объявление"
+      error: "Не удалось создать объявление"
     });
   }
 });
 
-app.post("/api/products/:id/view", requireTelegramAuth, async (req, res) => {
+app.post("/api/products/:id/view", async (req, res) => {
   try {
+    const productId = normalizeText(req.params.id, 64);
+
+    if (!productId) {
+      return res.status(400).json({ ok: false, error: "Некорректный ID товара" });
+    }
+
     const result = await pool.query(
       `
         UPDATE products
-        SET views = views + 1
-        WHERE id = $1 AND status != 'deleted'
+        SET views = COALESCE(views, 0) + 1
+        WHERE id = $1 AND COALESCE(status, 'active') <> 'deleted'
         RETURNING *;
       `,
-      [req.params.id]
+      [productId]
     );
 
     if (result.rows.length === 0) {
@@ -572,15 +742,21 @@ app.post("/api/products/:id/view", requireTelegramAuth, async (req, res) => {
   }
 });
 
-app.delete("/api/products/:id", requireTelegramAuth, async (req, res) => {
+app.delete("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req, res) => {
   try {
+    const productId = normalizeText(req.params.id, 64);
+
+    if (!productId) {
+      return res.status(400).json({ ok: false, error: "Некорректный ID товара" });
+    }
+
     const result = await pool.query(
       `
         DELETE FROM products
         WHERE id = $1 AND owner_id = $2
         RETURNING id;
       `,
-      [req.params.id, req.telegramUser.id]
+      [productId, req.telegramUser.id]
     );
 
     if (result.rows.length === 0) {
@@ -603,7 +779,7 @@ app.delete("/api/products/:id", requireTelegramAuth, async (req, res) => {
   }
 });
 
-app.get("/api/favorites", requireTelegramAuth, async (req, res) => {
+app.get("/api/favorites", requireTelegramAuth, syncTelegramUser, async (req, res) => {
   try {
     const result = await pool.query(
       `
@@ -628,7 +804,7 @@ app.get("/api/favorites", requireTelegramAuth, async (req, res) => {
   }
 });
 
-app.post("/api/favorites", requireTelegramAuth, async (req, res) => {
+app.post("/api/favorites", requireTelegramAuth, syncTelegramUser, async (req, res) => {
   try {
     const { productId } = req.body;
 
@@ -702,7 +878,7 @@ app.use("/api", (req, res) => {
 
 // iOS Telegram Mini App call bridge
 app.get("/call", (req, res) => {
-  const phone = String(req.query.phone || "").replace(/[^0-9+]/g, "");
+  const phone = String(req.query.phone || "").replace(/[^0-9+]/g, "").slice(0, 20);
 
   if (!phone) {
     return res.status(400).send("Phone missing");

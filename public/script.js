@@ -9,6 +9,43 @@ function escapeHTML(value = "") {
   }[char]));
 }
 
+
+function safeImageUrl(value) {
+  const url = String(value || "").trim();
+
+  if (/^data:image\/(jpeg|jpg|png|webp);base64,/i.test(url)) {
+    return url;
+  }
+
+  if (/^https:\/\/[^\s"'<>]+$/i.test(url)) {
+    return url;
+  }
+
+  return DEFAULT_IMAGE;
+}
+
+function findProductById(id) {
+  return (
+    state.products.find(item => item.id === id) ||
+    state.myProducts.find(item => item.id === id) ||
+    state.sellerProducts.find(item => item.id === id)
+  );
+}
+
+function getSellerStatus(lastSeen) {
+  if (!lastSeen) {
+    return { icon: "⚪", label: "Статус неизвестен" };
+  }
+
+  const diff = Date.now() - Number(lastSeen);
+
+  if (diff >= 0 && diff < 5 * 60 * 1000) {
+    return { icon: "🟢", label: "Онлайн" };
+  }
+
+  return { icon: "🕘", label: getTimeAgo(Number(lastSeen)) };
+}
+
 const DEFAULT_IMAGE =
   "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=500";
 
@@ -26,7 +63,6 @@ function getTelegramAuthHeaders() {
     : {};
 }
 
-const favoritesSet = new Set();
 
 const state = {
   page: "home",
@@ -37,6 +73,7 @@ const state = {
   telegramUser: null,
   products: [],
   myProducts: [],
+  sellerProducts: [],
   favorites: []
 };
 
@@ -113,8 +150,6 @@ async function loadFavorites() {
   try {
     const data = await apiRequest("/api/favorites");
     state.favorites = data.favorites || [];
-    favoritesSet.clear();
-    state.favorites.forEach(id => favoritesSet.add(id));
     render();
   } catch (error) {
     console.error("Не удалось загрузить избранное:", error);
@@ -143,7 +178,7 @@ function showPage(page, addToHistory = true) {
   }
 
   const titles = {
-    home: "Осетинский Маркет",
+    home: "Алания Маркет",
     catalog: "Каталог",
     product: "Карточка товара",
     create1: "Новое объявление",
@@ -152,13 +187,15 @@ function showPage(page, addToHistory = true) {
     myAds: "Мои объявления",
     favorites: "Избранное",
     profile: "Профиль",
+    sellerProfile: "Профиль продавца",
+    settings: "Настройки",
     chats: "Чаты"
   };
 
   const titleEl = document.getElementById("pageTitle");
 
   if (titleEl) {
-    titleEl.innerText = titles[page] || "Осетинский Маркет";
+    titleEl.innerText = titles[page] || "Алания Маркет";
   }
 
   updateBottomNav();
@@ -380,7 +417,7 @@ function getFiltered() {
   });
 }
 
-function compressImage(file, maxWidth = 900, quality = 0.72) {
+function compressImage(file, maxDimension = 900, quality = 0.72) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
 
@@ -390,13 +427,13 @@ function compressImage(file, maxWidth = 900, quality = 0.72) {
       img.onload = () => {
         const canvas = document.createElement("canvas");
 
-        let width = img.width;
-        let height = img.height;
-
-        if (width > maxWidth) {
-          height = Math.round((height * maxWidth) / width);
-          width = maxWidth;
-        }
+        const scale = Math.min(
+          1,
+          maxDimension / Math.max(img.width, 1),
+          maxDimension / Math.max(img.height, 1)
+        );
+        const width = Math.max(1, Math.round(img.width * scale));
+        const height = Math.max(1, Math.round(img.height * scale));
 
         canvas.width = width;
         canvas.height = height;
@@ -459,14 +496,19 @@ function renderProducts() {
 function getProductCard(product, options = {}) {
   const isFav = state.favorites.includes(product.id);
   const images = getProductImages(product);
+  const productId = escapeHTML(product.id || "");
+  const name = escapeHTML(product.name || "Без названия");
+  const location = escapeHTML(product.location || "Владикавказ");
+  const image = escapeHTML(safeImageUrl(images[0]));
+  const price = escapeHTML(formatPrice(product.price) || product.price || "");
 
   return `
-    <div class="product-card" onclick="openProduct('${product.id}')">
-      <img src="${images[0]}" alt="${product.name || "Товар"}">
+    <div class="product-card" onclick="openProduct('${productId}')">
+      <img src="${image}" alt="${name}" loading="lazy">
       <div>
-        <h4>${product.name || "Без названия"}</h4>
-        <b>${product.price || ""}</b>
-        <p>${product.location || "Владикавказ"} · ${getTimeAgo(product.createdAt)}</p>
+        <h4>${name}</h4>
+        <b>${price}</b>
+        <p>${location} · ${getTimeAgo(product.createdAt)}</p>
         ${
           options.showStatus
             ? `<p>${product.status === "sold" ? "Продано" : "Активно"}</p>`
@@ -475,8 +517,8 @@ function getProductCard(product, options = {}) {
       </div>
       ${
         options.deleteButton
-          ? `<button class="heart" onclick="event.stopPropagation(); deleteAd('${product.id}')">🗑</button>`
-          : `<button class="heart" onclick="event.stopPropagation(); toggleFav('${product.id}')">${isFav ? "♥" : "♡"}</button>`
+          ? `<button class="heart" aria-label="Удалить объявление" onclick="event.stopPropagation(); deleteAd('${productId}')">🗑</button>`
+          : `<button class="heart" aria-label="${isFav ? "Убрать из избранного" : "Добавить в избранное"}" onclick="event.stopPropagation(); toggleFav('${productId}')">${isFav ? "♥" : "♡"}</button>`
       }
     </div>
   `;
@@ -612,9 +654,7 @@ async function toggleFav(id) {
 ======================= */
 
 function showProductImage(index) {
-  const product =
-    state.products.find(item => item.id === state.openedProductId) ||
-    state.myProducts.find(item => item.id === state.openedProductId);
+  const product = findProductById(state.openedProductId);
 
   if (!product) return;
 
@@ -622,7 +662,7 @@ function showProductImage(index) {
   const imageEl = document.getElementById("productImage");
 
   if (imageEl && images[index]) {
-    imageEl.src = images[index];
+    imageEl.src = safeImageUrl(images[index]);
   }
 
   document.querySelectorAll(".product-thumbs img").forEach((img, i) => {
@@ -631,9 +671,7 @@ function showProductImage(index) {
 }
 
 async function openProduct(id) {
-  const product =
-    state.products.find(item => item.id === id) ||
-    state.myProducts.find(item => item.id === id);
+  const product = findProductById(id);
 
   if (!product) return;
 
@@ -663,7 +701,7 @@ async function openProduct(id) {
   const callBtn = document.getElementById("callBtn");
 
   if (imageEl) {
-    imageEl.src = images[0] || DEFAULT_IMAGE;
+    imageEl.src = safeImageUrl(images[0]);
 
     let thumbs = document.getElementById("productThumbs");
 
@@ -677,10 +715,11 @@ async function openProduct(id) {
     thumbs.innerHTML = images
       .map((src, index) => `
         <img
-          src="${src}"
+          src="${escapeHTML(safeImageUrl(src))}"
           class="${index === 0 ? "active" : ""}"
           onclick="showProductImage(${index})"
           alt="Фото ${index + 1}"
+          loading="lazy"
         >
       `)
       .join("");
@@ -722,8 +761,8 @@ const allowMessages = product.allowMessages !== false;
 if (productPhoneLine) {
   if (cleanPhone) {
     productPhoneLine.innerHTML = `
-      <a href="tel:${cleanPhone}" class="phone-line-link">
-        📞 ${sellerPhone}
+      <a href="tel:${escapeHTML(cleanPhone)}" class="phone-line-link">
+        📞 ${escapeHTML(sellerPhone)}
       </a>
     `;
   } else {
@@ -899,7 +938,7 @@ function renderPhotoPreview() {
   photoPreview.innerHTML = draftAd.images
     .map((src, index) => `
       <div class="photo-item">
-        <img src="${src}" alt="Фото ${index + 1}">
+        <img src="${escapeHTML(safeImageUrl(src))}" alt="Фото ${index + 1}">
         <button type="button" onclick="removeDraftPhoto(${index})">×</button>
       </div>
     `)
@@ -937,11 +976,11 @@ function updatePreviewCard() {
   const previewImage = draftAd.images[0] || DEFAULT_IMAGE;
 
   preview.innerHTML = `
-    <img src="${previewImage}" alt="Предпросмотр">
+    <img src="${escapeHTML(safeImageUrl(previewImage))}" alt="Предпросмотр">
     <div>
-      <h4>${ad.title || "Название товара"}</h4>
-      <b>${formatPrice(ad.price) || ad.price || "Цена не указана"}</b>
-      <p>${ad.category || "Категория"} · ${ad.location}</p>
+      <h4>${escapeHTML(ad.title || "Название товара")}</h4>
+      <b>${escapeHTML(formatPrice(ad.price) || ad.price || "Цена не указана")}</b>
+      <p>${escapeHTML(ad.category || "Категория")} · ${escapeHTML(ad.location)}</p>
     </div>
   `;
 }
@@ -1079,6 +1118,7 @@ async function deleteAd(id) {
 
     state.products = state.products.filter(product => product.id !== id);
     state.myProducts = state.myProducts.filter(product => product.id !== id);
+    state.sellerProducts = state.sellerProducts.filter(product => product.id !== id);
     state.favorites = state.favorites.filter(favId => favId !== id);
 
     render();
@@ -1150,6 +1190,11 @@ function initEvents() {
       try {
         for (const file of filesToAdd) {
           if (!file.type.startsWith("image/")) {
+            continue;
+          }
+
+          if (file.size > 15 * 1024 * 1024) {
+            alert(`Файл «${file.name}» больше 15 МБ и будет пропущен.`);
             continue;
           }
 
@@ -1258,20 +1303,11 @@ function initTelegramAppUI() {
   tg.ready();
   tg.expand();
 
-  document.body.style.background = "#f5f6fb";
-  document.documentElement.style.background = "#f5f6fb";
-
   if (typeof tg.disableVerticalSwipes === "function") {
     tg.disableVerticalSwipes();
   }
 
-  if (typeof tg.setHeaderColor === "function") {
-    tg.setHeaderColor("#f5f6fb");
-  }
-
-  if (typeof tg.setBackgroundColor === "function") {
-    tg.setBackgroundColor("#f5f6fb");
-  }
+  applyTheme(document.body.classList.contains("dark-mode"), false);
 
   requestTelegramFullscreen();
 
@@ -1568,17 +1604,6 @@ async function loadTelegramAvatar(firstName, fullName) {
   }
 }
 
-if (window.Telegram?.WebApp) {
-    Telegram.WebApp.ready();
-    Telegram.WebApp.expand();
-}
-
-window.addEventListener("resize", () => {
-    setTimeout(() => {
-        window.scrollTo(0, 0);
-    }, 200);
-});
-
 /* =======================
    INIT
 ======================= */
@@ -1601,179 +1626,160 @@ async function initApp() {
   updateBottomNav();
 }
 
-initApp();
-
-
-
 async function openSellerProfile(userId) {
+  const sellerName = document.getElementById("sellerProfileName");
+  const sellerUsername = document.getElementById("sellerProfileUsername");
+  const sellerCount = document.getElementById("sellerProfileCount");
+  const sellerProducts = document.getElementById("sellerProducts");
+  const sellerAvatar = document.getElementById("sellerAvatar");
+  const sellerStatus = document.getElementById("sellerStatus");
+  const sellerStatusLabel = document.getElementById("sellerStatusLabel");
 
-    try {
+  showPage("sellerProfile");
 
-        showPage("sellerProfile");
+  if (!sellerProducts || !sellerName || !sellerUsername || !sellerCount || !sellerAvatar) {
+    return;
+  }
 
+  sellerName.textContent = "Продавец";
+  sellerUsername.textContent = "";
+  sellerCount.textContent = "📦 Загрузка...";
+  sellerAvatar.replaceChildren();
+  sellerAvatar.textContent = "👤";
+  sellerProducts.innerHTML = '<div class="empty-state">Загрузка объявлений...</div>';
 
-        const sellerName = document.getElementById("sellerProfileName");
-        const sellerUsername = document.getElementById("sellerProfileUsername");
-        const sellerCount = document.getElementById("sellerProfileCount");
-        const sellerProducts = document.getElementById("sellerProducts");
+  if (!userId) {
+    sellerCount.textContent = "📦 0 объявлений";
+    sellerProducts.innerHTML = '<div class="empty-state">Ошибка: продавец не найден</div>';
+    return;
+  }
 
+  try {
+    const [profileData, productsData] = await Promise.all([
+      apiRequest(`/api/users/${encodeURIComponent(userId)}`),
+      apiRequest(`/api/users/${encodeURIComponent(userId)}/products`)
+    ]);
 
-        sellerProducts.innerHTML = "Загрузка...";
+    const user = profileData.user || {};
+    const products = Array.isArray(productsData.products)
+      ? productsData.products
+      : [];
 
-        if (!userId) {
-            sellerProducts.innerHTML = `
-                <div class="empty-state">
-                    Ошибка: не найден продавец
-                </div>`;
-            return;
-        }
+    state.sellerProducts = products;
 
-
-        // получаем товары продавца
-
-        const profileData = await apiRequest(`/api/users/${userId}`);
-        const data = await apiRequest(`/api/users/${userId}/products`);
-
-        const products =
-            data.products ||
-            data.items ||
-            (Array.isArray(data) ? data : []);
-
-        console.log("SELLER PRODUCTS:", userId, products);
-        const user = profileData.user || {};
-
-
-        if(products.length === 0){
-
-            sellerCount.textContent = "Нет объявлений";
-
-            sellerProducts.innerHTML = `
-                <div class="empty-state">
-                    У продавца пока нет объявлений
-                </div>
-            `;
-
-            return;
-        }
-
-
-        const seller = products[0];
-
-
-        sellerName.textContent =
-            user.first_name ||
-            seller.ownerName ||
-            "Продавец";
-
-
-        sellerUsername.textContent =
-            user.username
-            ? "@" + user.username
-            : "Telegram";
-
-
-        const sellerAvatar = document.getElementById("sellerAvatar");
-
-        if (user.avatar) {
-            sellerAvatar.innerHTML = `
-                <img src="${user.avatar}" alt="avatar">
-            `;
-        }
-
-
-        sellerCount.textContent =
-            "📦 " + products.length + " объявлений";
-
-
-        sellerProducts.innerHTML =
-        products.map(product => {
-
-
-            let image = "";
-
-            if(product.images){
-
-                try {
-
-                    const imgs =
-                    typeof product.images === "string"
-                    ? JSON.parse(product.images)
-                    : product.images;
-
-
-                    image = imgs[0] || "";
-
-                } catch(e){}
-
-            }
-
-
-            return `
-
-            <div class="seller-product-card"
-            onclick="openProduct('${product.id}')">
-
-
-                ${
-                    image
-                    ?
-                    `<img src="${image}" class="seller-product-image">`
-                    :
-                    `<div class="seller-no-image">
-                    Нет фото
-                    </div>`
-                }
-
-
-                <div class="seller-product-info">
-
-                    <div class="seller-product-name">
-                    ${product.name}
-                    </div>
-
-
-                    <div class="seller-product-price">
-                    ${product.price} ₽
-                    </div>
-
-
-                    <div class="seller-product-city">
-                    📍 ${product.location || ""}
-                    </div>
-
-                </div>
-
-
-            </div>
-
-            `;
-
-
-        }).join("");
-
-
-    } catch(error){
-
-        console.error(
-            "Seller profile error:",
-            error
-        );
-
+    // Обновляем общий кэш, чтобы карточка товара открывалась прямо из профиля.
+    for (const product of products) {
+      const index = state.products.findIndex(item => item.id === product.id);
+      if (index >= 0) {
+        state.products[index] = product;
+      } else {
+        state.products.push(product);
+      }
     }
 
+    const fallbackSeller = products[0] || {};
+    const displayName =
+      user.displayName ||
+      `${user.firstName || ""} ${user.lastName || ""}`.trim() ||
+      fallbackSeller.ownerName ||
+      "Продавец";
+    const username = user.username || fallbackSeller.ownerUsername || "";
+
+    sellerName.textContent = displayName;
+    sellerUsername.textContent = username ? `@${username}` : "Telegram";
+    sellerCount.textContent = `📦 ${products.length} ${
+      products.length === 1 ? "объявление" : "объявлений"
+    }`;
+
+    const status = getSellerStatus(user.lastSeen);
+    if (sellerStatus) sellerStatus.textContent = status.icon;
+    if (sellerStatusLabel) sellerStatusLabel.textContent = status.label;
+
+    sellerAvatar.replaceChildren();
+    if (user.avatar) {
+      const image = document.createElement("img");
+      image.src = safeImageUrl(user.avatar);
+      image.alt = displayName;
+      sellerAvatar.appendChild(image);
+    } else {
+      sellerAvatar.textContent = displayName[0]?.toUpperCase() || "👤";
+    }
+
+    if (products.length === 0) {
+      sellerProducts.innerHTML = `
+        <div class="empty-state">
+          <h3>У продавца пока нет объявлений</h3>
+          <p class="muted">Здесь появятся его новые товары.</p>
+        </div>
+      `;
+      return;
+    }
+
+    sellerProducts.innerHTML = products
+      .map(product => {
+        const productId = escapeHTML(product.id || "");
+        const image = escapeHTML(safeImageUrl(getProductImages(product)[0]));
+        const name = escapeHTML(product.name || "Без названия");
+        const price = escapeHTML(formatPrice(product.price) || product.price || "Цена не указана");
+        const location = escapeHTML(product.location || "Владикавказ");
+
+        return `
+          <div class="seller-product-card" onclick="openProduct('${productId}')">
+            <img src="${image}" class="seller-product-image" alt="${name}" loading="lazy">
+            <div class="seller-product-info">
+              <div class="seller-product-name">${name}</div>
+              <div class="seller-product-price">${price}</div>
+              <div class="seller-product-city">📍 ${location}</div>
+            </div>
+          </div>
+        `;
+      })
+      .join("");
+  } catch (error) {
+    console.error("Seller profile error:", error);
+    sellerCount.textContent = "📦 0 объявлений";
+    sellerProducts.innerHTML = `
+      <div class="empty-state">
+        <h3>Не удалось открыть профиль</h3>
+        <p class="muted">${escapeHTML(error.message || "Попробуйте ещё раз")}</p>
+      </div>
+    `;
+  }
 }
 
 // ===== THEME =====
 
-function toggleDarkMode(enabled) {
+function applyTheme(enabled, persist = true) {
   document.body.classList.toggle("dark-mode", enabled);
-  localStorage.setItem("darkMode", enabled ? "1" : "0");
-}
 
-document.addEventListener("DOMContentLoaded", () => {
-  const enabled = localStorage.getItem("darkMode") === "1";
-  document.body.classList.toggle("dark-mode", enabled);
+  if (persist) {
+    localStorage.setItem("darkMode", enabled ? "1" : "0");
+  }
 
   const toggle = document.getElementById("darkModeToggle");
   if (toggle) toggle.checked = enabled;
+
+  const background = enabled ? "#000000" : "#f5f6fb";
+  document.documentElement.style.background = background;
+  document.body.style.background = background;
+
+  if (tg) {
+    try {
+      tg.setHeaderColor?.(background);
+      tg.setBackgroundColor?.(background);
+    } catch (error) {
+      console.warn("Не удалось применить цвет Telegram:", error);
+    }
+  }
+}
+
+function toggleDarkMode(enabled) {
+  applyTheme(Boolean(enabled), true);
+}
+
+applyTheme(localStorage.getItem("darkMode") === "1", false);
+
+initApp().catch(error => {
+  console.error("Ошибка запуска приложения:", error);
 });
+
