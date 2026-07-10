@@ -19,8 +19,9 @@
 - Исправлены профили продавцов и объявления.
 
 
-## v1.9.0 Marketplace UX
-- Improved mobile marketplace foundation
-- Added marketplace feature badges
-- Prepared UI cache version update
-- Preserved existing backend compatibility
+## v1.9.0 development build
+
+Prepared base for marketplace expansion:
+- extended marketplace roadmap for listing cards, seller profiles, reports, search filters and analytics;
+- version marker updated for next development stage.
+
