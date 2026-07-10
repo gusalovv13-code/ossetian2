@@ -17,3 +17,10 @@
 
 ## v1.2.0
 - Исправлены профили продавцов и объявления.
+
+
+## v1.9.0 Marketplace UX
+- Improved mobile marketplace foundation
+- Added marketplace feature badges
+- Prepared UI cache version update
+- Preserved existing backend compatibility

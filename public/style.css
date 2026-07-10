@@ -2501,3 +2501,20 @@ body.dark-mode .admin-search-box input {
     width: 100%;
   }
 }
+
+/* v1.9 marketplace improvements */
+.market-v19-badges {
+  display:flex;
+  gap:8px;
+  overflow-x:auto;
+  margin:14px 0;
+  padding-bottom:4px;
+}
+.market-v19-badges span {
+  white-space:nowrap;
+  background:#fff;
+  border:1px solid #e7eaf0;
+  border-radius:18px;
+  padding:8px 12px;
+  font-size:12px;
+}
