@@ -1783,3 +1783,29 @@ initApp().catch(error => {
   console.error("Ошибка запуска приложения:", error);
 });
 
+
+
+async function loadAdminPanel(){
+  try{
+    const stats=await apiRequest("/api/admin/stats");
+    document.getElementById("adminStats").innerHTML =
+      `Пользователи: ${stats.users}<br>Объявления: ${stats.products}`;
+
+    const data=await apiRequest("/api/admin/products");
+    document.getElementById("adminContent").innerHTML =
+      data.products.map(p=>`
+        <div class="card">
+          <b>${escapeHTML(p.name)}</b><br>
+          ${escapeHTML(p.price)} ₽
+          <button onclick="deleteAdminProduct(${p.id})">Удалить</button>
+        </div>
+      `).join("");
+  }catch(e){
+    document.getElementById("adminContent").innerHTML="Нет доступа";
+  }
+}
+
+async function deleteAdminProduct(id){
+  await apiRequest("/api/admin/products/"+id,{method:"DELETE"});
+  loadAdminPanel();
+}

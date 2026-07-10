@@ -56,6 +56,14 @@
           </div>
         </button>
 
+        <button onclick="showPage('admin')" class="menu-card red" type="button" id="adminMenu" style="display:none">
+          <span>🛠</span>
+          <div>
+            <b>Администратор</b>
+            <small>Управление маркетом</small>
+          </div>
+        </button>
+
         <button onclick="showPage('favorites')" class="menu-card red" type="button">
           <span>♡</span>
           <div>
@@ -370,7 +378,14 @@
         <small>Профиль</small>
       </button>
     </nav>
-  </main>
+  
+<section id="admin" class="page">
+  <h2>🛠 Администратор</h2>
+  <div id="adminStats" class="card"></div>
+  <button onclick="loadAdminPanel()" class="menu-card blue" type="button">Обновить</button>
+  <div id="adminContent"></div>
+</section>
+</main>
 
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">‹</div>
 

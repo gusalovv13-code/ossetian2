@@ -868,6 +868,55 @@ app.post("/api/favorites", requireTelegramAuth, syncTelegramUser, async (req, re
   }
 });
 
+
+const ADMIN_IDS = String(process.env.ADMIN_TELEGRAM_IDS || "")
+  .split(",")
+  .map(v => v.trim())
+  .filter(Boolean);
+
+function requireAdmin(req, res, next) {
+  const id = String(req.telegramUser?.id || req.user?.telegram_id || "");
+  if (!ADMIN_IDS.includes(id)) {
+    return res.status(403).json({ ok:false, error:"Доступ запрещён" });
+  }
+  next();
+}
+
+app.get("/api/admin/stats", requireTelegramAuth, syncTelegramUser, requireAdmin, async (req,res)=>{
+  const users = await pool.query("SELECT COUNT(*)::int AS count FROM users");
+  const products = await pool.query("SELECT COUNT(*)::int AS count FROM products");
+  res.json({
+    ok:true,
+    users: users.rows[0].count,
+    products: products.rows[0].count
+  });
+});
+
+app.get("/api/admin/products", requireTelegramAuth, syncTelegramUser, requireAdmin, async (req,res)=>{
+  const result = await pool.query(`
+    SELECT id,name,price,category,owner_name,created_at
+    FROM products
+    ORDER BY id DESC
+    LIMIT 100
+  `);
+  res.json({ok:true, products:result.rows});
+});
+
+app.delete("/api/admin/products/:id", requireTelegramAuth, syncTelegramUser, requireAdmin, async (req,res)=>{
+  await pool.query("DELETE FROM products WHERE id=$1",[req.params.id]);
+  res.json({ok:true});
+});
+
+app.get("/api/admin/users", requireTelegramAuth, syncTelegramUser, requireAdmin, async(req,res)=>{
+  const result = await pool.query(`
+    SELECT id,telegram_id,username,first_name,last_seen
+    FROM users
+    ORDER BY id DESC
+    LIMIT 100
+  `);
+  res.json({ok:true,users:result.rows});
+});
+
 app.use("/api", (req, res) => {
   res.status(404).json({
     ok: false,
