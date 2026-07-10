@@ -12,7 +12,7 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=160" />
+  <link rel="stylesheet" href="style.css?v=180" />
 </head>
 
 <body>
@@ -383,22 +383,54 @@
       </button>
     </nav>
   
-<section id="admin" class="page">
-  <h2>🛠 Администратор</h2>
-  <div id="adminStats" class="card"></div>
-  <div class="admin-actions">
-<button onclick="loadAdminPanel()" class="menu-card blue" type="button">🔄 Обновить</button>
-<button onclick="loadAdminUsers()" class="menu-card" type="button">👥 Пользователи</button>
-<input id="adminSearch" placeholder="🔎 Поиск товара" oninput="searchAdmin()">
-<button onclick="loadAdminLogs()" class="menu-card" type="button">📋 Логи</button>
-<button onclick="loadAdminGrowth()" class="menu-card" type="button">📈 Аналитика</button>
-</div>
-  <div id="adminContent"></div>
+<section id="admin" class="page admin-page">
+  <div class="admin-hero">
+    <div>
+      <span class="admin-kicker">Панель управления</span>
+      <h2>Администратор</h2>
+      <p>Пользователи, объявления, журнал действий и динамика проекта.</p>
+    </div>
+    <button
+      class="admin-refresh-button"
+      type="button"
+      onclick="reloadCurrentAdminTab()"
+      aria-label="Обновить текущий раздел"
+    >↻</button>
+  </div>
+
+  <div id="adminStats" class="admin-stats-grid" aria-live="polite">
+    <div class="admin-stat-card admin-stat-skeleton"></div>
+    <div class="admin-stat-card admin-stat-skeleton"></div>
+    <div class="admin-stat-card admin-stat-skeleton"></div>
+    <div class="admin-stat-card admin-stat-skeleton"></div>
+  </div>
+
+  <div class="admin-toolbar">
+    <label class="admin-search-box" for="adminSearch">
+      <span>⌕</span>
+      <input
+        id="adminSearch"
+        type="search"
+        placeholder="Поиск по товарам, пользователям или ID"
+        autocomplete="off"
+        oninput="searchAdmin()"
+      >
+    </label>
+
+    <div class="admin-tabs" role="tablist" aria-label="Разделы админ-панели">
+      <button data-admin-tab="products" class="active" onclick="loadAdminPanel()" type="button">📦 Объявления</button>
+      <button data-admin-tab="users" onclick="loadAdminUsers()" type="button">👥 Пользователи</button>
+      <button data-admin-tab="logs" onclick="loadAdminLogs()" type="button">📋 Журнал</button>
+      <button data-admin-tab="growth" onclick="loadAdminGrowth()" type="button">📈 Аналитика</button>
+    </div>
+  </div>
+
+  <div id="adminContent" class="admin-content" aria-live="polite"></div>
 </section>
 </main>
 
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">‹</div>
 
-  <script src="script.js?v=150"></script>
+  <script src="script.js?v=180"></script>
 </body>
 </html>

@@ -189,7 +189,8 @@ function showPage(page, addToHistory = true) {
     profile: "Профиль",
     sellerProfile: "Профиль продавца",
     settings: "Настройки",
-    chats: "Чаты"
+    chats: "Чаты",
+    admin: "Администратор"
   };
 
   const titleEl = document.getElementById("pageTitle");
@@ -215,6 +216,10 @@ function showPage(page, addToHistory = true) {
 
   if (page === "create3") {
     updatePreviewCard();
+  }
+
+  if (page === "admin") {
+    loadAdminPanel();
   }
 
   render();
@@ -1788,11 +1793,17 @@ initApp().catch(error => {
 
 
 
+const adminState = {
+  activeTab: "products",
+  lastNonSearchTab: "products",
+  searchTimer: null,
+  requestVersion: 0
+};
+
 function updateAdminMenu() {
   const adminMenu = document.getElementById("adminMenu");
   if (!adminMenu) return;
 
-  // Проверка делается через API, потому что ID администратора хранится только на сервере.
   apiRequest("/api/admin/stats")
     .then(() => {
       adminMenu.style.display = "flex";
@@ -1802,75 +1813,545 @@ function updateAdminMenu() {
     });
 }
 
-async function loadAdminPanel(){
-  const root=document.getElementById("adminContent");
-  try{
-    const stats=await apiRequest("/api/admin/stats");
-    document.getElementById("adminStats").innerHTML = `
-      <div class="admin-grid">
-        <div class="admin-box">👥<b>${stats.users}</b><span>Пользователи</span></div>
-        <div class="admin-box">📦<b>${stats.products}</b><span>Объявления</span></div>
-      </div>`;
+function setAdminActiveTab(tab) {
+  adminState.activeTab = tab;
 
-    const data=await apiRequest("/api/admin/products");
-    root.innerHTML=`
-      <div class="admin-tabs">
-        <button onclick="loadAdminPanel()">📦 Товары</button>
-        <button onclick="loadAdminUsers()">👥 Пользователи</button>
-        <button onclick="loadAdminLogs()">📋 Логи</button>
-        <button onclick="loadAdminGrowth()">📈 Аналитика</button>
+  if (tab !== "search") {
+    adminState.lastNonSearchTab = tab;
+    window.clearTimeout(adminState.searchTimer);
+    adminState.searchTimer = null;
+
+    const searchInput = document.getElementById("adminSearch");
+    if (searchInput) searchInput.value = "";
+  }
+
+  document.querySelectorAll("[data-admin-tab]").forEach(button => {
+    button.classList.toggle("active", button.dataset.adminTab === tab);
+  });
+}
+
+function setAdminLoading(message = "Загрузка данных…") {
+  const root = document.getElementById("adminContent");
+  if (!root) return;
+
+  root.innerHTML = `
+    <div class="admin-state">
+      <span class="admin-spinner" aria-hidden="true"></span>
+      <b>${escapeHTML(message)}</b>
+      <small>Панель получает свежие данные с сервера</small>
+    </div>
+  `;
+}
+
+function setAdminError(error) {
+  const root = document.getElementById("adminContent");
+  if (!root) return;
+
+  root.innerHTML = `
+    <div class="admin-state admin-state-error">
+      <span>⚠️</span>
+      <b>Не удалось загрузить раздел</b>
+      <small>${escapeHTML(error?.message || "Неизвестная ошибка")}</small>
+      <button type="button" onclick="reloadCurrentAdminTab()">Повторить</button>
+    </div>
+  `;
+}
+
+function formatAdminDate(value) {
+  if (!value) return "Дата неизвестна";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Дата неизвестна";
+
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
+}
+
+function renderAdminStats(stats) {
+  const root = document.getElementById("adminStats");
+  if (!root) return;
+
+  root.innerHTML = `
+    <div class="admin-stat-card admin-stat-primary">
+      <span>👥</span>
+      <div><b>${Number(stats.users) || 0}</b><small>Пользователи</small></div>
+      <em>+${Number(stats.newUsersToday) || 0} сегодня</em>
+    </div>
+    <div class="admin-stat-card">
+      <span>📦</span>
+      <div><b>${Number(stats.products) || 0}</b><small>Объявления</small></div>
+      <em>+${Number(stats.newProductsToday) || 0} сегодня</em>
+    </div>
+    <div class="admin-stat-card">
+      <span>🙈</span>
+      <div><b>${Number(stats.hidden) || 0}</b><small>Скрытые</small></div>
+      <em>Не видны в каталоге</em>
+    </div>
+    <div class="admin-stat-card admin-stat-danger">
+      <span>⛔</span>
+      <div><b>${Number(stats.banned) || 0}</b><small>Заблокированы</small></div>
+      <em>Ограничен доступ</em>
+    </div>
+  `;
+}
+
+async function refreshAdminStats() {
+  const stats = await apiRequest("/api/admin/stats");
+  renderAdminStats(stats);
+  return stats;
+}
+
+function renderAdminProducts(products = []) {
+  const root = document.getElementById("adminContent");
+  if (!root) return;
+
+  if (products.length === 0) {
+    root.innerHTML = `
+      <div class="admin-state">
+        <span>📭</span>
+        <b>Объявлений пока нет</b>
+        <small>Здесь появятся новые публикации пользователей</small>
       </div>
-      <h3>📦 Последние объявления</h3>`+
-      data.products.map(p=>`
-      <div class="admin-card">
-        <div>
-          <b>${escapeHTML(p.name)}</b>
-          <small>${escapeHTML(p.owner_name||"Без имени")} · ${escapeHTML(p.category||"")}</small>
-          <strong>${escapeHTML(p.price)} ₽</strong>
-          ${p.hidden?'<span class="status-bad">Скрыто</span>':''}
-        </div>
-        <div class="admin-actions">
-          <button onclick="hideAdminProduct('${p.id}')">${p.hidden?'👁 Показать':'🙈 Скрыть'}</button>
-          <button onclick="deleteAdminProduct('${p.id}')">🗑</button>
-        </div>
-      </div>`).join("");
-  }catch(e){
-    console.error(e);
-    root.innerHTML="Ошибка загрузки админки";
+    `;
+    return;
+  }
+
+  root.innerHTML = `
+    <div class="admin-section-heading">
+      <div><b>Последние объявления</b><small>${products.length} записей</small></div>
+    </div>
+    <div class="admin-list">
+      ${products.map(product => `
+        <article class="admin-record ${product.hidden ? "is-muted" : ""}">
+          <div class="admin-record-main">
+            <div class="admin-record-title-row">
+              <b>${escapeHTML(product.name || "Без названия")}</b>
+              ${product.hidden
+                ? '<span class="admin-badge danger">Скрыто</span>'
+                : '<span class="admin-badge success">Опубликовано</span>'}
+            </div>
+            <p>${escapeHTML(product.owner_name || "Без имени")} · ${escapeHTML(product.category || "Без категории")}</p>
+            <div class="admin-record-meta">
+              <strong>${escapeHTML(product.price || "0")} ₽</strong>
+              <span>👁 ${Number(product.views) || 0}</span>
+              <span>${escapeHTML(formatAdminDate(product.created_at))}</span>
+            </div>
+          </div>
+          <button
+            class="admin-action-button ${product.hidden ? "restore" : "danger"}"
+            type="button"
+            onclick="hideAdminProduct('${escapeHTML(product.id)}', this)"
+          >
+            ${product.hidden ? "👁 Показать" : "🙈 Скрыть"}
+          </button>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderAdminUsers(users = []) {
+  const root = document.getElementById("adminContent");
+  if (!root) return;
+
+  if (users.length === 0) {
+    root.innerHTML = `
+      <div class="admin-state">
+        <span>👤</span>
+        <b>Пользователей пока нет</b>
+      </div>
+    `;
+    return;
+  }
+
+  root.innerHTML = `
+    <div class="admin-section-heading">
+      <div><b>Пользователи</b><small>${users.length} записей</small></div>
+    </div>
+    <div class="admin-list">
+      ${users.map(user => {
+        const fullName = [user.first_name, user.last_name].filter(Boolean).join(" ");
+        const displayName = user.username ? `@${user.username}` : fullName || "Пользователь";
+
+        return `
+          <article class="admin-record ${user.banned ? "is-muted" : ""}">
+            <div class="admin-user-avatar">${escapeHTML((displayName[0] || "?").toUpperCase())}</div>
+            <div class="admin-record-main">
+              <div class="admin-record-title-row">
+                <b>${escapeHTML(displayName)}</b>
+                ${user.banned ? '<span class="admin-badge danger">Заблокирован</span>' : ''}
+              </div>
+              <p>${escapeHTML(fullName || "Имя не указано")}</p>
+              <div class="admin-record-meta">
+                <span>ID: ${escapeHTML(user.telegram_id)}</span>
+                <span>📦 ${Number(user.products_count) || 0}</span>
+                <span>${escapeHTML(formatAdminDate(user.last_seen))}</span>
+              </div>
+            </div>
+            <button
+              class="admin-action-button ${user.banned ? "restore" : "danger"}"
+              type="button"
+              onclick="toggleAdminUserBan('${escapeHTML(user.telegram_id)}', this)"
+            >
+              ${user.banned ? "Разблокировать" : "Заблокировать"}
+            </button>
+          </article>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function getAdminActionLabel(action) {
+  const labels = {
+    hide_product: "Скрыл объявление",
+    show_product: "Вернул объявление",
+    ban_user: "Заблокировал пользователя",
+    unban_user: "Разблокировал пользователя",
+    archive_product: "Архивировал объявление"
+  };
+
+  return labels[action] || action || "Неизвестное действие";
+}
+
+function renderAdminLogs(logs = []) {
+  const root = document.getElementById("adminContent");
+  if (!root) return;
+
+  if (logs.length === 0) {
+    root.innerHTML = `
+      <div class="admin-state">
+        <span>📋</span>
+        <b>Журнал пока пуст</b>
+        <small>Действия администратора будут сохраняться здесь</small>
+      </div>
+    `;
+    return;
+  }
+
+  root.innerHTML = `
+    <div class="admin-section-heading">
+      <div><b>Журнал действий</b><small>${logs.length} последних операций</small></div>
+    </div>
+    <div class="admin-log-list">
+      ${logs.map(log => `
+        <article class="admin-log-row">
+          <span class="admin-log-icon">📋</span>
+          <div>
+            <b>${escapeHTML(getAdminActionLabel(log.action))}</b>
+            <p>${escapeHTML(log.details || log.target || "Без описания")}</p>
+            <small>${escapeHTML(formatAdminDate(log.created_at))} · админ ${escapeHTML(log.admin_id)}</small>
+          </div>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderAdminChart(title, icon, points = []) {
+  const values = points.map(point => Number(point.count) || 0);
+  const max = Math.max(...values, 1);
+
+  return `
+    <section class="admin-chart-card">
+      <div class="admin-chart-title"><span>${icon}</span><b>${escapeHTML(title)}</b></div>
+      <div class="admin-chart">
+        ${points.map(point => {
+          const value = Number(point.count) || 0;
+          const height = Math.max(6, Math.round((value / max) * 100));
+          const date = new Date(point.day);
+          const label = Number.isNaN(date.getTime())
+            ? "—"
+            : new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit" }).format(date);
+
+          return `
+            <div class="admin-chart-column" title="${escapeHTML(label)}: ${value}">
+              <span>${value}</span>
+              <i style="height:${height}%"></i>
+              <small>${escapeHTML(label)}</small>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderAdminGrowth(data) {
+  const root = document.getElementById("adminContent");
+  if (!root) return;
+
+  root.innerHTML = `
+    <div class="admin-section-heading">
+      <div><b>Рост за 14 дней</b><small>Ежедневная динамика регистраций и объявлений</small></div>
+    </div>
+    <div class="admin-charts-grid">
+      ${renderAdminChart("Новые пользователи", "👥", data.users || [])}
+      ${renderAdminChart("Новые объявления", "📦", data.products || [])}
+    </div>
+  `;
+}
+
+async function loadAdminPanel() {
+  const requestVersion = ++adminState.requestVersion;
+  setAdminActiveTab("products");
+  setAdminLoading("Загружаем объявления…");
+
+  try {
+    const [stats, data] = await Promise.all([
+      apiRequest("/api/admin/stats"),
+      apiRequest("/api/admin/products")
+    ]);
+
+    if (requestVersion !== adminState.requestVersion) return;
+    renderAdminStats(stats);
+    renderAdminProducts(data.products || []);
+  } catch (error) {
+    if (requestVersion !== adminState.requestVersion) return;
+    console.error("Admin products error:", error);
+    setAdminError(error);
   }
 }
 
-async function loadAdminUsers(){
-  const data=await apiRequest("/api/admin/users");
-  document.getElementById("adminContent").innerHTML =
-    `<h3>👥 Пользователи</h3>` +
-    data.users.map(u=>`
-      <div class="admin-item">
-        <div><b>${escapeHTML(u.username || u.first_name || "Пользователь")}</b>
-        <small>ID: ${escapeHTML(u.telegram_id)}</small></div>
-      </div>`).join("");
+async function loadAdminUsers() {
+  const requestVersion = ++adminState.requestVersion;
+  setAdminActiveTab("users");
+  setAdminLoading("Загружаем пользователей…");
+
+  try {
+    const [stats, data] = await Promise.all([
+      apiRequest("/api/admin/stats"),
+      apiRequest("/api/admin/users")
+    ]);
+
+    if (requestVersion !== adminState.requestVersion) return;
+    renderAdminStats(stats);
+    renderAdminUsers(data.users || []);
+  } catch (error) {
+    if (requestVersion !== adminState.requestVersion) return;
+    console.error("Admin users error:", error);
+    setAdminError(error);
+  }
 }
 
-async function deleteAdminProduct(id){
-  await apiRequest("/api/admin/products/"+id,{method:"DELETE"});
-  loadAdminPanel();
+async function loadAdminLogs() {
+  const requestVersion = ++adminState.requestVersion;
+  setAdminActiveTab("logs");
+  setAdminLoading("Загружаем журнал…");
+
+  try {
+    const [stats, data] = await Promise.all([
+      apiRequest("/api/admin/stats"),
+      apiRequest("/api/admin/logs")
+    ]);
+    if (requestVersion !== adminState.requestVersion) return;
+    renderAdminStats(stats);
+    renderAdminLogs(data.logs || []);
+  } catch (error) {
+    if (requestVersion !== adminState.requestVersion) return;
+    console.error("Admin logs error:", error);
+    setAdminError(error);
+  }
 }
 
+async function loadAdminGrowth() {
+  const requestVersion = ++adminState.requestVersion;
+  setAdminActiveTab("growth");
+  setAdminLoading("Строим аналитику…");
 
-async function hideAdminProduct(id){
-  await apiRequest("/api/admin/products/"+id+"/hide",{method:"PATCH"});
-  loadAdminPanel();
+  try {
+    const [stats, data] = await Promise.all([
+      apiRequest("/api/admin/stats"),
+      apiRequest("/api/admin/growth")
+    ]);
+    if (requestVersion !== adminState.requestVersion) return;
+    renderAdminStats(stats);
+    renderAdminGrowth(data);
+  } catch (error) {
+    if (requestVersion !== adminState.requestVersion) return;
+    console.error("Admin growth error:", error);
+    setAdminError(error);
+  }
 }
-async function searchAdmin(){
- const q=document.getElementById("adminSearch")?.value||"";
- const d=await apiRequest("/api/admin/search?q="+encodeURIComponent(q));
- document.getElementById("adminContent").innerHTML=d.products.map(p=>`<div class="admin-item"><b>${escapeHTML(p.name)}</b> ${escapeHTML(p.price)} ₽</div>`).join("");
+
+async function hideAdminProduct(id, button) {
+  if (!id || button?.disabled) return;
+
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Сохраняем…";
+  }
+
+  try {
+    await apiRequest(`/api/admin/products/${encodeURIComponent(id)}/hide`, {
+      method: "PATCH"
+    });
+    await loadAdminPanel();
+  } catch (error) {
+    console.error("Toggle product visibility error:", error);
+    alert(error.message || "Не удалось изменить видимость объявления");
+    if (button) button.disabled = false;
+  }
 }
-async function loadAdminLogs(){
- const d=await apiRequest("/api/admin/logs");
- document.getElementById("adminContent").innerHTML=d.logs.map(l=>`<div class="admin-item">📋 ${escapeHTML(l.action)} ${escapeHTML(l.target)}</div>`).join("");
+
+async function toggleAdminUserBan(id, button) {
+  if (!id || button?.disabled) return;
+
+  const isUnban = button?.classList.contains("restore");
+  const confirmed = window.confirm(
+    isUnban
+      ? "Разблокировать этого пользователя?"
+      : "Заблокировать пользователя? Он не сможет публиковать объявления и пользоваться личными функциями."
+  );
+
+  if (!confirmed) return;
+
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Сохраняем…";
+  }
+
+  try {
+    await apiRequest(`/api/admin/users/${encodeURIComponent(id)}/ban`, {
+      method: "POST"
+    });
+    await loadAdminUsers();
+  } catch (error) {
+    console.error("Toggle user ban error:", error);
+    alert(error.message || "Не удалось изменить блокировку пользователя");
+    if (button) button.disabled = false;
+  }
 }
-async function loadAdminGrowth(){
- const d=await apiRequest("/api/admin/growth");
- document.getElementById("adminContent").innerHTML=`<h3>📈 Аналитика</h3><div class="admin-card">👥 Пользователи<br>${d.users.map(x=>x.day+": "+x.count).join("<br>")}</div><div class="admin-card">📦 Объявления<br>${d.products.map(x=>x.day+": "+x.count).join("<br>")}</div>`;
+
+function searchAdmin() {
+  window.clearTimeout(adminState.searchTimer);
+  adminState.searchTimer = window.setTimeout(runAdminSearch, 300);
+}
+
+async function runAdminSearch() {
+  const input = document.getElementById("adminSearch");
+  const query = String(input?.value || "").trim();
+
+  if (!query) {
+    const previousTab = adminState.lastNonSearchTab || "products";
+    adminState.activeTab = previousTab;
+    reloadCurrentAdminTab();
+    return;
+  }
+
+  const requestVersion = ++adminState.requestVersion;
+  setAdminActiveTab("search");
+  setAdminLoading(`Ищем «${query}»…`);
+
+  try {
+    const data = await apiRequest(`/api/admin/search?q=${encodeURIComponent(query)}`);
+    if (requestVersion !== adminState.requestVersion) return;
+
+    const root = document.getElementById("adminContent");
+    if (!root) return;
+
+    const products = data.products || [];
+    const users = data.users || [];
+
+    if (products.length === 0 && users.length === 0) {
+      root.innerHTML = `
+        <div class="admin-state">
+          <span>🔎</span>
+          <b>Ничего не найдено</b>
+          <small>Попробуйте имя, username, ID, название или категорию</small>
+        </div>
+      `;
+      return;
+    }
+
+    const productsMarkup = products.map(product => `
+      <article class="admin-record ${product.hidden ? "is-muted" : ""}">
+        <div class="admin-record-main">
+          <div class="admin-record-title-row">
+            <b>${escapeHTML(product.name || "Без названия")}</b>
+            ${product.hidden
+              ? '<span class="admin-badge danger">Скрыто</span>'
+              : '<span class="admin-badge success">Опубликовано</span>'}
+          </div>
+          <p>${escapeHTML(product.owner_name || "Без имени")} · ${escapeHTML(product.category || "Без категории")}</p>
+          <div class="admin-record-meta">
+            <strong>${escapeHTML(product.price || "0")} ₽</strong>
+            <span>${escapeHTML(formatAdminDate(product.created_at))}</span>
+          </div>
+        </div>
+        <button
+          class="admin-action-button ${product.hidden ? "restore" : "danger"}"
+          type="button"
+          onclick="hideAdminProduct('${escapeHTML(product.id)}', this)"
+        >
+          ${product.hidden ? "👁 Показать" : "🙈 Скрыть"}
+        </button>
+      </article>
+    `).join("");
+
+    const usersMarkup = users.map(user => {
+      const fullName = [user.first_name, user.last_name].filter(Boolean).join(" ");
+      const displayName = user.username ? `@${user.username}` : fullName || "Пользователь";
+
+      return `
+        <article class="admin-record ${user.banned ? "is-muted" : ""}">
+          <div class="admin-user-avatar">${escapeHTML((displayName[0] || "?").toUpperCase())}</div>
+          <div class="admin-record-main">
+            <div class="admin-record-title-row">
+              <b>${escapeHTML(displayName)}</b>
+              ${user.banned ? '<span class="admin-badge danger">Заблокирован</span>' : ''}
+            </div>
+            <p>${escapeHTML(fullName || "Имя не указано")}</p>
+            <div class="admin-record-meta">
+              <span>ID: ${escapeHTML(user.telegram_id)}</span>
+              <span>📦 ${Number(user.products_count) || 0}</span>
+            </div>
+          </div>
+          <button
+            class="admin-action-button ${user.banned ? "restore" : "danger"}"
+            type="button"
+            onclick="toggleAdminUserBan('${escapeHTML(user.telegram_id)}', this)"
+          >
+            ${user.banned ? "Разблокировать" : "Заблокировать"}
+          </button>
+        </article>
+      `;
+    }).join("");
+
+    root.innerHTML = `
+      <div class="admin-search-summary">
+        Найдено: объявлений ${products.length}, пользователей ${users.length}
+      </div>
+      ${products.length ? `<h3 class="admin-result-title">Объявления</h3><div class="admin-list">${productsMarkup}</div>` : ''}
+      ${users.length ? `<h3 class="admin-result-title">Пользователи</h3><div class="admin-list">${usersMarkup}</div>` : ''}
+    `;
+  } catch (error) {
+    if (requestVersion !== adminState.requestVersion) return;
+    console.error("Admin search error:", error);
+    setAdminError(error);
+  }
+}
+
+function reloadCurrentAdminTab() {
+  const input = document.getElementById("adminSearch");
+  if (input && adminState.activeTab !== "search") input.value = "";
+
+  const loaders = {
+    products: loadAdminPanel,
+    users: loadAdminUsers,
+    logs: loadAdminLogs,
+    growth: loadAdminGrowth,
+    search: runAdminSearch
+  };
+
+  (loaders[adminState.activeTab] || loadAdminPanel)();
+}
+
+async function deleteAdminProduct(id) {
+  // Старые кнопки из закэшированных версий клиента теперь тоже только скрывают запись.
+  await hideAdminProduct(id, null);
 }

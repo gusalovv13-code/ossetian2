@@ -81,6 +81,7 @@ function mapProduct(row) {
     phone: row.phone || "",
     allowMessages: row.allow_messages !== false,
     views: Number(row.views) || 0,
+    hidden: Boolean(row.hidden),
     status: row.status || "active",
     createdAt: row.created_at ? new Date(row.created_at).getTime() : null
   };
@@ -287,6 +288,23 @@ async function initDb() {
     );
   `);
 
+  // Ранние сборки создавали id как SERIAL. Приводим старую БД к одной схеме,
+  // чтобы журнал действий не ломался после обновления приложения.
+  await pool.query(`
+    ALTER TABLE admin_logs
+    ALTER COLUMN id DROP DEFAULT;
+  `);
+
+  await pool.query(`
+    ALTER TABLE admin_logs
+    ALTER COLUMN id TYPE TEXT USING id::text;
+  `);
+
+  await pool.query(`
+    ALTER TABLE admin_logs
+    ADD COLUMN IF NOT EXISTS details TEXT DEFAULT '';
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS favorites (
       user_id TEXT NOT NULL,
@@ -359,7 +377,7 @@ async function syncTelegramUser(req, res, next) {
   try {
     const user = req.telegramUser;
 
-    await pool.query(
+    const syncResult = await pool.query(
       `
         INSERT INTO users (
           telegram_id,
@@ -379,7 +397,8 @@ async function syncTelegramUser(req, res, next) {
             WHEN EXCLUDED.avatar <> '' THEN EXCLUDED.avatar
             ELSE users.avatar
           END,
-          last_seen = NOW();
+          last_seen = NOW()
+        RETURNING banned;
       `,
       [
         String(user.id),
@@ -389,6 +408,17 @@ async function syncTelegramUser(req, res, next) {
         user.photoUrl || ""
       ]
     );
+
+    const isBanned = Boolean(syncResult.rows[0]?.banned);
+    const isAdmin = ADMIN_IDS.includes(String(user.id));
+
+    if (isBanned && !isAdmin) {
+      return res.status(403).json({
+        ok: false,
+        code: "USER_BANNED",
+        error: "Ваш аккаунт заблокирован администратором"
+      });
+    }
   } catch (error) {
     console.error("User profile sync error:", error);
     return res.status(500).json({
@@ -495,7 +525,9 @@ app.get("/api/users/:id", async (req, res) => {
       `
         SELECT owner_id, owner_name, owner_username, created_at
         FROM products
-        WHERE owner_id = $1 AND COALESCE(status, 'active') <> 'deleted'
+        WHERE owner_id = $1
+          AND COALESCE(status, 'active') <> 'deleted'
+          AND COALESCE(hidden, FALSE) = FALSE
         ORDER BY created_at DESC
         LIMIT 1;
       `,
@@ -537,7 +569,9 @@ app.get("/api/users/:id/products", async (req, res) => {
       `
       SELECT *
       FROM products
-      WHERE owner_id = $1 AND COALESCE(status, 'active') <> 'deleted'
+      WHERE owner_id = $1
+        AND COALESCE(status, 'active') <> 'deleted'
+        AND COALESCE(hidden, FALSE) = FALSE
       ORDER BY created_at DESC;
       `,
       [userId]
@@ -562,6 +596,7 @@ app.get("/api/products", async (req, res) => {
       SELECT *
       FROM products
       WHERE COALESCE(status, 'active') <> 'deleted'
+        AND COALESCE(hidden, FALSE) = FALSE
       ORDER BY created_at DESC;
     `);
 
@@ -802,9 +837,12 @@ app.get("/api/favorites", requireTelegramAuth, syncTelegramUser, async (req, res
   try {
     const result = await pool.query(
       `
-        SELECT product_id
-        FROM favorites
-        WHERE user_id = $1;
+        SELECT f.product_id
+        FROM favorites f
+        JOIN products p ON p.id = f.product_id
+        WHERE f.user_id = $1
+          AND COALESCE(p.status, 'active') <> 'deleted'
+          AND COALESCE(p.hidden, FALSE) = FALSE;
       `,
       [req.telegramUser.id]
     );
@@ -889,106 +927,415 @@ app.post("/api/favorites", requireTelegramAuth, syncTelegramUser, async (req, re
 
 
 
-// Admin enhancements
-async function ensureAdminFields(){
-  try{
-    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS banned BOOLEAN DEFAULT FALSE`);
-    await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS hidden BOOLEAN DEFAULT FALSE`);
-    await pool.query(`CREATE TABLE IF NOT EXISTS admin_logs(
-      id SERIAL PRIMARY KEY,
-      admin_id TEXT,
-      action TEXT,
-      target TEXT,
-      created_at TIMESTAMP DEFAULT NOW()
-    )`);
-  }catch(e){ console.error("Admin fields:", e.message); }
-}
-ensureAdminFields();
-
-async function addAdminLog(adminId, action, target){
-  await pool.query(
-    "INSERT INTO admin_logs(admin_id,action,target) VALUES($1,$2,$3)",
-    [String(adminId), action, String(target)]
-  );
-}
-
+// Admin dashboard
 const ADMIN_IDS = String(process.env.ADMIN_TELEGRAM_IDS || "")
   .split(",")
-  .map(v => v.trim())
+  .map(value => value.trim())
   .filter(Boolean);
 
 function requireAdmin(req, res, next) {
-  const id = String(req.telegramUser?.id || req.user?.telegram_id || "");
+  const id = String(req.telegramUser?.id || "");
+
   if (!ADMIN_IDS.includes(id)) {
-    return res.status(403).json({ ok:false, error:"Доступ запрещён" });
+    return res.status(403).json({
+      ok: false,
+      error: "Доступ запрещён"
+    });
   }
+
   next();
 }
 
-app.get("/api/admin/stats", requireTelegramAuth, syncTelegramUser, requireAdmin, async (req,res)=>{
-  const users = await pool.query("SELECT COUNT(*)::int AS count FROM users");
-  const products = await pool.query("SELECT COUNT(*)::int AS count FROM products");
-  res.json({
-    ok:true,
-    users: users.rows[0].count,
-    products: products.rows[0].count
-  });
-});
+function adminRoute(handler) {
+  return async (req, res) => {
+    try {
+      await handler(req, res);
+    } catch (error) {
+      console.error(`Admin route ${req.method} ${req.path}:`, error);
 
-app.get("/api/admin/products", requireTelegramAuth, syncTelegramUser, requireAdmin, async (req,res)=>{
-  const result = await pool.query(`
-    SELECT id,name,price,category,owner_name,created_at,hidden
-    FROM products
-    ORDER BY id DESC
-    LIMIT 100
-  `);
-  res.json({ok:true, products:result.rows});
-});
+      if (!res.headersSent) {
+        res.status(500).json({
+          ok: false,
+          error: "Ошибка админ-панели"
+        });
+      }
+    }
+  };
+}
 
+async function addAdminLog(adminId, action, target = "", details = "") {
+  await pool.query(
+    `
+      INSERT INTO admin_logs (id, admin_id, action, target, details)
+      VALUES ($1, $2, $3, $4, $5);
+    `,
+    [randomUUID(), String(adminId), action, String(target), String(details)]
+  );
+}
 
-app.patch("/api/admin/products/:id/hide", requireTelegramAuth, syncTelegramUser, requireAdmin, async(req,res)=>{
-  await pool.query("UPDATE products SET hidden=NOT COALESCE(hidden,FALSE) WHERE id=$1",[req.params.id]);
-  await addAdminLog(req.telegramUser.id,"toggle_product_visibility",req.params.id);
-  res.json({ok:true});
-});
+app.get(
+  "/api/admin/stats",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const [users, products, hidden, banned, newUsersToday, newProductsToday] =
+      await Promise.all([
+        pool.query("SELECT COUNT(*)::int AS count FROM users"),
+        pool.query(
+          "SELECT COUNT(*)::int AS count FROM products WHERE COALESCE(status, 'active') <> 'deleted'"
+        ),
+        pool.query(
+          "SELECT COUNT(*)::int AS count FROM products WHERE COALESCE(hidden, FALSE) = TRUE AND COALESCE(status, 'active') <> 'deleted'"
+        ),
+        pool.query(
+          "SELECT COUNT(*)::int AS count FROM users WHERE COALESCE(banned, FALSE) = TRUE"
+        ),
+        pool.query(
+          "SELECT COUNT(*)::int AS count FROM users WHERE created_at >= CURRENT_DATE"
+        ),
+        pool.query(
+          "SELECT COUNT(*)::int AS count FROM products WHERE created_at >= CURRENT_DATE AND COALESCE(status, 'active') <> 'deleted'"
+        )
+      ]);
 
-app.post("/api/admin/users/:id/ban", requireTelegramAuth, syncTelegramUser, requireAdmin, async(req,res)=>{
-  await pool.query("UPDATE users SET banned=TRUE WHERE telegram_id=$1",[req.params.id]);
-  await addAdminLog(req.telegramUser.id,"ban_user",req.params.id);
-  res.json({ok:true});
-});
+    res.json({
+      ok: true,
+      users: users.rows[0].count,
+      products: products.rows[0].count,
+      hidden: hidden.rows[0].count,
+      banned: banned.rows[0].count,
+      newUsersToday: newUsersToday.rows[0].count,
+      newProductsToday: newProductsToday.rows[0].count
+    });
+  })
+);
 
-app.get("/api/admin/logs", requireTelegramAuth, syncTelegramUser, requireAdmin, async(req,res)=>{
- const r=await pool.query("SELECT * FROM admin_logs ORDER BY id DESC LIMIT 50");
- res.json({ok:true,logs:r.rows});
-});
+app.get(
+  "/api/admin/products",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const result = await pool.query(`
+      SELECT
+        id,
+        owner_id,
+        name,
+        price,
+        category,
+        owner_name,
+        owner_username,
+        created_at,
+        views,
+        hidden,
+        status
+      FROM products
+      WHERE COALESCE(status, 'active') <> 'deleted'
+      ORDER BY created_at DESC
+      LIMIT 100;
+    `);
 
-app.get("/api/admin/search", requireTelegramAuth, syncTelegramUser, requireAdmin, async(req,res)=>{
- const q="%"+String(req.query.q||"")+"%";
- const r=await pool.query("SELECT id,name,price,category,owner_name FROM products WHERE name ILIKE $1 ORDER BY id DESC LIMIT 50",[q]);
- res.json({ok:true,products:r.rows});
-});
+    res.json({
+      ok: true,
+      products: result.rows
+    });
+  })
+);
 
-app.get("/api/admin/growth", requireTelegramAuth, syncTelegramUser, requireAdmin, async(req,res)=>{
- const users=await pool.query("SELECT DATE(created_at) day, COUNT(*) count FROM users GROUP BY day ORDER BY day DESC LIMIT 14");
- const products=await pool.query("SELECT DATE(created_at) day, COUNT(*) count FROM products GROUP BY day ORDER BY day DESC LIMIT 14");
- res.json({ok:true,users:users.rows,products:products.rows});
-});
+app.patch(
+  "/api/admin/products/:id/hide",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const productId = normalizeText(req.params.id, 64);
+    const result = await pool.query(
+      `
+        UPDATE products
+        SET hidden = NOT COALESCE(hidden, FALSE),
+            updated_at = NOW()
+        WHERE id = $1
+          AND COALESCE(status, 'active') <> 'deleted'
+        RETURNING id, name, hidden;
+      `,
+      [productId]
+    );
 
-app.delete("/api/admin/products/:id", requireTelegramAuth, syncTelegramUser, requireAdmin, async (req,res)=>{
-  await pool.query("DELETE FROM products WHERE id=$1",[req.params.id]);
-  res.json({ok:true});
-});
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        error: "Объявление не найдено"
+      });
+    }
 
-app.get("/api/admin/users", requireTelegramAuth, syncTelegramUser, requireAdmin, async(req,res)=>{
-  const result = await pool.query(`
-    SELECT telegram_id,username,first_name,last_seen,banned
-    FROM users
-    ORDER BY created_at DESC
-    LIMIT 100
-  `);
-  res.json({ok:true,users:result.rows});
-});
+    const product = result.rows[0];
+    await addAdminLog(
+      req.telegramUser.id,
+      product.hidden ? "hide_product" : "show_product",
+      product.id,
+      product.name
+    );
+
+    res.json({
+      ok: true,
+      product
+    });
+  })
+);
+
+app.post(
+  "/api/admin/users/:id/ban",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const userId = normalizeText(req.params.id, 64);
+
+    if (ADMIN_IDS.includes(userId)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Администратора нельзя заблокировать"
+      });
+    }
+
+    const result = await pool.query(
+      `
+        UPDATE users
+        SET banned = NOT COALESCE(banned, FALSE)
+        WHERE telegram_id = $1
+        RETURNING telegram_id, username, first_name, banned;
+      `,
+      [userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        error: "Пользователь не найден"
+      });
+    }
+
+    const user = result.rows[0];
+    await addAdminLog(
+      req.telegramUser.id,
+      user.banned ? "ban_user" : "unban_user",
+      user.telegram_id,
+      user.username || user.first_name || ""
+    );
+
+    res.json({
+      ok: true,
+      user
+    });
+  })
+);
+
+app.get(
+  "/api/admin/logs",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const result = await pool.query(`
+      SELECT id, admin_id, action, target, details, created_at
+      FROM admin_logs
+      ORDER BY created_at DESC
+      LIMIT 100;
+    `);
+
+    res.json({
+      ok: true,
+      logs: result.rows
+    });
+  })
+);
+
+app.get(
+  "/api/admin/search",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const cleanQuery = normalizeText(req.query.q, 100);
+
+    if (!cleanQuery) {
+      return res.json({
+        ok: true,
+        products: [],
+        users: []
+      });
+    }
+
+    const query = `%${cleanQuery}%`;
+    const [products, users] = await Promise.all([
+      pool.query(
+        `
+          SELECT id, owner_id, name, price, category, owner_name, hidden, created_at
+          FROM products
+          WHERE COALESCE(status, 'active') <> 'deleted'
+            AND (
+              name ILIKE $1
+              OR category ILIKE $1
+              OR owner_name ILIKE $1
+              OR owner_username ILIKE $1
+            )
+          ORDER BY created_at DESC
+          LIMIT 50;
+        `,
+        [query]
+      ),
+      pool.query(
+        `
+          SELECT
+            u.telegram_id,
+            u.username,
+            u.first_name,
+            u.last_name,
+            u.last_seen,
+            u.created_at,
+            u.banned,
+            COUNT(p.id)::int AS products_count
+          FROM users u
+          LEFT JOIN products p
+            ON p.owner_id = u.telegram_id
+            AND COALESCE(p.status, 'active') <> 'deleted'
+          WHERE u.telegram_id ILIKE $1
+             OR u.username ILIKE $1
+             OR u.first_name ILIKE $1
+             OR u.last_name ILIKE $1
+          GROUP BY u.telegram_id
+          ORDER BY u.created_at DESC
+          LIMIT 50;
+        `,
+        [query]
+      )
+    ]);
+
+    res.json({
+      ok: true,
+      products: products.rows,
+      users: users.rows
+    });
+  })
+);
+
+app.get(
+  "/api/admin/growth",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const [users, products] = await Promise.all([
+      pool.query(`
+        SELECT
+          series.day::date AS day,
+          COUNT(u.telegram_id)::int AS count
+        FROM generate_series(
+          CURRENT_DATE - INTERVAL '13 days',
+          CURRENT_DATE,
+          INTERVAL '1 day'
+        ) AS series(day)
+        LEFT JOIN users u ON u.created_at::date = series.day::date
+        GROUP BY series.day
+        ORDER BY series.day ASC;
+      `),
+      pool.query(`
+        SELECT
+          series.day::date AS day,
+          COUNT(p.id)::int AS count
+        FROM generate_series(
+          CURRENT_DATE - INTERVAL '13 days',
+          CURRENT_DATE,
+          INTERVAL '1 day'
+        ) AS series(day)
+        LEFT JOIN products p
+          ON p.created_at::date = series.day::date
+          AND COALESCE(p.status, 'active') <> 'deleted'
+        GROUP BY series.day
+        ORDER BY series.day ASC;
+      `)
+    ]);
+
+    res.json({
+      ok: true,
+      users: users.rows,
+      products: products.rows
+    });
+  })
+);
+
+// Сохраняем совместимость со старым клиентом, но физически данные не удаляем.
+app.delete(
+  "/api/admin/products/:id",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const productId = normalizeText(req.params.id, 64);
+    const result = await pool.query(
+      `
+        UPDATE products
+        SET hidden = TRUE,
+            status = 'deleted',
+            updated_at = NOW()
+        WHERE id = $1
+        RETURNING id, name;
+      `,
+      [productId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        error: "Объявление не найдено"
+      });
+    }
+
+    await addAdminLog(
+      req.telegramUser.id,
+      "archive_product",
+      result.rows[0].id,
+      result.rows[0].name
+    );
+
+    res.json({
+      ok: true
+    });
+  })
+);
+
+app.get(
+  "/api/admin/users",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const result = await pool.query(`
+      SELECT
+        u.telegram_id,
+        u.username,
+        u.first_name,
+        u.last_name,
+        u.last_seen,
+        u.created_at,
+        u.banned,
+        COUNT(p.id)::int AS products_count
+      FROM users u
+      LEFT JOIN products p
+        ON p.owner_id = u.telegram_id
+        AND COALESCE(p.status, 'active') <> 'deleted'
+      GROUP BY u.telegram_id
+      ORDER BY u.created_at DESC
+      LIMIT 100;
+    `);
+
+    res.json({
+      ok: true,
+      users: result.rows
+    });
+  })
+);
 
 app.use("/api", (req, res) => {
   res.status(404).json({
