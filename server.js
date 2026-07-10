@@ -934,7 +934,7 @@ app.patch("/api/admin/products/:id/hide", requireTelegramAuth, syncTelegramUser,
 });
 
 app.post("/api/admin/users/:id/ban", requireTelegramAuth, syncTelegramUser, requireAdmin, async(req,res)=>{
-  await pool.query("UPDATE users SET banned=TRUE WHERE id=$1",[req.params.id]);
+  await pool.query("UPDATE users SET banned=TRUE WHERE telegram_id=$1",[req.params.id]);
   await addAdminLog(req.telegramUser.id,"ban_user",req.params.id);
   res.json({ok:true});
 });
@@ -963,9 +963,9 @@ app.delete("/api/admin/products/:id", requireTelegramAuth, syncTelegramUser, req
 
 app.get("/api/admin/users", requireTelegramAuth, syncTelegramUser, requireAdmin, async(req,res)=>{
   const result = await pool.query(`
-    SELECT id,telegram_id,username,first_name,last_seen
+    SELECT telegram_id,username,first_name,last_seen,banned
     FROM users
-    ORDER BY id DESC
+    ORDER BY created_at DESC
     LIMIT 100
   `);
   res.json({ok:true,users:result.rows});
