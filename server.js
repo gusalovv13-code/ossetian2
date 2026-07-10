@@ -869,6 +869,30 @@ app.post("/api/favorites", requireTelegramAuth, syncTelegramUser, async (req, re
 });
 
 
+
+// Admin enhancements
+async function ensureAdminFields(){
+  try{
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS banned BOOLEAN DEFAULT FALSE`);
+    await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS hidden BOOLEAN DEFAULT FALSE`);
+    await pool.query(`CREATE TABLE IF NOT EXISTS admin_logs(
+      id SERIAL PRIMARY KEY,
+      admin_id TEXT,
+      action TEXT,
+      target TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+  }catch(e){ console.error("Admin fields:", e.message); }
+}
+ensureAdminFields();
+
+async function addAdminLog(adminId, action, target){
+  await pool.query(
+    "INSERT INTO admin_logs(admin_id,action,target) VALUES($1,$2,$3)",
+    [String(adminId), action, String(target)]
+  );
+}
+
 const ADMIN_IDS = String(process.env.ADMIN_TELEGRAM_IDS || "")
   .split(",")
   .map(v => v.trim())
@@ -894,12 +918,42 @@ app.get("/api/admin/stats", requireTelegramAuth, syncTelegramUser, requireAdmin,
 
 app.get("/api/admin/products", requireTelegramAuth, syncTelegramUser, requireAdmin, async (req,res)=>{
   const result = await pool.query(`
-    SELECT id,name,price,category,owner_name,created_at
+    SELECT id,name,price,category,owner_name,created_at,hidden
     FROM products
     ORDER BY id DESC
     LIMIT 100
   `);
   res.json({ok:true, products:result.rows});
+});
+
+
+app.patch("/api/admin/products/:id/hide", requireTelegramAuth, syncTelegramUser, requireAdmin, async(req,res)=>{
+  await pool.query("UPDATE products SET hidden=NOT COALESCE(hidden,FALSE) WHERE id=$1",[req.params.id]);
+  await addAdminLog(req.telegramUser.id,"toggle_product_visibility",req.params.id);
+  res.json({ok:true});
+});
+
+app.post("/api/admin/users/:id/ban", requireTelegramAuth, syncTelegramUser, requireAdmin, async(req,res)=>{
+  await pool.query("UPDATE users SET banned=TRUE WHERE id=$1",[req.params.id]);
+  await addAdminLog(req.telegramUser.id,"ban_user",req.params.id);
+  res.json({ok:true});
+});
+
+app.get("/api/admin/logs", requireTelegramAuth, syncTelegramUser, requireAdmin, async(req,res)=>{
+ const r=await pool.query("SELECT * FROM admin_logs ORDER BY id DESC LIMIT 50");
+ res.json({ok:true,logs:r.rows});
+});
+
+app.get("/api/admin/search", requireTelegramAuth, syncTelegramUser, requireAdmin, async(req,res)=>{
+ const q="%"+String(req.query.q||"")+"%";
+ const r=await pool.query("SELECT id,name,price,category,owner_name FROM products WHERE name ILIKE $1 ORDER BY id DESC LIMIT 50",[q]);
+ res.json({ok:true,products:r.rows});
+});
+
+app.get("/api/admin/growth", requireTelegramAuth, syncTelegramUser, requireAdmin, async(req,res)=>{
+ const users=await pool.query("SELECT DATE(created_at) day, COUNT(*) count FROM users GROUP BY day ORDER BY day DESC LIMIT 14");
+ const products=await pool.query("SELECT DATE(created_at) day, COUNT(*) count FROM products GROUP BY day ORDER BY day DESC LIMIT 14");
+ res.json({ok:true,users:users.rows,products:products.rows});
 });
 
 app.delete("/api/admin/products/:id", requireTelegramAuth, syncTelegramUser, requireAdmin, async (req,res)=>{

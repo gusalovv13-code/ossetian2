@@ -389,6 +389,9 @@
   <div class="admin-actions">
 <button onclick="loadAdminPanel()" class="menu-card blue" type="button">🔄 Обновить</button>
 <button onclick="loadAdminUsers()" class="menu-card" type="button">👥 Пользователи</button>
+<input id="adminSearch" placeholder="🔎 Поиск товара" oninput="searchAdmin()">
+<button onclick="loadAdminLogs()" class="menu-card" type="button">📋 Логи</button>
+<button onclick="loadAdminGrowth()" class="menu-card" type="button">📈 Аналитика</button>
 </div>
   <div id="adminContent"></div>
 </section>

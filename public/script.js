@@ -1802,7 +1802,7 @@ function updateAdminMenu() {
     });
 }
 
-async async function loadAdminPanel(){
+async function loadAdminPanel(){
   try{
     const stats=await apiRequest("/api/admin/stats");
     document.getElementById("adminStats").innerHTML = `
@@ -1821,7 +1821,7 @@ async async function loadAdminPanel(){
             <small>${escapeHTML(p.owner_name || "Без имени")} • ${escapeHTML(p.category || "Без категории")}</small>
             <strong>${escapeHTML(p.price)} ₽</strong>
           </div>
-          <button class="danger-btn" onclick="deleteAdminProduct(${p.id})">🗑</button>
+          <button class="danger-btn" onclick="hideAdminProduct(${p.id})">👁</button><button class="danger-btn" onclick="deleteAdminProduct(${p.id})">🗑</button>
         </div>
       `).join("");
   }catch(e){
@@ -1843,4 +1843,23 @@ async function loadAdminUsers(){
 async function deleteAdminProduct(id){
   await apiRequest("/api/admin/products/"+id,{method:"DELETE"});
   loadAdminPanel();
+}
+
+
+async function hideAdminProduct(id){
+  await apiRequest("/api/admin/products/"+id+"/hide",{method:"PATCH"});
+  loadAdminPanel();
+}
+async function searchAdmin(){
+ const q=document.getElementById("adminSearch")?.value||"";
+ const d=await apiRequest("/api/admin/search?q="+encodeURIComponent(q));
+ document.getElementById("adminContent").innerHTML=d.products.map(p=>`<div class="admin-item"><b>${escapeHTML(p.name)}</b> ${escapeHTML(p.price)} ₽</div>`).join("");
+}
+async function loadAdminLogs(){
+ const d=await apiRequest("/api/admin/logs");
+ document.getElementById("adminContent").innerHTML=d.logs.map(l=>`<div class="admin-item">📋 ${escapeHTML(l.action)} ${escapeHTML(l.target)}</div>`).join("");
+}
+async function loadAdminGrowth(){
+ const d=await apiRequest("/api/admin/growth");
+ document.getElementById("adminContent").innerHTML=`<h3>📈 Рост</h3><pre>${JSON.stringify(d,null,2)}</pre>`;
 }
