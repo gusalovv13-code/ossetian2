@@ -79,6 +79,8 @@
     />
   </form>
 
+  <div id="catalogTopAds" class="catalog-top-ads" hidden></div>
+
   <div class="categories">
     <button class="active" type="button" data-category="Все">Все</button>
     <button type="button" data-category="Электроника">📱 Электроника</button>
@@ -104,6 +106,7 @@
 
       <h2 id="productName"></h2>
       <h2 id="productPrice" class="price"></h2>
+      <div id="productPriceHistory" class="product-price-history" hidden></div>
 
       <div id="productMeta" class="product-meta"></div>
       <div id="productBadges" class="product-badges"></div>
@@ -134,6 +137,8 @@
         <button id="messageBtn" class="outline" type="button">💬 Написать</button>
         <button id="callBtn" class="primary call-link" type="button">📞 Позвонить</button>
       </div>
+
+      <div id="productDetailAds" class="product-detail-ads" hidden></div>
 
       <section id="sellerOtherProductsSection" class="related-section">
         <div class="related-heading">
@@ -474,7 +479,7 @@
     <div>
       <span class="admin-kicker">Панель управления</span>
       <h2>Администратор</h2>
-      <p>Пользователи, объявления, журнал действий и динамика проекта.</p>
+      <p>Объявления, автомодерация, жалобы, рекламные кампании и аналитика проекта.</p>
     </div>
     <button
       class="admin-refresh-button"
@@ -506,6 +511,8 @@
     <div class="admin-tabs" role="tablist" aria-label="Разделы админ-панели">
       <button data-admin-tab="products" class="active" onclick="loadAdminPanel()" type="button">📦 Объявления</button>
       <button data-admin-tab="reports" onclick="loadAdminReports()" type="button">⚑ Жалобы</button>
+      <button data-admin-tab="moderation" onclick="loadAdminModeration()" type="button">🛡 Автомодерация</button>
+      <button data-admin-tab="ads" onclick="loadAdminAds()" type="button">📣 Реклама</button>
       <button data-admin-tab="users" onclick="loadAdminUsers()" type="button">👥 Пользователи</button>
       <button data-admin-tab="logs" onclick="loadAdminLogs()" type="button">📋 Журнал</button>
       <button data-admin-tab="growth" onclick="loadAdminGrowth()" type="button">📈 Аналитика</button>
@@ -560,6 +567,6 @@
 
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">‹</div>
 
-  <script src="script.js?v=1100"></script>
+  <script src="script.js?v=1110"></script>
 </body>
 </html>

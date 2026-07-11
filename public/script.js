@@ -83,6 +83,8 @@ const state = {
   favorites: [],
   similarProducts: [],
   sellerOtherProducts: [],
+  priceHistory: [],
+  ads: [],
   currentProductImageIndex: 0,
   myAdsTab: "active",
   editingProductId: null,
@@ -137,6 +139,106 @@ async function loadConfig() {
   } catch (error) {
     console.error("Не удалось загрузить конфигурацию:", error);
   }
+}
+
+function getAdClientKey() {
+  let key = localStorage.getItem("adClientKey");
+  if (!key) {
+    key = `client-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+    localStorage.setItem("adClientKey", key);
+  }
+  return key;
+}
+
+async function loadAds() {
+  try {
+    const data = await apiRequest("/api/ads");
+    state.ads = data.ads || [];
+    renderCatalogTopAds();
+    renderProductDetailAds();
+  } catch (error) {
+    console.error("Не удалось загрузить рекламу:", error);
+    state.ads = [];
+  }
+}
+
+async function trackAdEvent(adId, eventType) {
+  if (!adId) return;
+  const sessionKey = `ad-${eventType}-${adId}`;
+  if (eventType === "impression" && sessionStorage.getItem(sessionKey)) return;
+
+  try {
+    await apiRequest(`/api/ads/${encodeURIComponent(adId)}/${eventType}`, {
+      method: "POST",
+      body: JSON.stringify({ clientKey: getAdClientKey() })
+    });
+    if (eventType === "impression") sessionStorage.setItem(sessionKey, "1");
+  } catch (error) {
+    console.error(`Ad ${eventType} tracking error:`, error);
+  }
+}
+
+function getAdsByPlacement(placement) {
+  return state.ads.filter(ad => ad.placement === placement && ad.status === "active");
+}
+
+function renderAdCard(ad, variant = "feed") {
+  const adId = escapeHTML(ad.id || "");
+  const image = ad.imageUrl ? safeImageUrl(ad.imageUrl) : "";
+  queueMicrotask(() => trackAdEvent(ad.id, "impression"));
+
+  return `
+    <article class="advertising-card advertising-${escapeHTML(variant)}" onclick="openAdCampaign('${adId}')">
+      ${image ? `<img src="${escapeHTML(image)}" alt="${escapeHTML(ad.title || "Реклама")}" loading="lazy">` : '<div class="advertising-placeholder">📣</div>'}
+      <div class="advertising-content">
+        <span class="advertising-label">Реклама</span>
+        <h4>${escapeHTML(ad.title || "Рекламное предложение")}</h4>
+        ${ad.description ? `<p>${escapeHTML(ad.description)}</p>` : ""}
+        <button type="button" onclick="event.stopPropagation(); openAdCampaign('${adId}')">${escapeHTML(ad.buttonText || "Подробнее")}</button>
+      </div>
+    </article>
+  `;
+}
+
+async function openAdCampaign(adId) {
+  const ad = state.ads.find(item => item.id === adId);
+  if (!ad) return;
+  await trackAdEvent(ad.id, "click");
+
+  if (ad.linkedProductId) {
+    await openProduct(ad.linkedProductId);
+    return;
+  }
+  if (ad.targetUrl) {
+    if (tg?.openLink) tg.openLink(ad.targetUrl);
+    else window.open(ad.targetUrl, "_blank", "noopener,noreferrer");
+  }
+}
+
+function renderCatalogTopAds() {
+  const root = document.getElementById("catalogTopAds");
+  if (!root) return;
+  if (state.page !== "catalog") {
+    root.hidden = true;
+    root.innerHTML = "";
+    return;
+  }
+  const ads = getAdsByPlacement("catalog_top").slice(0, 2);
+  root.hidden = ads.length === 0;
+  root.innerHTML = ads.map(ad => renderAdCard(ad, "banner")).join("");
+}
+
+function renderProductDetailAds() {
+  const root = document.getElementById("productDetailAds");
+  if (!root) return;
+  if (state.page !== "product" || !state.openedProductId) {
+    root.hidden = true;
+    root.innerHTML = "";
+    return;
+  }
+  const ads = getAdsByPlacement("product_detail").slice(0, 1);
+  root.hidden = ads.length === 0;
+  root.innerHTML = ads.map(ad => renderAdCard(ad, "detail")).join("");
 }
 
 async function loadProducts() {
@@ -627,6 +729,8 @@ function compressImage(file, maxDimension = 900, quality = 0.72) {
 ======================= */
 
 function render() {
+  renderCatalogTopAds();
+  renderProductDetailAds();
   renderProducts();
   renderMyAds();
   renderFavorites();
@@ -650,12 +754,25 @@ function renderProducts() {
     return;
   }
 
-  productList.innerHTML = products
-    .map(product => getProductCard(product))
-    .join("");
+  const feedAds = getAdsByPlacement("catalog_feed");
+  const markup = [];
+  let adIndex = 0;
+
+  products.forEach((product, index) => {
+    markup.push(getProductCard(product));
+    const ad = feedAds[adIndex % Math.max(feedAds.length, 1)];
+    if (ad && (index + 1) % Math.max(2, Number(ad.insertEvery) || 6) === 0) {
+      markup.push(renderAdCard(ad, "feed"));
+      adIndex += 1;
+    }
+  });
+
+  productList.innerHTML = markup.join("");
 }
 
-function getProductStatusLabel(status) {
+function getProductStatusLabel(status, product = null) {
+  if (product?.moderationStatus === "blocked") return "Заблокировано автомодерацией";
+  if (product?.moderationStatus === "rejected") return "Отклонено модератором";
   const labels = {
     active: "Активно",
     sold: "Продано",
@@ -673,6 +790,10 @@ function getProductCard(product, options = {}) {
   const location = escapeHTML(product.location || "Владикавказ");
   const image = escapeHTML(safeImageUrl(images[0]));
   const price = escapeHTML(formatPrice(product.price) || product.price || "");
+  const previousPrice = escapeHTML(formatPrice(product.previousPrice) || product.previousPrice || "");
+  const priceDropMarkup = product.priceDropped
+    ? `<span class="price-drop-card-badge">Цена снизилась${product.priceDropPercent ? ` −${Number(product.priceDropPercent)}%` : ""}</span>`
+    : "";
   const status = product.status || "active";
 
   let actions = `
@@ -685,9 +806,11 @@ function getProductCard(product, options = {}) {
   `;
 
   if (options.ownerActions) {
-    const statusAction = status === "active"
-      ? `<button type="button" class="card-action status" title="Отметить проданным" onclick="event.stopPropagation(); changeAdStatus('${productId}', 'sold')">✓</button>`
-      : `<button type="button" class="card-action status" title="Опубликовать снова" onclick="event.stopPropagation(); changeAdStatus('${productId}', 'active')">↻</button>`;
+    const statusAction = product.moderationStatus === "blocked"
+      ? `<button type="button" class="card-action status" title="Исправьте объявление перед публикацией" disabled>🛡</button>`
+      : status === "active"
+        ? `<button type="button" class="card-action status" title="Отметить проданным" onclick="event.stopPropagation(); changeAdStatus('${productId}', 'sold')">✓</button>`
+        : `<button type="button" class="card-action status" title="Опубликовать снова" onclick="event.stopPropagation(); changeAdStatus('${productId}', 'active')">↻</button>`;
 
     actions = `
       <div class="product-card-actions">
@@ -702,10 +825,12 @@ function getProductCard(product, options = {}) {
     <div class="product-card ${status !== "active" ? "is-inactive" : ""}" onclick="openProduct('${productId}')">
       <img src="${image}" alt="${name}" loading="lazy">
       <div>
+        ${priceDropMarkup}
         <h4>${name}</h4>
-        <b>${price}</b>
+        <div class="card-price-row"><b>${price}</b>${product.priceDropped && previousPrice ? `<s>${previousPrice}</s>` : ""}</div>
         <p>${location} · ${getTimeAgo(product.createdAt)}</p>
-        ${options.showStatus ? `<p class="product-status status-${escapeHTML(status)}">${escapeHTML(product.hidden ? "Скрыто модератором" : getProductStatusLabel(status))}</p>` : ""}
+        ${options.showStatus ? `<p class="product-status status-${escapeHTML(status)}">${escapeHTML(product.moderationStatus === "blocked" ? getProductStatusLabel(status, product) : (product.hidden ? "Скрыто модератором" : getProductStatusLabel(status, product)))}</p>` : ""}
+        ${options.showStatus && product.moderationStatus === "blocked" && product.moderationReason ? `<p class="moderation-owner-reason">${escapeHTML(product.moderationReason)}</p>` : ""}
       </div>
       ${actions}
     </div>
@@ -1071,6 +1196,7 @@ function renderProductDetails(product) {
   const productPhoneLine = document.getElementById("productPhoneLine");
   const productMeta = document.getElementById("productMeta");
   const productBadges = document.getElementById("productBadges");
+  const productPriceHistory = document.getElementById("productPriceHistory");
   const specificationsRoot = document.getElementById("productSpecifications");
   const specificationsSection = document.getElementById("productSpecificationsSection");
   const thumbs = document.getElementById("productThumbs");
@@ -1080,7 +1206,19 @@ function renderProductDetails(product) {
   const sellerProductsButton = document.getElementById("openSellerProductsBtn");
 
   if (nameEl) nameEl.textContent = product.name || "Без названия";
-  if (priceEl) priceEl.textContent = product.price || "Цена не указана";
+  if (priceEl) {
+    priceEl.innerHTML = product.priceDropped
+      ? `<span>${escapeHTML(product.price || "Цена не указана")}</span><s>${escapeHTML(product.previousPrice || "")}</s><em>Цена снизилась${product.priceDropPercent ? ` на ${Number(product.priceDropPercent)}%` : ""}</em>`
+      : escapeHTML(product.price || "Цена не указана");
+  }
+  if (productPriceHistory) {
+    const drops = (state.priceHistory || []).filter(item => Number(item.new_price_amount) < Number(item.old_price_amount));
+    productPriceHistory.hidden = drops.length === 0;
+    productPriceHistory.innerHTML = drops.length ? `
+      <b>История снижения цены</b>
+      ${drops.slice(0, 4).map(item => `<span><s>${escapeHTML(item.old_price || "")}</s> → <strong>${escapeHTML(item.new_price || "")}</strong> · ${escapeHTML(formatProductDate(new Date(item.created_at).getTime()))}</span>`).join("")}
+    ` : "";
+  }
   if (descEl) descEl.textContent = product.desc || "Описание не добавлено";
 
   if (thumbs) {
@@ -1114,7 +1252,8 @@ function renderProductDetails(product) {
       `Состояние: ${getConditionLabel(product.condition)}`,
       product.negotiable ? "Возможен торг" : "Цена без торга",
       product.delivery ? "Есть доставка" : "Самовывоз",
-      product.district ? `Район: ${product.district}` : ""
+      product.district ? `Район: ${product.district}` : "",
+      product.priceDropped ? `Цена снижена${product.priceDropPercent ? ` на ${Number(product.priceDropPercent)}%` : ""}` : ""
     ].filter(Boolean);
 
     productBadges.innerHTML = badges
@@ -1218,6 +1357,7 @@ function renderProductDetails(product) {
 
   renderRelatedProducts("sellerOtherProducts", "sellerOtherProductsSection", state.sellerOtherProducts);
   renderRelatedProducts("similarProducts", "similarProductsSection", state.similarProducts);
+  renderProductDetailAds();
   state.currentProductImageIndex = 0;
   showProductImage(0);
 }
@@ -1241,6 +1381,7 @@ async function openProduct(id) {
     product = details.product;
     state.similarProducts = details.similarProducts || [];
     state.sellerOtherProducts = details.sellerProducts || [];
+    state.priceHistory = details.priceHistory || [];
     cacheProduct(product);
   } catch (error) {
     console.error("Не удалось загрузить карточку товара:", error);
@@ -1251,6 +1392,7 @@ async function openProduct(id) {
     }
     state.similarProducts = [];
     state.sellerOtherProducts = [];
+    state.priceHistory = [];
   }
 
   try {
@@ -1625,7 +1767,7 @@ async function publishAd(status = "active") {
     }
 
     state.products = state.products.filter(product => product.id !== savedProduct.id);
-    if (savedProduct.status === "active" && !savedProduct.hidden) {
+    if (savedProduct.status === "active" && !savedProduct.hidden && savedProduct.moderationStatus !== "blocked") {
       state.products.unshift(savedProduct);
     }
 
@@ -1633,7 +1775,7 @@ async function publishAd(status = "active") {
       product => product.id === savedProduct.id
     );
     if (favoriteIndex >= 0) {
-      if (savedProduct.status === "active" && !savedProduct.hidden) {
+      if (savedProduct.status === "active" && !savedProduct.hidden && savedProduct.moderationStatus !== "blocked") {
         state.favoriteProducts[favoriteIndex] = savedProduct;
       } else {
         state.favoriteProducts.splice(favoriteIndex, 1);
@@ -1646,7 +1788,11 @@ async function publishAd(status = "active") {
     clearCreateForm();
     showPage("myAds");
 
-    if (wasEditing) {
+    if (data.moderation?.blocked) {
+      alert(`Объявление сохранено, но автоматически заблокировано. Причина: ${data.moderation.reason || "нарушение правил публикации"}. Исправьте текст или дождитесь решения модератора.`);
+    } else if (data.priceChange?.dropped) {
+      alert("Изменения сохранены. На объявлении появилась отметка «Цена снизилась» ✅");
+    } else if (wasEditing) {
       alert("Изменения сохранены ✅");
     } else {
       alert(targetStatus === "draft" ? "Черновик сохранён ✅" : "Объявление опубликовано ✅");
@@ -2368,6 +2514,7 @@ async function initApp() {
 
   await Promise.all([
     loadConfig(),
+    loadAds(),
     loadProducts(),
     loadMyProducts(),
     loadFavorites()
@@ -2668,6 +2815,21 @@ function renderAdminStats(stats) {
       <div><b>${Number(stats.pendingReports) || 0}</b><small>Жалобы</small></div>
       <em>Ожидают решения</em>
     </div>
+    <div class="admin-stat-card admin-stat-warning">
+      <span>🛡</span>
+      <div><b>${Number(stats.pendingModeration) || 0}</b><small>Автоблокировки</small></div>
+      <em>Нужна проверка</em>
+    </div>
+    <div class="admin-stat-card">
+      <span>📣</span>
+      <div><b>${Number(stats.activeAds) || 0}</b><small>Реклама</small></div>
+      <em>Активные кампании</em>
+    </div>
+    <div class="admin-stat-card admin-stat-revenue">
+      <span>₽</span>
+      <div><b>${Number(stats.adRevenue || 0).toLocaleString("ru-RU", { maximumFractionDigits: 2 })}</b><small>Доход от рекламы</small></div>
+      <em>Расчёт по тарифам</em>
+    </div>
   `;
 }
 
@@ -2708,6 +2870,8 @@ function renderAdminProducts(products = []) {
               ${Number(product.report_count) > 0
                 ? `<span class="admin-badge warning">⚑ ${Number(product.report_count)}</span>`
                 : ""}
+              ${product.moderation_status === "blocked" ? '<span class="admin-badge danger">Автоблокировка</span>' : ""}
+              ${product.previous_price ? '<span class="admin-badge price-drop">Цена снижена</span>' : ""}
             </div>
             <p>${escapeHTML(product.owner_name || "Без имени")} · ${escapeHTML(product.category || "Без категории")}</p>
             <div class="admin-record-meta">
@@ -2789,7 +2953,16 @@ function getAdminActionLabel(action) {
     unban_user: "Разблокировал пользователя",
     archive_product: "Архивировал объявление",
     report_resolved: "Обработал жалобу",
-    report_rejected: "Отклонил жалобу"
+    report_rejected: "Отклонил жалобу",
+    moderation_approve: "Одобрил автоблокировку",
+    moderation_reject: "Отклонил объявление",
+    moderation_rule_create: "Добавил правило модерации",
+    moderation_rule_toggle: "Изменил правило модерации",
+    moderation_rule_delete: "Удалил правило модерации",
+    moderation_settings_update: "Обновил автомодерацию",
+    ad_create: "Создал рекламную кампанию",
+    ad_update: "Обновил рекламную кампанию",
+    ad_delete: "Удалил рекламную кампанию"
   };
 
   return labels[action] || action || "Неизвестное действие";
@@ -2901,6 +3074,248 @@ async function moderateAdminReport(id, decision, button) {
     alert(error.message || "Не удалось обработать жалобу");
     if (button) button.disabled = false;
   }
+}
+
+
+function renderAdminModeration(data) {
+  const root = document.getElementById("adminContent");
+  if (!root) return;
+  const settings = data.settings || {};
+  const events = data.events || [];
+  const rules = data.rules || [];
+
+  root.innerHTML = `
+    <section class="admin-config-card">
+      <div class="admin-section-heading"><div><b>Автоматическая модерация</b><small>Ссылки, контакты, email и запрещённые выражения</small></div></div>
+      <div class="moderation-switches">
+        <label><input id="moderationEnabled" type="checkbox" ${settings.enabled !== false ? "checked" : ""}> Автомодерация включена</label>
+        <label><input id="moderationLinks" type="checkbox" ${settings.block_links !== false ? "checked" : ""}> Блокировать ссылки и домены</label>
+        <label><input id="moderationContacts" type="checkbox" ${settings.block_contacts !== false ? "checked" : ""}> Блокировать телефоны и @username в тексте</label>
+        <label><input id="moderationEmails" type="checkbox" ${settings.block_emails !== false ? "checked" : ""}> Блокировать email</label>
+      </div>
+      <button class="admin-action-button restore" type="button" onclick="saveModerationSettings(this)">Сохранить настройки</button>
+    </section>
+
+    <section class="admin-config-card">
+      <div class="admin-section-heading"><div><b>Запрещённые слова и фразы</b><small>Совпадение проверяется без учёта регистра и буквы ё</small></div></div>
+      <div class="moderation-rule-form">
+        <input id="moderationRulePattern" maxlength="200" placeholder="Слово, фраза или домен">
+        <select id="moderationRuleType">
+          <option value="word">Отдельное слово</option>
+          <option value="phrase">Фраза</option>
+          <option value="domain">Домен</option>
+        </select>
+        <input id="moderationRuleNote" maxlength="500" placeholder="Комментарий для модераторов">
+        <button class="admin-action-button" type="button" onclick="createModerationRule(this)">Добавить</button>
+      </div>
+      <div class="moderation-rule-list">
+        ${rules.length ? rules.map(rule => `
+          <div class="moderation-rule-row ${rule.is_active ? "" : "is-muted"}">
+            <div><b>${escapeHTML(rule.pattern)}</b><small>${escapeHTML(rule.match_type)}${rule.note ? ` · ${escapeHTML(rule.note)}` : ""}</small></div>
+            <button type="button" class="admin-action-button ${rule.is_active ? "danger" : "restore"}" onclick="toggleModerationRule('${escapeHTML(rule.id)}', this)">${rule.is_active ? "Выключить" : "Включить"}</button>
+            <button type="button" class="admin-action-button danger" onclick="deleteModerationRule('${escapeHTML(rule.id)}', this)">Удалить</button>
+          </div>`).join("") : '<p class="muted">Правил пока нет.</p>'}
+      </div>
+    </section>
+
+    <div class="admin-section-heading"><div><b>Очередь автоблокировок</b><small>${events.length} объявлений</small></div></div>
+    <div class="admin-list">
+      ${events.length ? events.map(event => `
+        <article class="admin-record admin-moderation-record">
+          ${event.image ? `<img class="admin-record-image" src="${escapeHTML(safeImageUrl(event.image))}" alt="">` : ""}
+          <div class="admin-record-main">
+            <div class="admin-record-title-row"><b>${escapeHTML(event.product_name || "Объявление")}</b><span class="admin-badge danger">Заблокировано</span></div>
+            <p>${escapeHTML(event.reason || "Нарушение правил")}</p>
+            <small>${escapeHTML(event.description || "")}</small>
+            <div class="admin-record-meta"><span>${escapeHTML(event.owner_name || event.owner_username || event.user_id)}</span><span>${escapeHTML(formatAdminDate(event.created_at))}</span></div>
+            <input id="moderationNote-${escapeHTML(event.id)}" maxlength="1000" placeholder="Комментарий модератора">
+            <div class="admin-report-actions">
+              <button type="button" class="admin-action-button restore" onclick="reviewAutoModeration('${escapeHTML(event.id)}','approve',this)">Одобрить публикацию</button>
+              <button type="button" class="admin-action-button danger" onclick="reviewAutoModeration('${escapeHTML(event.id)}','reject',this)">Отклонить</button>
+            </div>
+          </div>
+        </article>`).join("") : '<div class="admin-state"><span>✅</span><b>Очередь пуста</b><small>Автомодерация пока не поймала новых нарушений.</small></div>'}
+    </div>
+  `;
+}
+
+async function saveModerationSettings(button) {
+  if (button) button.disabled = true;
+  try {
+    await apiRequest("/api/admin/moderation/settings", {
+      method: "PATCH",
+      body: JSON.stringify({
+        enabled: document.getElementById("moderationEnabled")?.checked,
+        blockLinks: document.getElementById("moderationLinks")?.checked,
+        blockContacts: document.getElementById("moderationContacts")?.checked,
+        blockEmails: document.getElementById("moderationEmails")?.checked
+      })
+    });
+    await loadAdminModeration();
+  } catch (error) { alert(error.message); if (button) button.disabled = false; }
+}
+
+async function createModerationRule(button) {
+  const pattern = document.getElementById("moderationRulePattern")?.value.trim() || "";
+  const matchType = document.getElementById("moderationRuleType")?.value || "word";
+  const note = document.getElementById("moderationRuleNote")?.value.trim() || "";
+  if (!pattern) return alert("Введите запрещённое выражение");
+  if (button) button.disabled = true;
+  try {
+    await apiRequest("/api/admin/moderation/rules", { method: "POST", body: JSON.stringify({ pattern, matchType, note }) });
+    await loadAdminModeration();
+  } catch (error) { alert(error.message); if (button) button.disabled = false; }
+}
+
+async function toggleModerationRule(id, button) {
+  if (button) button.disabled = true;
+  try { await apiRequest(`/api/admin/moderation/rules/${encodeURIComponent(id)}`, { method: "PATCH" }); await loadAdminModeration(); }
+  catch (error) { alert(error.message); if (button) button.disabled = false; }
+}
+
+async function deleteModerationRule(id, button) {
+  if (!confirm("Удалить правило модерации?")) return;
+  if (button) button.disabled = true;
+  try { await apiRequest(`/api/admin/moderation/rules/${encodeURIComponent(id)}`, { method: "DELETE" }); await loadAdminModeration(); }
+  catch (error) { alert(error.message); if (button) button.disabled = false; }
+}
+
+async function reviewAutoModeration(id, decision, button) {
+  if (decision === "reject" && !confirm("Отклонить и архивировать объявление?")) return;
+  const adminNote = document.getElementById(`moderationNote-${id}`)?.value.trim() || "";
+  if (button) button.disabled = true;
+  try {
+    await apiRequest(`/api/admin/moderation/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ decision, adminNote }) });
+    await loadAdminModeration();
+  } catch (error) { alert(error.message); if (button) button.disabled = false; }
+}
+
+function adDateInput(timestamp) {
+  if (!timestamp) return "";
+  const date = new Date(timestamp);
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
+let adminAdsCache = [];
+
+function renderAdminAds(ads = []) {
+  adminAdsCache = ads;
+  const root = document.getElementById("adminContent");
+  if (!root) return;
+  root.innerHTML = `
+    <section class="admin-config-card ad-campaign-editor">
+      <div class="admin-section-heading"><div><b>Новая рекламная кампания</b><small>Баннеры честно помечаются как реклама</small></div></div>
+      <input id="adCampaignId" type="hidden">
+      <div class="ad-editor-grid">
+        <label>Название<input id="adCampaignTitle" maxlength="120" placeholder="Например: Доставка мебели"></label>
+        <label>Кнопка<input id="adCampaignButton" maxlength="40" value="Подробнее"></label>
+        <label class="wide">Описание<textarea id="adCampaignDescription" maxlength="1000" placeholder="Короткий рекламный текст"></textarea></label>
+        <label class="wide">URL изображения<input id="adCampaignImage" placeholder="https://..."></label>
+        <label class="wide">Внешняя ссылка<input id="adCampaignTarget" placeholder="https://..."></label>
+        <label>ID объявления<input id="adCampaignProduct" maxlength="64" placeholder="Вместо внешней ссылки"></label>
+        <label>Размещение<select id="adCampaignPlacement"><option value="catalog_top">Верх каталога</option><option value="catalog_feed">В ленте товаров</option><option value="product_detail">В карточке товара</option></select></label>
+        <label>Статус<select id="adCampaignStatus"><option value="draft">Черновик</option><option value="active">Активна</option><option value="paused">На паузе</option><option value="ended">Завершена</option></select></label>
+        <label>Начало<input id="adCampaignStart" type="datetime-local"></label>
+        <label>Окончание<input id="adCampaignEnd" type="datetime-local"></label>
+        <label>Приоритет<input id="adCampaignPriority" type="number" min="-100" max="100" value="0"></label>
+        <label>Вставлять через товаров<input id="adCampaignEvery" type="number" min="2" max="20" value="6"></label>
+        <label>Лимит показов<input id="adCampaignLimit" type="number" min="0" value="0"><small>0 — без лимита</small></label>
+        <label>Модель оплаты<select id="adCampaignBilling"><option value="flat">Фиксированная сумма</option><option value="cpm">За 1000 показов (CPM)</option><option value="cpc">За клик (CPC)</option></select></label>
+        <label>Тариф, ₽<input id="adCampaignRate" type="number" min="0" step="0.01" value="0"></label>
+        <label class="ad-paid-label"><input id="adCampaignPaid" type="checkbox"> Кампания оплачена</label>
+      </div>
+      <div class="admin-report-actions"><button type="button" class="admin-action-button restore" onclick="clearAdCampaignForm()">Очистить</button><button type="button" class="admin-action-button" onclick="saveAdCampaign(this)">Сохранить кампанию</button></div>
+    </section>
+    <div class="admin-section-heading"><div><b>Рекламные кампании</b><small>${ads.length} записей</small></div></div>
+    <div class="admin-list">
+      ${ads.length ? ads.map(ad => `
+        <article class="admin-record ad-admin-record">
+          ${ad.imageUrl ? `<img class="admin-record-image" src="${escapeHTML(safeImageUrl(ad.imageUrl))}" alt="">` : '<div class="admin-record-image advertising-placeholder">📣</div>'}
+          <div class="admin-record-main">
+            <div class="admin-record-title-row"><b>${escapeHTML(ad.title)}</b><span class="admin-badge ${ad.status === "active" ? "success" : "warning"}">${escapeHTML(ad.status)}</span></div>
+            <p>${escapeHTML(ad.description || "Без описания")}</p>
+            <div class="admin-record-meta"><span>${escapeHTML(ad.placement)}</span><span>👁 ${Number(ad.impressions)||0}</span><span>🖱 ${Number(ad.clicks)||0}</span><strong>CTR ${Number(ad.ctr)||0}%</strong><strong>Доход ${Number(ad.estimatedRevenue||0).toLocaleString("ru-RU", {maximumFractionDigits:2})} ₽</strong><span class="admin-badge ${ad.isPaid ? "success" : "warning"}">${ad.isPaid ? "Оплачено" : "Не оплачено"}</span></div>
+            <div class="admin-report-actions"><button type="button" class="admin-action-button restore" onclick="editAdCampaignById('${escapeHTML(ad.id)}')">Редактировать</button><button type="button" class="admin-action-button danger" onclick="deleteAdCampaign('${escapeHTML(ad.id)}',this)">Удалить</button></div>
+          </div>
+        </article>`).join("") : '<div class="admin-state"><span>📣</span><b>Рекламы пока нет</b><small>Создайте первую кампанию выше.</small></div>'}
+    </div>
+  `;
+}
+
+function getAdCampaignFormData() {
+  return {
+    title: document.getElementById("adCampaignTitle")?.value.trim() || "",
+    description: document.getElementById("adCampaignDescription")?.value.trim() || "",
+    imageUrl: document.getElementById("adCampaignImage")?.value.trim() || "",
+    targetUrl: document.getElementById("adCampaignTarget")?.value.trim() || "",
+    linkedProductId: document.getElementById("adCampaignProduct")?.value.trim() || "",
+    buttonText: document.getElementById("adCampaignButton")?.value.trim() || "Подробнее",
+    placement: document.getElementById("adCampaignPlacement")?.value || "catalog_feed",
+    status: document.getElementById("adCampaignStatus")?.value || "draft",
+    startsAt: document.getElementById("adCampaignStart")?.value || null,
+    endsAt: document.getElementById("adCampaignEnd")?.value || null,
+    priority: Number(document.getElementById("adCampaignPriority")?.value) || 0,
+    insertEvery: Number(document.getElementById("adCampaignEvery")?.value) || 6,
+    maxImpressions: Number(document.getElementById("adCampaignLimit")?.value) || 0,
+    billingModel: document.getElementById("adCampaignBilling")?.value || "flat",
+    rateAmount: Number(document.getElementById("adCampaignRate")?.value) || 0,
+    isPaid: Boolean(document.getElementById("adCampaignPaid")?.checked)
+  };
+}
+
+async function saveAdCampaign(button) {
+  const id = document.getElementById("adCampaignId")?.value || "";
+  const data = getAdCampaignFormData();
+  if (!data.title || (!data.targetUrl && !data.linkedProductId)) return alert("Укажите название и ссылку либо ID объявления");
+  if (button) button.disabled = true;
+  try {
+    await apiRequest(id ? `/api/admin/ads/${encodeURIComponent(id)}` : "/api/admin/ads", { method: id ? "PATCH" : "POST", body: JSON.stringify(data) });
+    await Promise.all([loadAdminAds(), loadAds()]);
+  } catch (error) { alert(error.message); if (button) button.disabled = false; }
+}
+
+function editAdCampaignById(id) {
+  const ad = adminAdsCache.find(item => item.id === id);
+  if (!ad) return;
+  document.getElementById("adCampaignId").value = ad.id || "";
+  document.getElementById("adCampaignTitle").value = ad.title || "";
+  document.getElementById("adCampaignDescription").value = ad.description || "";
+  document.getElementById("adCampaignImage").value = ad.imageUrl || "";
+  document.getElementById("adCampaignTarget").value = ad.targetUrl || "";
+  document.getElementById("adCampaignProduct").value = ad.linkedProductId || "";
+  document.getElementById("adCampaignButton").value = ad.buttonText || "Подробнее";
+  document.getElementById("adCampaignPlacement").value = ad.placement || "catalog_feed";
+  document.getElementById("adCampaignStatus").value = ad.status || "draft";
+  document.getElementById("adCampaignStart").value = adDateInput(ad.startsAt);
+  document.getElementById("adCampaignEnd").value = adDateInput(ad.endsAt);
+  document.getElementById("adCampaignPriority").value = ad.priority || 0;
+  document.getElementById("adCampaignEvery").value = ad.insertEvery || 6;
+  document.getElementById("adCampaignLimit").value = ad.maxImpressions || 0;
+  document.getElementById("adCampaignBilling").value = ad.billingModel || "flat";
+  document.getElementById("adCampaignRate").value = ad.rateAmount || 0;
+  document.getElementById("adCampaignPaid").checked = Boolean(ad.isPaid);
+  document.querySelector(".ad-campaign-editor")?.scrollIntoView({ behavior: "smooth" });
+}
+
+function clearAdCampaignForm() {
+  ["adCampaignId","adCampaignTitle","adCampaignDescription","adCampaignImage","adCampaignTarget","adCampaignProduct","adCampaignStart","adCampaignEnd"].forEach(id => { const el=document.getElementById(id); if(el) el.value=""; });
+  const button=document.getElementById("adCampaignButton"); if(button) button.value="Подробнее";
+  const placement=document.getElementById("adCampaignPlacement"); if(placement) placement.value="catalog_feed";
+  const status=document.getElementById("adCampaignStatus"); if(status) status.value="draft";
+  const priority=document.getElementById("adCampaignPriority"); if(priority) priority.value="0";
+  const every=document.getElementById("adCampaignEvery"); if(every) every.value="6";
+  const limit=document.getElementById("adCampaignLimit"); if(limit) limit.value="0";
+  const billing=document.getElementById("adCampaignBilling"); if(billing) billing.value="flat";
+  const rate=document.getElementById("adCampaignRate"); if(rate) rate.value="0";
+  const paid=document.getElementById("adCampaignPaid"); if(paid) paid.checked=false;
+}
+
+async function deleteAdCampaign(id, button) {
+  if (!confirm("Удалить рекламную кампанию и её статистику?")) return;
+  if (button) button.disabled = true;
+  try { await apiRequest(`/api/admin/ads/${encodeURIComponent(id)}`, { method: "DELETE" }); await Promise.all([loadAdminAds(), loadAds()]); }
+  catch (error) { alert(error.message); if (button) button.disabled = false; }
 }
 
 function renderAdminLogs(logs = []) {
@@ -3021,6 +3436,31 @@ async function loadAdminReports() {
     console.error("Admin reports error:", error);
     setAdminError(error);
   }
+}
+
+
+async function loadAdminModeration() {
+  const requestVersion = ++adminState.requestVersion;
+  setAdminActiveTab("moderation");
+  setAdminLoading("Загружаем автомодерацию…");
+  try {
+    const [stats, data] = await Promise.all([apiRequest("/api/admin/stats"), apiRequest("/api/admin/moderation")]);
+    if (requestVersion !== adminState.requestVersion) return;
+    renderAdminStats(stats);
+    renderAdminModeration(data);
+  } catch (error) { if (requestVersion !== adminState.requestVersion) return; setAdminError(error); }
+}
+
+async function loadAdminAds() {
+  const requestVersion = ++adminState.requestVersion;
+  setAdminActiveTab("ads");
+  setAdminLoading("Загружаем рекламные кампании…");
+  try {
+    const [stats, data] = await Promise.all([apiRequest("/api/admin/stats"), apiRequest("/api/admin/ads")]);
+    if (requestVersion !== adminState.requestVersion) return;
+    renderAdminStats(stats);
+    renderAdminAds(data.ads || []);
+  } catch (error) { if (requestVersion !== adminState.requestVersion) return; setAdminError(error); }
 }
 
 async function loadAdminUsers() {
@@ -3249,6 +3689,8 @@ function reloadCurrentAdminTab() {
   const loaders = {
     products: loadAdminPanel,
     reports: loadAdminReports,
+    moderation: loadAdminModeration,
+    ads: loadAdminAds,
     users: loadAdminUsers,
     logs: loadAdminLogs,
     growth: loadAdminGrowth,
