@@ -94,12 +94,19 @@
 </section>
 
     <section id="product" class="page">
-      <img id="productImage" class="hero-img" src="" alt="" />
+      <div id="productGallery" class="product-gallery" aria-label="Фотографии объявления">
+        <button id="productPrevImage" class="gallery-arrow gallery-prev" type="button" aria-label="Предыдущее фото">‹</button>
+        <img id="productImage" class="hero-img" src="" alt="Фото товара" onclick="openPhotoLightbox()" />
+        <button id="productNextImage" class="gallery-arrow gallery-next" type="button" aria-label="Следующее фото">›</button>
+        <span id="productImageCounter" class="gallery-counter">1 / 1</span>
+      </div>
+      <div id="productThumbs" class="product-thumbs"></div>
 
       <h2 id="productName"></h2>
       <h2 id="productPrice" class="price"></h2>
 
-      <p class="seller">👤 Владикавказ · 5 мин. назад</p>
+      <div id="productMeta" class="product-meta"></div>
+      <div id="productBadges" class="product-badges"></div>
 
       <div class="seller-info">
         <p id="productSeller">Продавец</p>
@@ -107,14 +114,39 @@
         <p id="productPhoneLine">Телефон</p>
       </div>
 
-      <h4>Описание</h4>
-      <p id="productDesc" class="desc"></p>
+      <section class="product-section">
+        <h4>Описание</h4>
+        <p id="productDesc" class="desc"></p>
+      </section>
+
+      <section id="productSpecificationsSection" class="product-section">
+        <h4>Характеристики</h4>
+        <div id="productSpecifications" class="specifications-list"></div>
+      </section>
+
+      <div class="product-secondary-actions">
+        <button type="button" class="outline" onclick="shareProduct()">↗ Поделиться</button>
+        <button type="button" class="outline" onclick="copyProductLink()">🔗 Скопировать ссылку</button>
+        <button id="reportProductBtn" type="button" class="outline danger-outline" onclick="openReportDialog()">⚑ Пожаловаться</button>
+      </div>
 
       <div class="actions">
         <button id="messageBtn" class="outline" type="button">💬 Написать</button>
-
         <button id="callBtn" class="primary call-link" type="button">📞 Позвонить</button>
       </div>
+
+      <section id="sellerOtherProductsSection" class="related-section">
+        <div class="related-heading">
+          <h3>Другие объявления продавца</h3>
+          <button id="openSellerProductsBtn" type="button" class="ghost">Все</button>
+        </div>
+        <div id="sellerOtherProducts" class="related-products"></div>
+      </section>
+
+      <section id="similarProductsSection" class="related-section">
+        <h3>Похожие объявления</h3>
+        <div id="similarProducts" class="related-products"></div>
+      </section>
     </section>
 
     <section id="create1" class="page">
@@ -150,6 +182,14 @@
         <option value="Инструменты">Инструменты</option>
         <option value="Сад и огород">Сад и огород</option>
         <option value="Животные">Животные</option>
+      </select>
+
+      <label for="adCondition">Состояние товара</label>
+      <select id="adCondition">
+        <option value="new">Новое</option>
+        <option value="like_new">Как новое</option>
+        <option value="used" selected>Бывшее в употреблении</option>
+        <option value="for_parts">На запчасти</option>
       </select>
 
       <label for="adDesc">Описание</label>
@@ -224,6 +264,29 @@
         <option>Другое</option>
       </select>
 
+      <label for="adDistrict">Район</label>
+      <input id="adDistrict" maxlength="80" placeholder="Например, Северо-Западный" enterkeyhint="done" />
+
+      <div class="toggle-row">
+        <span>Возможен торг</span>
+        <input id="adNegotiable" type="checkbox" />
+      </div>
+
+      <div class="toggle-row">
+        <span>Есть доставка</span>
+        <input id="adDelivery" type="checkbox" />
+      </div>
+
+      <label for="adSpecifications">Характеристики</label>
+      <textarea
+        id="adSpecifications"
+        maxlength="2000"
+        placeholder="Каждая характеристика с новой строки:
+Бренд: Samsung
+Память: 256 ГБ"
+      ></textarea>
+      <p class="field-hint">До 20 характеристик в формате «Название: значение».</p>
+
       <label for="adPhone">Телефон</label>
       <input
         id="adPhone"
@@ -236,6 +299,18 @@
         <span>Разрешить сообщения в Telegram</span>
         <input id="adAllowMessages" type="checkbox" checked />
       </div>
+
+      <section id="listingQuality" class="quality-card" aria-live="polite">
+        <div class="quality-header">
+          <div>
+            <small>Качество объявления</small>
+            <b id="listingQualityScore">0%</b>
+          </div>
+          <span id="listingQualityLabel">Нужно улучшить</span>
+        </div>
+        <div class="quality-track"><i id="listingQualityBar"></i></div>
+        <ul id="listingQualityTips"></ul>
+      </section>
 
       <h4>Предпросмотр</h4>
       <div id="previewCard" class="product-card"></div>
@@ -430,6 +505,7 @@
 
     <div class="admin-tabs" role="tablist" aria-label="Разделы админ-панели">
       <button data-admin-tab="products" class="active" onclick="loadAdminPanel()" type="button">📦 Объявления</button>
+      <button data-admin-tab="reports" onclick="loadAdminReports()" type="button">⚑ Жалобы</button>
       <button data-admin-tab="users" onclick="loadAdminUsers()" type="button">👥 Пользователи</button>
       <button data-admin-tab="logs" onclick="loadAdminLogs()" type="button">📋 Журнал</button>
       <button data-admin-tab="growth" onclick="loadAdminGrowth()" type="button">📈 Аналитика</button>
@@ -440,8 +516,50 @@
 </section>
 </main>
 
+  <div id="photoLightbox" class="photo-lightbox" hidden role="dialog" aria-modal="true" aria-label="Просмотр фотографии">
+    <button class="lightbox-close" type="button" onclick="closePhotoLightbox()" aria-label="Закрыть">×</button>
+    <button class="lightbox-arrow lightbox-prev" type="button" onclick="changeProductImage(-1)" aria-label="Предыдущее фото">‹</button>
+    <img id="lightboxImage" src="" alt="Увеличенное фото товара" />
+    <button class="lightbox-arrow lightbox-next" type="button" onclick="changeProductImage(1)" aria-label="Следующее фото">›</button>
+    <span id="lightboxCounter" class="lightbox-counter">1 / 1</span>
+  </div>
+
+  <dialog id="reportDialog" class="report-dialog">
+    <form method="dialog" onsubmit="submitProductReport(event)">
+      <div class="dialog-heading">
+        <div>
+          <small>Модерация</small>
+          <h3>Пожаловаться на объявление</h3>
+        </div>
+        <button type="button" class="dialog-close" onclick="closeReportDialog()" aria-label="Закрыть">×</button>
+      </div>
+
+      <label for="reportReason">Причина</label>
+      <select id="reportReason" required>
+        <option value="">Выберите причину</option>
+        <option value="fraud">Мошенничество</option>
+        <option value="prohibited">Запрещённый товар</option>
+        <option value="wrong_category">Неверная категория</option>
+        <option value="wrong_price">Неверная цена</option>
+        <option value="duplicate">Дубликат</option>
+        <option value="sold">Товар уже продан</option>
+        <option value="stolen_photos">Чужие фотографии</option>
+        <option value="offensive">Оскорбительное содержание</option>
+        <option value="other">Другая причина</option>
+      </select>
+
+      <label for="reportDetails">Комментарий</label>
+      <textarea id="reportDetails" maxlength="1000" placeholder="Опишите проблему. Для причины «Другая» нужно не менее 10 символов."></textarea>
+
+      <div class="dialog-actions">
+        <button type="button" class="outline" onclick="closeReportDialog()">Отмена</button>
+        <button id="submitReportBtn" type="submit" class="primary">Отправить жалобу</button>
+      </div>
+    </form>
+  </dialog>
+
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">‹</div>
 
-  <script src="script.js?v=190"></script>
+  <script src="script.js?v=1100"></script>
 </body>
 </html>

@@ -10,7 +10,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.9.0";
+const APP_VERSION = "1.10.0";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -31,6 +31,25 @@ const __dirname = path.dirname(__filename);
 const publicDir = path.join(__dirname, "public");
 const PRODUCT_STATUSES = new Set(["active", "sold", "draft", "deleted"]);
 const PUBLIC_PRODUCT_STATUS = "active";
+const PRODUCT_CONDITIONS = new Set(["new", "like_new", "used", "for_parts"]);
+const REPORT_REASONS = new Set([
+  "fraud",
+  "prohibited",
+  "wrong_category",
+  "wrong_price",
+  "duplicate",
+  "sold",
+  "stolen_photos",
+  "offensive",
+  "other"
+]);
+const REPORT_STATUSES = new Set(["pending", "resolved", "rejected"]);
+const MODERATION_ACTIONS = new Set([
+  "no_action",
+  "hide_product",
+  "ban_user",
+  "hide_and_ban"
+]);
 const PRODUCT_CATEGORIES = new Set([
   "Электроника",
   "Авто",
@@ -79,8 +98,11 @@ function normalizeImages(row) {
 
 function mapProduct(row) {
   const images = normalizeImages(row);
-
-  return {
+  const specifications =
+    row.specifications && typeof row.specifications === "object" && !Array.isArray(row.specifications)
+      ? row.specifications
+      : {};
+  const product = {
     id: row.id,
     ownerId: row.owner_id,
     ownerName: row.owner_name,
@@ -92,13 +114,24 @@ function mapProduct(row) {
     image: images[0] || row.image || "",
     images,
     location: row.location,
+    district: row.district || "",
     phone: row.phone || "",
     allowMessages: row.allow_messages !== false,
+    condition: PRODUCT_CONDITIONS.has(row.condition) ? row.condition : "used",
+    negotiable: Boolean(row.negotiable),
+    delivery: Boolean(row.delivery),
+    specifications,
     views: Number(row.views) || 0,
+    favoriteCount: Number(row.favorite_count) || 0,
+    reportCount: Number(row.report_count) || 0,
     hidden: Boolean(row.hidden),
     status: row.status || "active",
-    createdAt: row.created_at ? new Date(row.created_at).getTime() : null
+    createdAt: row.created_at ? new Date(row.created_at).getTime() : null,
+    updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : null
   };
+
+  product.quality = calculateListingQuality(product);
+  return product;
 }
 
 function getTelegramDisplayName(user) {
@@ -130,6 +163,70 @@ function normalizeText(value, maxLength) {
 function normalizeProductStatus(value, fallback = "active") {
   const status = normalizeText(value, 20).toLowerCase();
   return PRODUCT_STATUSES.has(status) ? status : fallback;
+}
+
+function normalizeProductCondition(value, fallback = "used") {
+  const condition = normalizeText(value, 30).toLowerCase();
+  return PRODUCT_CONDITIONS.has(condition) ? condition : fallback;
+}
+
+function normalizeBoolean(value) {
+  return value === true || value === "true" || value === 1 || value === "1";
+}
+
+function normalizeSpecifications(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const entries = Object.entries(value)
+    .slice(0, 20)
+    .map(([key, item]) => [normalizeText(key, 50), normalizeText(item, 120)])
+    .filter(([key, item]) => key && item);
+
+  return Object.fromEntries(entries);
+}
+
+function calculateListingQuality(product) {
+  const images = Array.isArray(product.images) ? product.images : [];
+  const specifications =
+    product.specifications && typeof product.specifications === "object"
+      ? product.specifications
+      : {};
+  const tips = [];
+  let score = 0;
+
+  if (String(product.name || "").length >= 12) score += 15;
+  else tips.push("Сделайте название подробнее: не менее 12 символов");
+
+  if (String(product.desc || "").length >= 80) score += 20;
+  else tips.push("Добавьте подробное описание: не менее 80 символов");
+
+  if (images.length >= 3) score += 25;
+  else if (images.length >= 1) {
+    score += 15;
+    tips.push("Добавьте минимум 3 фотографии");
+  } else {
+    tips.push("Добавьте фотографии товара");
+  }
+
+  if (product.category) score += 10;
+  if (product.price) score += 10;
+  if (product.condition) score += 8;
+
+  if (product.district) score += 5;
+  else tips.push("Укажите район");
+
+  if (Object.keys(specifications).length >= 2) score += 5;
+  else tips.push("Добавьте хотя бы 2 характеристики");
+
+  if (product.delivery || product.negotiable) score += 2;
+
+  return {
+    score: Math.min(score, 100),
+    level: score >= 80 ? "excellent" : score >= 60 ? "good" : "needs_work",
+    tips: tips.slice(0, 4)
+  };
 }
 
 function normalizePositiveInteger(value, fallback, maximum) {
@@ -371,6 +468,62 @@ async function initDb() {
   `);
 
   await pool.query(`
+    ALTER TABLE products
+    ADD COLUMN IF NOT EXISTS condition TEXT DEFAULT 'used';
+  `);
+
+  await pool.query(`
+    ALTER TABLE products
+    ADD COLUMN IF NOT EXISTS negotiable BOOLEAN DEFAULT FALSE;
+  `);
+
+  await pool.query(`
+    ALTER TABLE products
+    ADD COLUMN IF NOT EXISTS delivery BOOLEAN DEFAULT FALSE;
+  `);
+
+  await pool.query(`
+    ALTER TABLE products
+    ADD COLUMN IF NOT EXISTS district TEXT DEFAULT '';
+  `);
+
+  await pool.query(`
+    ALTER TABLE products
+    ADD COLUMN IF NOT EXISTS specifications JSONB DEFAULT '{}'::jsonb;
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS reports (
+      id TEXT PRIMARY KEY,
+      product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      reporter_id TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      details TEXT DEFAULT '',
+      status TEXT DEFAULT 'pending',
+      admin_note TEXT DEFAULT '',
+      reviewed_by TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_reports_status_created_at
+    ON reports (status, created_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_reports_product_id
+    ON reports (product_id);
+  `);
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_reports_unique_pending
+    ON reports (product_id, reporter_id)
+    WHERE status = 'pending';
+  `);
+
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_products_status_created_at
     ON products (status, created_at DESC);
   `);
@@ -383,6 +536,11 @@ async function initDb() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_favorites_user_id
     ON favorites (user_id);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_products_category_location
+    ON products (category, location, created_at DESC);
   `);
 
   console.log("Database initialized");
@@ -741,6 +899,11 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
       location,
       phone,
       allowMessages,
+      condition,
+      negotiable,
+      delivery,
+      district,
+      specifications,
       status
     } = req.body;
 
@@ -750,6 +913,9 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
     const cleanDescription = normalizeText(desc, 5000);
     const cleanLocation = normalizeText(location, 80) || "Владикавказ";
     const cleanPhone = normalizeText(phone, 30);
+    const cleanCondition = normalizeProductCondition(condition);
+    const cleanDistrict = normalizeText(district, 80);
+    const cleanSpecifications = normalizeSpecifications(specifications);
     const cleanStatus = normalizeProductStatus(status, "active");
 
     if (!PRODUCT_CATEGORIES.has(cleanCategory)) {
@@ -797,10 +963,15 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
           location,
           phone,
           allow_messages,
+          condition,
+          negotiable,
+          delivery,
+          district,
+          specifications,
           views,
           status
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, 0, $14)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, 0, $19)
         RETURNING *;
       `,
       [
@@ -817,6 +988,11 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
         cleanLocation,
         cleanPhone,
         allowMessages !== false,
+        cleanCondition,
+        normalizeBoolean(negotiable),
+        normalizeBoolean(delivery),
+        cleanDistrict,
+        JSON.stringify(cleanSpecifications),
         cleanStatus === "draft" ? "draft" : "active"
       ]
     );
@@ -869,6 +1045,11 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
       location,
       phone,
       allowMessages,
+      condition,
+      negotiable,
+      delivery,
+      district,
+      specifications,
       status
     } = req.body;
 
@@ -885,6 +1066,9 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     const cleanDescription = normalizeText(desc, 5000);
     const cleanLocation = normalizeText(location, 80) || "Владикавказ";
     const cleanPhone = normalizeText(phone, 30);
+    const cleanCondition = normalizeProductCondition(condition);
+    const cleanDistrict = normalizeText(district, 80);
+    const cleanSpecifications = normalizeSpecifications(specifications);
     const cleanStatus = normalizeProductStatus(status, "active");
 
     if (!PRODUCT_CATEGORIES.has(cleanCategory)) {
@@ -925,7 +1109,12 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
             location = $9,
             phone = $10,
             allow_messages = $11,
-            status = $12,
+            condition = $12,
+            negotiable = $13,
+            delivery = $14,
+            district = $15,
+            specifications = $16::jsonb,
+            status = $17,
             updated_at = NOW()
         WHERE id = $1
           AND owner_id = $2
@@ -944,6 +1133,11 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
         cleanLocation,
         cleanPhone,
         allowMessages !== false,
+        cleanCondition,
+        normalizeBoolean(negotiable),
+        normalizeBoolean(delivery),
+        cleanDistrict,
+        JSON.stringify(cleanSpecifications),
         ["active", "sold", "draft"].includes(cleanStatus) ? cleanStatus : "active"
       ]
     );
@@ -965,6 +1159,78 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
       ok: false,
       error: "Не удалось обновить объявление"
     });
+  }
+});
+
+app.get("/api/products/:id/details", async (req, res) => {
+  try {
+    const productId = normalizeText(req.params.id, 64);
+
+    if (!productId) {
+      return res.status(400).json({ ok: false, error: "Некорректный ID товара" });
+    }
+
+    const productResult = await pool.query(
+      `
+        SELECT
+          p.*,
+          (SELECT COUNT(*)::int FROM favorites f WHERE f.product_id = p.id) AS favorite_count,
+          (SELECT COUNT(*)::int FROM reports r WHERE r.product_id = p.id AND r.status = 'pending') AS report_count
+        FROM products p
+        WHERE p.id = $1
+          AND COALESCE(p.status, 'active') = 'active'
+          AND COALESCE(p.hidden, FALSE) = FALSE;
+      `,
+      [productId]
+    );
+
+    if (productResult.rows.length === 0) {
+      return res.status(404).json({ ok: false, error: "Товар не найден" });
+    }
+
+    const row = productResult.rows[0];
+    const [similarResult, sellerResult] = await Promise.all([
+      pool.query(
+        `
+          SELECT
+            p.*,
+            (SELECT COUNT(*)::int FROM favorites f WHERE f.product_id = p.id) AS favorite_count
+          FROM products p
+          WHERE p.id <> $1
+            AND p.category = $2
+            AND COALESCE(p.status, 'active') = 'active'
+            AND COALESCE(p.hidden, FALSE) = FALSE
+          ORDER BY (p.location = $3) DESC, p.created_at DESC
+          LIMIT 6;
+        `,
+        [productId, row.category, row.location]
+      ),
+      pool.query(
+        `
+          SELECT
+            p.*,
+            (SELECT COUNT(*)::int FROM favorites f WHERE f.product_id = p.id) AS favorite_count
+          FROM products p
+          WHERE p.id <> $1
+            AND p.owner_id = $2
+            AND COALESCE(p.status, 'active') = 'active'
+            AND COALESCE(p.hidden, FALSE) = FALSE
+          ORDER BY p.created_at DESC
+          LIMIT 6;
+        `,
+        [productId, row.owner_id]
+      )
+    ]);
+
+    res.json({
+      ok: true,
+      product: mapProduct(row),
+      similarProducts: similarResult.rows.map(mapProduct),
+      sellerProducts: sellerResult.rows.map(mapProduct)
+    });
+  } catch (error) {
+    console.error("Product details error:", error);
+    res.status(500).json({ ok: false, error: "Не удалось загрузить карточку товара" });
   }
 });
 
@@ -994,6 +1260,12 @@ app.post("/api/products/:id/view", async (req, res) => {
         error: "Товар не найден"
       });
     }
+
+    const favoriteResult = await pool.query(
+      "SELECT COUNT(*)::int AS count FROM favorites WHERE product_id = $1",
+      [productId]
+    );
+    result.rows[0].favorite_count = favoriteResult.rows[0]?.count || 0;
 
     res.json({
       ok: true,
@@ -1212,6 +1484,74 @@ app.post("/api/favorites", requireTelegramAuth, syncTelegramUser, async (req, re
 
 
 
+app.post("/api/products/:id/reports", requireTelegramAuth, syncTelegramUser, async (req, res) => {
+  try {
+    const productId = normalizeText(req.params.id, 64);
+    const reason = normalizeText(req.body?.reason, 40).toLowerCase();
+    const details = normalizeText(req.body?.details, 1000);
+
+    if (!productId || !REPORT_REASONS.has(reason)) {
+      return res.status(400).json({ ok: false, error: "Выберите корректную причину жалобы" });
+    }
+
+    if (reason === "other" && details.length < 10) {
+      return res.status(400).json({ ok: false, error: "Опишите причину жалобы подробнее" });
+    }
+
+    const productResult = await pool.query(
+      `
+        SELECT id, owner_id
+        FROM products
+        WHERE id = $1
+          AND COALESCE(status, 'active') = 'active'
+          AND COALESCE(hidden, FALSE) = FALSE;
+      `,
+      [productId]
+    );
+
+    if (productResult.rows.length === 0) {
+      return res.status(404).json({ ok: false, error: "Объявление не найдено" });
+    }
+
+    if (String(productResult.rows[0].owner_id) === String(req.telegramUser.id)) {
+      return res.status(400).json({ ok: false, error: "Нельзя пожаловаться на своё объявление" });
+    }
+
+    const duplicate = await pool.query(
+      `
+        SELECT id
+        FROM reports
+        WHERE product_id = $1 AND reporter_id = $2 AND status = 'pending'
+        LIMIT 1;
+      `,
+      [productId, req.telegramUser.id]
+    );
+
+    if (duplicate.rows.length > 0) {
+      return res.status(409).json({ ok: false, error: "Ваша жалоба уже находится на рассмотрении" });
+    }
+
+    const result = await pool.query(
+      `
+        INSERT INTO reports (id, product_id, reporter_id, reason, details)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id, status, created_at;
+      `,
+      [randomUUID(), productId, req.telegramUser.id, reason, details]
+    );
+
+    res.status(201).json({ ok: true, report: result.rows[0] });
+  } catch (error) {
+    console.error("Create report error:", error);
+
+    if (error?.code === "23505") {
+      return res.status(409).json({ ok: false, error: "Ваша жалоба уже находится на рассмотрении" });
+    }
+
+    res.status(500).json({ ok: false, error: "Не удалось отправить жалобу" });
+  }
+});
+
 // Admin dashboard
 const ADMIN_IDS = String(process.env.ADMIN_TELEGRAM_IDS || "")
   .split(",")
@@ -1248,8 +1588,8 @@ function adminRoute(handler) {
   };
 }
 
-async function addAdminLog(adminId, action, target = "", details = "") {
-  await pool.query(
+async function addAdminLog(adminId, action, target = "", details = "", database = pool) {
+  await database.query(
     `
       INSERT INTO admin_logs (id, admin_id, action, target, details)
       VALUES ($1, $2, $3, $4, $5);
@@ -1264,7 +1604,7 @@ app.get(
   syncTelegramUser,
   requireAdmin,
   adminRoute(async (req, res) => {
-    const [users, products, hidden, banned, newUsersToday, newProductsToday] =
+    const [users, products, hidden, banned, pendingReports, newUsersToday, newProductsToday] =
       await Promise.all([
         pool.query("SELECT COUNT(*)::int AS count FROM users"),
         pool.query(
@@ -1275,6 +1615,9 @@ app.get(
         ),
         pool.query(
           "SELECT COUNT(*)::int AS count FROM users WHERE COALESCE(banned, FALSE) = TRUE"
+        ),
+        pool.query(
+          "SELECT COUNT(*)::int AS count FROM reports WHERE status = 'pending'"
         ),
         pool.query(
           "SELECT COUNT(*)::int AS count FROM users WHERE created_at >= CURRENT_DATE"
@@ -1290,6 +1633,7 @@ app.get(
       products: products.rows[0].count,
       hidden: hidden.rows[0].count,
       banned: banned.rows[0].count,
+      pendingReports: pendingReports.rows[0].count,
       newUsersToday: newUsersToday.rows[0].count,
       newProductsToday: newProductsToday.rows[0].count
     });
@@ -1314,7 +1658,8 @@ app.get(
         created_at,
         views,
         hidden,
-        status
+        status,
+        (SELECT COUNT(*)::int FROM reports r WHERE r.product_id = products.id AND r.status = 'pending') AS report_count
       FROM products
       WHERE COALESCE(status, 'active') <> 'deleted'
       ORDER BY created_at DESC
@@ -1413,6 +1758,140 @@ app.post(
       ok: true,
       user
     });
+  })
+);
+
+app.get(
+  "/api/admin/reports",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const requestedStatus = normalizeText(req.query.status, 20).toLowerCase();
+    const status = REPORT_STATUSES.has(requestedStatus) ? requestedStatus : "pending";
+    const result = await pool.query(
+      `
+        SELECT
+          r.id,
+          r.product_id,
+          r.reporter_id,
+          r.reason,
+          r.details,
+          r.status,
+          r.admin_note,
+          r.reviewed_by,
+          r.created_at,
+          r.updated_at,
+          p.name AS product_name,
+          p.owner_id,
+          p.owner_name,
+          p.hidden AS product_hidden,
+          u.username AS reporter_username
+        FROM reports r
+        JOIN products p ON p.id = r.product_id
+        LEFT JOIN users u ON u.telegram_id = r.reporter_id
+        WHERE r.status = $1
+        ORDER BY r.created_at DESC
+        LIMIT 100;
+      `,
+      [status]
+    );
+
+    res.json({ ok: true, reports: result.rows, status });
+  })
+);
+
+app.patch(
+  "/api/admin/reports/:id",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const reportId = normalizeText(req.params.id, 64);
+    const decision = normalizeText(req.body?.decision, 20).toLowerCase();
+    const action = normalizeText(req.body?.action, 30).toLowerCase() || "no_action";
+    const adminNote = normalizeText(req.body?.adminNote, 1000);
+
+    if (!reportId || !["resolved", "rejected"].includes(decision) || !MODERATION_ACTIONS.has(action)) {
+      return res.status(400).json({ ok: false, error: "Некорректное решение по жалобе" });
+    }
+
+    const client = await pool.connect();
+    let report;
+
+    try {
+      await client.query("BEGIN");
+      const reportResult = await client.query(
+        `
+          SELECT r.*, p.owner_id, p.name AS product_name
+          FROM reports r
+          JOIN products p ON p.id = r.product_id
+          WHERE r.id = $1
+          FOR UPDATE;
+        `,
+        [reportId]
+      );
+
+      if (reportResult.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ ok: false, error: "Жалоба не найдена" });
+      }
+
+      report = reportResult.rows[0];
+
+      if (report.status !== "pending") {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ ok: false, error: "Жалоба уже обработана" });
+      }
+
+      if (["ban_user", "hide_and_ban"].includes(action) && ADMIN_IDS.includes(String(report.owner_id))) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ ok: false, error: "Администратора нельзя заблокировать" });
+      }
+
+      if (["hide_product", "hide_and_ban"].includes(action)) {
+        await client.query(
+          "UPDATE products SET hidden = TRUE, updated_at = NOW() WHERE id = $1",
+          [report.product_id]
+        );
+      }
+
+      if (["ban_user", "hide_and_ban"].includes(action)) {
+        await client.query(
+          "UPDATE users SET banned = TRUE WHERE telegram_id = $1",
+          [report.owner_id]
+        );
+      }
+
+      const updated = await client.query(
+        `
+          UPDATE reports
+          SET status = $2,
+              admin_note = $3,
+              reviewed_by = $4,
+              updated_at = NOW()
+          WHERE id = $1
+          RETURNING *;
+        `,
+        [reportId, decision, adminNote, req.telegramUser.id]
+      );
+
+      await addAdminLog(
+        req.telegramUser.id,
+        `report_${decision}`,
+        reportId,
+        `${report.product_name}; действие: ${action}${adminNote ? `; ${adminNote}` : ""}`,
+        client
+      );
+      await client.query("COMMIT");
+
+      res.json({ ok: true, report: updated.rows[0] });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   })
 );
 
