@@ -80,14 +80,14 @@
   </form>
 
   <div class="categories">
-    <button class="active" type="button">Все</button>
-    <button type="button">📱 Электроника</button>
-    <button type="button">🚗 Авто</button>
-    <button type="button">👕 Одежда</button>
-    <button type="button">🏠 Дом</button>
-    <button type="button">🔧 Инструменты</button>
-    <button type="button">🌱 Сад и огород</button>
-    <button type="button">🐄 Животные</button>
+    <button class="active" type="button" data-category="Все">Все</button>
+    <button type="button" data-category="Электроника">📱 Электроника</button>
+    <button type="button" data-category="Авто">🚗 Авто</button>
+    <button type="button" data-category="Одежда">👕 Одежда</button>
+    <button type="button" data-category="Дом">🏠 Дом</button>
+    <button type="button" data-category="Инструменты">🔧 Инструменты</button>
+    <button type="button" data-category="Сад и огород">🌱 Сад и огород</button>
+    <button type="button" data-category="Животные">🐄 Животные</button>
   </div>
 
   <div id="productList" class="product-list"></div>
@@ -240,21 +240,32 @@
       <h4>Предпросмотр</h4>
       <div id="previewCard" class="product-card"></div>
 
-      <button
-        id="publishBtn"
-        class="primary wide"
-        onclick="publishAd()"
-        type="button"
-      >
-        Опубликовать объявление
-      </button>
+      <div class="create-actions">
+        <button
+          id="saveDraftBtn"
+          class="outline wide"
+          onclick="publishAd('draft')"
+          type="button"
+        >
+          Сохранить как черновик
+        </button>
+
+        <button
+          id="publishBtn"
+          class="primary wide"
+          onclick="publishAd('active')"
+          type="button"
+        >
+          Опубликовать объявление
+        </button>
+      </div>
     </section>
 
     <section id="myAds" class="page">
-      <div class="tabs">
-        <button class="active" type="button">Активные</button>
-        <button type="button">Проданные</button>
-        <button type="button">Черновики</button>
+      <div class="tabs" id="myAdsTabs">
+        <button class="active" data-status="active" onclick="setMyAdsTab('active')" type="button">Активные</button>
+        <button data-status="sold" onclick="setMyAdsTab('sold')" type="button">Проданные</button>
+        <button data-status="draft" onclick="setMyAdsTab('draft')" type="button">Черновики</button>
       </div>
 
       <div id="myAdsList" class="product-list"></div>
@@ -328,7 +339,7 @@
         ⚙️ Настройки
       </button>
 
-      <button class="profile-row" type="button">
+      <button class="profile-row" type="button" onclick="openSupport()">
         🛟 Поддержка
       </button>
     </section>
@@ -431,6 +442,6 @@
 
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">‹</div>
 
-  <script src="script.js?v=180"></script>
+  <script src="script.js?v=190"></script>
 </body>
 </html>

@@ -28,7 +28,8 @@ function findProductById(id) {
   return (
     state.products.find(item => item.id === id) ||
     state.myProducts.find(item => item.id === id) ||
-    state.sellerProducts.find(item => item.id === id)
+    state.sellerProducts.find(item => item.id === id) ||
+    state.favoriteProducts.find(item => item.id === id)
   );
 }
 
@@ -54,6 +55,8 @@ const MAX_PRICE = 100000000;
 
 const tg = window.Telegram?.WebApp || null;
 let telegramAvatarObjectUrl = null;
+let productSearchTimer = null;
+let productsRequestSequence = 0;
 
 function getTelegramAuthHeaders() {
   const initData = tg?.initData?.trim();
@@ -74,7 +77,14 @@ const state = {
   products: [],
   myProducts: [],
   sellerProducts: [],
-  favorites: []
+  favoriteProducts: [],
+  favorites: [],
+  myAdsTab: "active",
+  editingProductId: null,
+  config: {
+    version: "",
+    supportUsername: ""
+  }
 };
 
 const draftAd = {
@@ -114,12 +124,37 @@ async function apiRequest(url, options = {}) {
   return data;
 }
 
-async function loadProducts() {
+async function loadConfig() {
   try {
-    const data = await apiRequest("/api/products");
+    const data = await apiRequest("/api/config");
+    state.config.version = data.version || "";
+    state.config.supportUsername = data.supportUsername || "";
+  } catch (error) {
+    console.error("Не удалось загрузить конфигурацию:", error);
+  }
+}
+
+async function loadProducts() {
+  const requestSequence = ++productsRequestSequence;
+  const params = new URLSearchParams({ limit: "100" });
+
+  if (state.search.trim()) {
+    params.set("q", state.search.trim());
+  }
+
+  if (state.category !== "Все") {
+    params.set("category", state.category);
+  }
+
+  try {
+    const data = await apiRequest(`/api/products?${params.toString()}`);
+
+    if (requestSequence !== productsRequestSequence) return;
+
     state.products = data.products || [];
     render();
   } catch (error) {
+    if (requestSequence !== productsRequestSequence) return;
     console.error("Не удалось загрузить товары:", error);
   }
 }
@@ -143,6 +178,7 @@ async function loadMyProducts() {
 async function loadFavorites() {
   if (!state.telegramUser?.id) {
     state.favorites = [];
+    state.favoriteProducts = [];
     render();
     return;
   }
@@ -150,6 +186,7 @@ async function loadFavorites() {
   try {
     const data = await apiRequest("/api/favorites");
     state.favorites = data.favorites || [];
+    state.favoriteProducts = data.products || [];
     render();
   } catch (error) {
     console.error("Не удалось загрузить избранное:", error);
@@ -160,7 +197,16 @@ async function loadFavorites() {
    NAVIGATION
 ======================= */
 
-function showPage(page, addToHistory = true) {
+function showPage(page, addToHistory = true, preserveCreateSession = false) {
+  if (
+    page === "create1" &&
+    addToHistory &&
+    !preserveCreateSession &&
+    !["create1", "create2", "create3"].includes(state.page)
+  ) {
+    clearCreateForm();
+  }
+
   if (addToHistory && state.page !== page) {
     state.history.push(state.page);
   }
@@ -196,7 +242,11 @@ function showPage(page, addToHistory = true) {
   const titleEl = document.getElementById("pageTitle");
 
   if (titleEl) {
-    titleEl.innerText = titles[page] || "Алания Маркет";
+    const isEditingPage =
+      state.editingProductId && ["create1", "create2", "create3"].includes(page);
+    titleEl.innerText = isEditingPage
+      ? "Редактирование объявления"
+      : titles[page] || "Алания Маркет";
   }
 
   updateBottomNav();
@@ -418,7 +468,7 @@ function getFiltered() {
     const matchCategory =
       state.category === "Все" || product.category === state.category;
 
-    return matchSearch && matchCategory && product.status !== "deleted";
+    return matchSearch && matchCategory && product.status === "active";
   });
 }
 
@@ -498,6 +548,16 @@ function renderProducts() {
     .join("");
 }
 
+function getProductStatusLabel(status) {
+  const labels = {
+    active: "Активно",
+    sold: "Продано",
+    draft: "Черновик"
+  };
+
+  return labels[status] || "Неизвестно";
+}
+
 function getProductCard(product, options = {}) {
   const isFav = state.favorites.includes(product.id);
   const images = getProductImages(product);
@@ -506,25 +566,41 @@ function getProductCard(product, options = {}) {
   const location = escapeHTML(product.location || "Владикавказ");
   const image = escapeHTML(safeImageUrl(images[0]));
   const price = escapeHTML(formatPrice(product.price) || product.price || "");
+  const status = product.status || "active";
+
+  let actions = `
+    <button
+      class="heart"
+      type="button"
+      aria-label="${isFav ? "Убрать из избранного" : "Добавить в избранное"}"
+      onclick="event.stopPropagation(); toggleFav('${productId}')"
+    >${isFav ? "♥" : "♡"}</button>
+  `;
+
+  if (options.ownerActions) {
+    const statusAction = status === "active"
+      ? `<button type="button" class="card-action status" title="Отметить проданным" onclick="event.stopPropagation(); changeAdStatus('${productId}', 'sold')">✓</button>`
+      : `<button type="button" class="card-action status" title="Опубликовать снова" onclick="event.stopPropagation(); changeAdStatus('${productId}', 'active')">↻</button>`;
+
+    actions = `
+      <div class="product-card-actions">
+        <button type="button" class="card-action edit" title="Редактировать объявление" onclick="event.stopPropagation(); editAd('${productId}')">✎</button>
+        ${statusAction}
+        <button type="button" class="card-action delete" title="Удалить объявление" onclick="event.stopPropagation(); deleteAd('${productId}')">🗑</button>
+      </div>
+    `;
+  }
 
   return `
-    <div class="product-card" onclick="openProduct('${productId}')">
+    <div class="product-card ${status !== "active" ? "is-inactive" : ""}" onclick="openProduct('${productId}')">
       <img src="${image}" alt="${name}" loading="lazy">
       <div>
         <h4>${name}</h4>
         <b>${price}</b>
         <p>${location} · ${getTimeAgo(product.createdAt)}</p>
-        ${
-          options.showStatus
-            ? `<p>${product.status === "sold" ? "Продано" : "Активно"}</p>`
-            : ""
-        }
+        ${options.showStatus ? `<p class="product-status status-${escapeHTML(status)}">${escapeHTML(product.hidden ? "Скрыто модератором" : getProductStatusLabel(status))}</p>` : ""}
       </div>
-      ${
-        options.deleteButton
-          ? `<button class="heart" aria-label="Удалить объявление" onclick="event.stopPropagation(); deleteAd('${productId}')">🗑</button>`
-          : `<button class="heart" aria-label="${isFav ? "Убрать из избранного" : "Добавить в избранное"}" onclick="event.stopPropagation(); toggleFav('${productId}')">${isFav ? "♥" : "♡"}</button>`
-      }
+      ${actions}
     </div>
   `;
 }
@@ -533,6 +609,10 @@ function renderMyAds() {
   const myAdsList = document.getElementById("myAdsList");
 
   if (!myAdsList || state.page !== "myAds") return;
+
+  document.querySelectorAll("#myAdsTabs [data-status]").forEach(button => {
+    button.classList.toggle("active", button.dataset.status === state.myAdsTab);
+  });
 
   if (!state.telegramUser?.id) {
     myAdsList.innerHTML = `
@@ -544,20 +624,31 @@ function renderMyAds() {
     return;
   }
 
-  if (state.myProducts.length === 0) {
+  const products = state.myProducts.filter(
+    product => (product.status || "active") === state.myAdsTab
+  );
+
+  if (products.length === 0) {
+    const emptyCopy = {
+      active: ["Нет активных объявлений", "Опубликуйте товар, и он появится здесь."],
+      sold: ["Нет проданных товаров", "Отмеченные проданными объявления появятся здесь."],
+      draft: ["Нет черновиков", "Сохраните объявление как черновик перед публикацией."]
+    };
+    const [title, text] = emptyCopy[state.myAdsTab] || emptyCopy.active;
+
     myAdsList.innerHTML = `
       <div class="empty-state">
-        <h3>У вас пока нет объявлений</h3>
-        <p class="muted">Добавьте первый товар на маркет.</p>
+        <h3>${title}</h3>
+        <p class="muted">${text}</p>
       </div>
     `;
     return;
   }
 
-  myAdsList.innerHTML = state.myProducts
+  myAdsList.innerHTML = products
     .map(product =>
       getProductCard(product, {
-        deleteButton: true,
+        ownerActions: true,
         showStatus: true
       })
     )
@@ -569,7 +660,7 @@ function renderFavorites() {
 
   if (!favoritesPage || state.page !== "favorites") return;
 
-  const favs = state.products.filter(product =>
+  const favs = state.favoriteProducts.filter(product =>
     state.favorites.includes(product.id)
   );
 
@@ -643,8 +734,14 @@ async function toggleFav(id) {
       if (!state.favorites.includes(id)) {
         state.favorites.push(id);
       }
+
+      const product = findProductById(id);
+      if (product && !state.favoriteProducts.some(item => item.id === id)) {
+        state.favoriteProducts.unshift(product);
+      }
     } else {
       state.favorites = state.favorites.filter(favId => favId !== id);
+      state.favoriteProducts = state.favoriteProducts.filter(product => product.id !== id);
     }
 
     render();
@@ -743,6 +840,7 @@ const sellerUsername = product.ownerUsername || "";
 const sellerPhone = product.phone || "";
 const cleanPhone = normalizePhoneForTel(sellerPhone);
 const allowMessages = product.allowMessages !== false;
+const isAvailable = (product.status || "active") === "active" && !product.hidden;
 
   if (productSeller) {
     productSeller.innerText = sellerUsername
@@ -764,19 +862,21 @@ const allowMessages = product.allowMessages !== false;
   }
 
 if (productPhoneLine) {
-  if (cleanPhone) {
+  if (cleanPhone && isAvailable) {
     productPhoneLine.innerHTML = `
       <a href="tel:${escapeHTML(cleanPhone)}" class="phone-line-link">
         📞 ${escapeHTML(sellerPhone)}
       </a>
     `;
   } else {
-    productPhoneLine.innerText = "📞 Телефон не указан";
+    productPhoneLine.innerText = isAvailable
+      ? "📞 Телефон не указан"
+      : "📞 Объявление недоступно";
   }
 }
 
 if (messageBtn) {
-  if (allowMessages && sellerUsername) {
+  if (isAvailable && allowMessages && sellerUsername) {
     messageBtn.disabled = false;
     messageBtn.innerText = "💬 Написать";
 
@@ -798,7 +898,7 @@ if (messageBtn) {
 }
 
 if (callBtn) {
-  if (cleanPhone) {
+  if (isAvailable && cleanPhone) {
     callBtn.innerText = "📞 Позвонить";
 
     callBtn.classList.remove("disabled-btn");
@@ -820,7 +920,7 @@ if (callBtn) {
       }
     };
   } else {
-    callBtn.innerText = "📞 Нет номера";
+    callBtn.innerText = isAvailable ? "📞 Нет номера" : "📞 Недоступно";
 
     callBtn.classList.add("disabled-btn");
     callBtn.classList.add("disabled");
@@ -830,7 +930,7 @@ if (callBtn) {
 
     callBtn.onclick = event => {
       event.preventDefault();
-      alert("Телефон продавца не указан");
+      alert(isAvailable ? "Телефон продавца не указан" : "Объявление недоступно");
     };
   }
 }
@@ -990,17 +1090,23 @@ function updatePreviewCard() {
   `;
 }
 
-async function publishAd() {
+async function publishAd(status = "active") {
   if (isPublishingAd) {
     return;
   }
 
+  const targetStatus = status === "draft" ? "draft" : "active";
   const publishBtn = document.getElementById("publishBtn");
+  const saveDraftBtn = document.getElementById("saveDraftBtn");
 
   isPublishingAd = true;
 
-  if (publishBtn) {
-    publishBtn.disabled = true;
+  if (publishBtn) publishBtn.disabled = true;
+  if (saveDraftBtn) saveDraftBtn.disabled = true;
+
+  if (targetStatus === "draft" && saveDraftBtn) {
+    saveDraftBtn.innerText = "Сохраняем...";
+  } else if (publishBtn) {
     publishBtn.innerText = "Публикуем...";
   }
 
@@ -1041,8 +1147,12 @@ async function publishAd() {
     const images = draftAd.images.slice(0, MAX_PHOTOS);
     const mainImage = images[0] || DEFAULT_IMAGE;
 
-    const data = await apiRequest("/api/products", {
-      method: "POST",
+    const editingId = state.editingProductId;
+    const endpoint = editingId
+      ? `/api/products/${encodeURIComponent(editingId)}`
+      : "/api/products";
+    const data = await apiRequest(endpoint, {
+      method: editingId ? "PATCH" : "POST",
       body: JSON.stringify({
         name: ad.title,
         price: formatPrice(priceNumber),
@@ -1052,26 +1162,63 @@ async function publishAd() {
         images,
         location: ad.location,
         phone: ad.phone,
-        allowMessages: ad.allowMessages
+        allowMessages: ad.allowMessages,
+        status: targetStatus
       })
     });
 
-    state.products.unshift(data.product);
-    state.myProducts.unshift(data.product);
+    const savedProduct = data.product;
+    const ownIndex = state.myProducts.findIndex(product => product.id === savedProduct.id);
 
+    if (ownIndex >= 0) {
+      state.myProducts[ownIndex] = savedProduct;
+    } else {
+      state.myProducts.unshift(savedProduct);
+    }
+
+    state.products = state.products.filter(product => product.id !== savedProduct.id);
+    if (savedProduct.status === "active" && !savedProduct.hidden) {
+      state.products.unshift(savedProduct);
+    }
+
+    const favoriteIndex = state.favoriteProducts.findIndex(
+      product => product.id === savedProduct.id
+    );
+    if (favoriteIndex >= 0) {
+      if (savedProduct.status === "active" && !savedProduct.hidden) {
+        state.favoriteProducts[favoriteIndex] = savedProduct;
+      } else {
+        state.favoriteProducts.splice(favoriteIndex, 1);
+        state.favorites = state.favorites.filter(id => id !== savedProduct.id);
+      }
+    }
+
+    const wasEditing = Boolean(editingId);
+    state.myAdsTab = savedProduct.status;
     clearCreateForm();
     showPage("myAds");
 
-    alert("Объявление опубликовано ✅");
+    if (wasEditing) {
+      alert("Изменения сохранены ✅");
+    } else {
+      alert(targetStatus === "draft" ? "Черновик сохранён ✅" : "Объявление опубликовано ✅");
+    }
   } catch (error) {
-    console.error("Не удалось опубликовать объявление:", error);
-    alert("Не удалось опубликовать объявление: " + error.message);
+    console.error("Не удалось сохранить объявление:", error);
+    alert("Не удалось сохранить объявление: " + error.message);
   } finally {
     isPublishingAd = false;
 
     if (publishBtn) {
       publishBtn.disabled = false;
-      publishBtn.innerText = "Опубликовать объявление";
+      publishBtn.innerText = state.editingProductId
+        ? "Сохранить и опубликовать"
+        : "Опубликовать объявление";
+    }
+
+    if (saveDraftBtn) {
+      saveDraftBtn.disabled = false;
+      saveDraftBtn.innerText = "Сохранить как черновик";
     }
   }
 }
@@ -1098,8 +1245,108 @@ function clearCreateForm() {
   if (photoInput) photoInput.value = "";
 
   draftAd.images = [];
+  state.editingProductId = null;
+
+  const publishBtn = document.getElementById("publishBtn");
+  const saveDraftBtn = document.getElementById("saveDraftBtn");
+  if (publishBtn) publishBtn.innerText = "Опубликовать объявление";
+  if (saveDraftBtn) saveDraftBtn.innerText = "Сохранить как черновик";
+
   renderPhotoPreview();
   updateCreateButtons();
+}
+
+function editAd(id) {
+  const product = state.myProducts.find(item => item.id === id);
+
+  if (!product) {
+    alert("Объявление не найдено");
+    return;
+  }
+
+  state.editingProductId = id;
+
+  const title = document.getElementById("adTitle");
+  const price = document.getElementById("adPrice");
+  const desc = document.getElementById("adDesc");
+  const category = document.getElementById("adCategory");
+  const location = document.getElementById("adLocation");
+  const phone = document.getElementById("adPhone");
+  const allowMessages = document.getElementById("adAllowMessages");
+
+  if (title) title.value = product.name || "";
+  if (price) price.value = product.price || "";
+  if (desc) desc.value = product.desc || "";
+  if (category) category.value = product.category || "";
+  if (location) {
+    const hasLocation = Array.from(location.options).some(
+      option => option.value === product.location
+    );
+    location.value = hasLocation ? product.location : "Другое";
+  }
+  if (phone) phone.value = product.phone || "";
+  if (allowMessages) allowMessages.checked = product.allowMessages !== false;
+
+  draftAd.images = getProductImages(product)
+    .filter(Boolean)
+    .slice(0, MAX_PHOTOS);
+
+  showPage("create1", true, true);
+  renderPhotoPreview();
+  updatePreviewCard();
+  updateCreateButtons();
+
+  const publishBtn = document.getElementById("publishBtn");
+  const saveDraftBtn = document.getElementById("saveDraftBtn");
+  if (publishBtn) publishBtn.innerText = "Сохранить и опубликовать";
+  if (saveDraftBtn) saveDraftBtn.innerText = "Сохранить как черновик";
+}
+
+function setMyAdsTab(status) {
+  if (!["active", "sold", "draft"].includes(status)) return;
+  state.myAdsTab = status;
+  renderMyAds();
+}
+
+async function changeAdStatus(id, status) {
+  if (!state.telegramUser?.id) {
+    alert("Откройте приложение через Telegram");
+    return;
+  }
+
+  try {
+    const data = await apiRequest(`/api/products/${encodeURIComponent(id)}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status })
+    });
+
+    const updated = data.product;
+    const ownIndex = state.myProducts.findIndex(product => product.id === id);
+
+    if (ownIndex >= 0) {
+      state.myProducts[ownIndex] = updated;
+    }
+
+    const publicIndex = state.products.findIndex(product => product.id === id);
+
+    if (updated.status === "active" && !updated.hidden) {
+      if (publicIndex >= 0) {
+        state.products[publicIndex] = updated;
+      } else {
+        state.products.unshift(updated);
+      }
+    } else {
+      state.products = state.products.filter(product => product.id !== id);
+      state.favorites = state.favorites.filter(productId => productId !== id);
+      state.favoriteProducts = state.favoriteProducts.filter(product => product.id !== id);
+    }
+
+    state.myAdsTab = updated.status;
+    render();
+  } catch (error) {
+    console.error("Не удалось изменить статус объявления:", error);
+    alert("Не удалось изменить статус объявления: " + error.message);
+  }
 }
 
 /* =======================
@@ -1124,6 +1371,7 @@ async function deleteAd(id) {
     state.products = state.products.filter(product => product.id !== id);
     state.myProducts = state.myProducts.filter(product => product.id !== id);
     state.sellerProducts = state.sellerProducts.filter(product => product.id !== id);
+    state.favoriteProducts = state.favoriteProducts.filter(product => product.id !== id);
     state.favorites = state.favorites.filter(favId => favId !== id);
 
     render();
@@ -1144,7 +1392,12 @@ function initEvents() {
 
   searchInput?.addEventListener("input", event => {
     state.search = event.target.value;
-    render();
+    renderProducts();
+
+    clearTimeout(productSearchTimer);
+    productSearchTimer = setTimeout(() => {
+      loadProducts();
+    }, 250);
   });
 
   searchInput?.addEventListener("keydown", hideKeyboardOnEnter);
@@ -1230,13 +1483,12 @@ function initEvents() {
 
     button.classList.add("active");
 
-    state.category = button.innerText
-      .replace(/[📱🚗👕🏠]/g, "")
-      .trim();
+    state.category = button.dataset.category || button.innerText.trim();
 
     state.page = "catalog";
 
     renderProducts();
+    loadProducts();
   });
 });
 
@@ -1623,6 +1875,7 @@ async function initApp() {
   updateAdminMenu();
 
   await Promise.all([
+    loadConfig(),
     loadProducts(),
     loadMyProducts(),
     loadFavorites()
@@ -1750,6 +2003,23 @@ async function openSellerProfile(userId) {
         <p class="muted">${escapeHTML(error.message || "Попробуйте ещё раз")}</p>
       </div>
     `;
+  }
+}
+
+function openSupport() {
+  const username = String(state.config.supportUsername || "").replace(/^@/, "");
+
+  if (!username) {
+    alert("Контакт поддержки пока не настроен. Добавьте SUPPORT_USERNAME в переменные окружения сервера.");
+    return;
+  }
+
+  const url = `https://t.me/${encodeURIComponent(username)}`;
+
+  if (tg?.openTelegramLink) {
+    tg.openTelegramLink(url);
+  } else {
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 }
 

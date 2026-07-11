@@ -2501,3 +2501,100 @@ body.dark-mode .admin-search-box input {
     width: 100%;
   }
 }
+
+/* ===== LISTING STATUS AND OWNER ACTIONS ===== */
+.create-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.product-card.is-inactive {
+  opacity: 0.86;
+}
+
+.product-status {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 6px !important;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.product-status.status-active {
+  background: #e8f8ef;
+  color: #18794e;
+}
+
+.product-status.status-sold {
+  background: #f1f2f5;
+  color: #5c6370;
+}
+
+.product-status.status-draft {
+  background: #fff4d8;
+  color: #8a5a00;
+}
+
+.product-card-actions {
+  display: grid;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.card-action {
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 12px;
+  font-size: 17px;
+  cursor: pointer;
+}
+
+.card-action.status {
+  background: #ece9ff;
+  color: #5f4af6;
+}
+
+.card-action.delete {
+  background: #fff0f1;
+  color: #c93645;
+}
+
+body.dark-mode .product-status.status-active {
+  background: rgba(24, 121, 78, 0.22);
+  color: #8ee0b8;
+}
+
+body.dark-mode .product-status.status-sold {
+  background: #2a2d33;
+  color: #c4c8d0;
+}
+
+body.dark-mode .product-status.status-draft {
+  background: rgba(138, 90, 0, 0.26);
+  color: #ffd27a;
+}
+
+body.dark-mode .card-action.status {
+  background: #302a59;
+  color: #c7bdff;
+}
+
+body.dark-mode .card-action.delete {
+  background: #4a252a;
+  color: #ffadb7;
+}
+
+.card-action.edit {
+  background: #eef5ff;
+  color: #2466b3;
+}
+
+body.dark-mode .card-action.edit {
+  background: #24364d;
+  color: #9bc7ff;
+}

@@ -16,9 +16,11 @@ Telegram Mini App локального маркетплейса на Node.js, Ex
 
 - `BOT_TOKEN` — токен Telegram-бота.
 - `DATABASE_URL` — строка подключения PostgreSQL.
+- `DATABASE_SSL` — `true` для облачной БД с SSL или `false` для локального PostgreSQL без SSL.
 - `PORT` — порт приложения, по умолчанию `3000`.
 - `TELEGRAM_AUTH_MAX_AGE_SECONDS` — максимальный возраст `initData`, по умолчанию 24 часа.
 - `ADMIN_TELEGRAM_IDS` — Telegram ID администраторов через запятую.
+- `SUPPORT_USERNAME` — Telegram username поддержки без символа `@`.
 
 ## Запуск
 
@@ -39,7 +41,8 @@ npm test
 Публичные маршруты чтения:
 
 - `GET /api/health`
-- `GET /api/products`
+- `GET /api/products` — поддерживает `q`, `category`, `page` и `limit`.
+- `GET /api/config`
 - `GET /api/users/:id`
 - `GET /api/users/:id/products`
 - `POST /api/products/:id/view`
@@ -50,7 +53,9 @@ npm test
 - `GET /api/avatar`
 - `GET /api/my-products`
 - `POST /api/products`
-- `DELETE /api/products/:id`
+- `PATCH /api/products/:id` — редактирование собственного объявления.
+- `PATCH /api/products/:id/status` — статусы `active`, `sold` и `draft`.
+- `DELETE /api/products/:id` — мягкое удаление без физического удаления строки.
 - `GET /api/favorites`
 - `POST /api/favorites`
 
@@ -65,3 +70,12 @@ Authorization: tma <Telegram.WebApp.initData>
 ```
 
 Сервер проверяет подпись и сам определяет пользователя. ID, имя и username владельца из тела запроса не принимаются.
+
+## Статусы объявлений
+
+- `active` — видно в публичном каталоге.
+- `sold` — видно только владельцу во вкладке «Проданные».
+- `draft` — видно только владельцу во вкладке «Черновики».
+- `deleted` — архивная запись, недоступная в пользовательском интерфейсе.
+
+Публичные маршруты возвращают только активные и не скрытые модератором объявления.

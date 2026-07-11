@@ -10,8 +10,13 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const APP_VERSION = "1.9.0";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
+const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
+  .trim()
+  .replace(/^@/, "");
+const DATABASE_SSL = String(process.env.DATABASE_SSL || "true").toLowerCase() !== "false";
 const configuredAuthMaxAge = Number(
   process.env.TELEGRAM_AUTH_MAX_AGE_SECONDS || 86400
 );
@@ -24,6 +29,17 @@ const { Pool } = pg;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicDir = path.join(__dirname, "public");
+const PRODUCT_STATUSES = new Set(["active", "sold", "draft", "deleted"]);
+const PUBLIC_PRODUCT_STATUS = "active";
+const PRODUCT_CATEGORIES = new Set([
+  "Электроника",
+  "Авто",
+  "Одежда",
+  "Дом",
+  "Инструменты",
+  "Сад и огород",
+  "Животные"
+]);
 
 if (!BOT_TOKEN) {
   console.error("Ошибка: BOT_TOKEN не найден в переменных окружения");
@@ -37,9 +53,7 @@ if (!DATABASE_URL) {
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false
-  }
+  ssl: DATABASE_SSL ? { rejectUnauthorized: false } : false
 });
 
 const requireTelegramAuth = createTelegramAuthMiddleware({
@@ -113,6 +127,21 @@ function normalizeText(value, maxLength) {
   return String(value ?? "").trim().slice(0, maxLength);
 }
 
+function normalizeProductStatus(value, fallback = "active") {
+  const status = normalizeText(value, 20).toLowerCase();
+  return PRODUCT_STATUSES.has(status) ? status : fallback;
+}
+
+function normalizePositiveInteger(value, fallback, maximum) {
+  const number = Number.parseInt(String(value ?? ""), 10);
+
+  if (!Number.isFinite(number) || number <= 0) {
+    return fallback;
+  }
+
+  return Math.min(number, maximum);
+}
+
 function normalizeProductImage(value) {
   const image = String(value ?? "").trim();
 
@@ -134,7 +163,13 @@ function normalizeProductImage(value) {
 }
 
 function formatStoredPrice(value) {
-  const digits = String(value ?? "").replace(/\D/g, "");
+  const raw = String(value ?? "").trim();
+  const digits = raw.replace(/[\s\u00a0₽]/g, "");
+
+  if (!/^\d+$/.test(digits)) {
+    return "";
+  }
+
   const number = Number(digits);
 
   if (!Number.isSafeInteger(number) || number <= 0 || number > 100_000_000) {
@@ -360,7 +395,7 @@ app.get("/api/health", async (req, res) => {
     res.json({
       ok: true,
       message: "Server and database are working",
-      version: "telegram-auth-v1"
+      version: APP_VERSION
     });
   } catch (error) {
     console.error("Health check error:", error);
@@ -370,6 +405,14 @@ app.get("/api/health", async (req, res) => {
       error: "Database error"
     });
   }
+});
+
+app.get("/api/config", (req, res) => {
+  res.json({
+    ok: true,
+    version: APP_VERSION,
+    supportUsername: SUPPORT_USERNAME
+  });
 });
 
 // Сохраняем или обновляем профиль после успешной Telegram-авторизации.
@@ -526,7 +569,7 @@ app.get("/api/users/:id", async (req, res) => {
         SELECT owner_id, owner_name, owner_username, created_at
         FROM products
         WHERE owner_id = $1
-          AND COALESCE(status, 'active') <> 'deleted'
+          AND COALESCE(status, 'active') = 'active'
           AND COALESCE(hidden, FALSE) = FALSE
         ORDER BY created_at DESC
         LIMIT 1;
@@ -570,7 +613,7 @@ app.get("/api/users/:id/products", async (req, res) => {
       SELECT *
       FROM products
       WHERE owner_id = $1
-        AND COALESCE(status, 'active') <> 'deleted'
+        AND COALESCE(status, 'active') = 'active'
         AND COALESCE(hidden, FALSE) = FALSE
       ORDER BY created_at DESC;
       `,
@@ -592,17 +635,63 @@ app.get("/api/users/:id/products", async (req, res) => {
 
 app.get("/api/products", async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT *
-      FROM products
-      WHERE COALESCE(status, 'active') <> 'deleted'
-        AND COALESCE(hidden, FALSE) = FALSE
-      ORDER BY created_at DESC;
-    `);
+    const page = normalizePositiveInteger(req.query.page, 1, 100000);
+    const limit = normalizePositiveInteger(req.query.limit, 50, 100);
+    const offset = (page - 1) * limit;
+    const search = normalizeText(req.query.q, 100);
+    const requestedCategory = normalizeText(req.query.category, 60);
+    const category = PRODUCT_CATEGORIES.has(requestedCategory)
+      ? requestedCategory
+      : "";
+
+    const conditions = [
+      "COALESCE(status, 'active') = $1",
+      "COALESCE(hidden, FALSE) = FALSE"
+    ];
+    const values = [PUBLIC_PRODUCT_STATUS];
+
+    if (search) {
+      values.push(`%${search}%`);
+      conditions.push(
+        `(name ILIKE $${values.length} OR description ILIKE $${values.length} OR category ILIKE $${values.length})`
+      );
+    }
+
+    if (category) {
+      values.push(category);
+      conditions.push(`category = $${values.length}`);
+    }
+
+    const whereSql = conditions.join(" AND ");
+    const countResult = await pool.query(
+      `SELECT COUNT(*)::int AS count FROM products WHERE ${whereSql};`,
+      values
+    );
+
+    const queryValues = [...values, limit, offset];
+    const result = await pool.query(
+      `
+        SELECT *
+        FROM products
+        WHERE ${whereSql}
+        ORDER BY created_at DESC
+        LIMIT $${values.length + 1}
+        OFFSET $${values.length + 2};
+      `,
+      queryValues
+    );
+
+    const total = countResult.rows[0]?.count || 0;
 
     res.json({
       ok: true,
-      products: result.rows.map(mapProduct)
+      products: result.rows.map(mapProduct),
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.max(1, Math.ceil(total / limit))
+      }
     });
   } catch (error) {
     console.error("Get products error:", error);
@@ -651,7 +740,8 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
       images,
       location,
       phone,
-      allowMessages
+      allowMessages,
+      status
     } = req.body;
 
     const cleanName = normalizeText(name, 120);
@@ -660,6 +750,14 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
     const cleanDescription = normalizeText(desc, 5000);
     const cleanLocation = normalizeText(location, 80) || "Владикавказ";
     const cleanPhone = normalizeText(phone, 30);
+    const cleanStatus = normalizeProductStatus(status, "active");
+
+    if (!PRODUCT_CATEGORIES.has(cleanCategory)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Выберите допустимую категорию"
+      });
+    }
 
     if (!cleanName || !cleanPrice || !cleanCategory || !cleanDescription) {
       return res.status(400).json({
@@ -702,7 +800,7 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
           views,
           status
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, 0, 'active')
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, 0, $14)
         RETURNING *;
       `,
       [
@@ -718,7 +816,8 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
         JSON.stringify(cleanImages),
         cleanLocation,
         cleanPhone,
-        allowMessages !== false
+        allowMessages !== false,
+        cleanStatus === "draft" ? "draft" : "active"
       ]
     );
 
@@ -757,6 +856,118 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
   }
 });
 
+app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req, res) => {
+  try {
+    const productId = normalizeText(req.params.id, 64);
+    const {
+      name,
+      price,
+      category,
+      desc,
+      image,
+      images,
+      location,
+      phone,
+      allowMessages,
+      status
+    } = req.body;
+
+    if (!productId) {
+      return res.status(400).json({
+        ok: false,
+        error: "Некорректный ID товара"
+      });
+    }
+
+    const cleanName = normalizeText(name, 120);
+    const cleanPrice = formatStoredPrice(price);
+    const cleanCategory = normalizeText(category, 60);
+    const cleanDescription = normalizeText(desc, 5000);
+    const cleanLocation = normalizeText(location, 80) || "Владикавказ";
+    const cleanPhone = normalizeText(phone, 30);
+    const cleanStatus = normalizeProductStatus(status, "active");
+
+    if (!PRODUCT_CATEGORIES.has(cleanCategory)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Выберите допустимую категорию"
+      });
+    }
+
+    if (!cleanName || !cleanPrice || !cleanDescription) {
+      return res.status(400).json({
+        ok: false,
+        error: "Проверьте название, цену и описание"
+      });
+    }
+
+    const sourceImages = Array.isArray(images) ? images : [];
+    const cleanImages = sourceImages
+      .map(normalizeProductImage)
+      .filter(Boolean)
+      .slice(0, 5);
+    const fallbackImage = normalizeProductImage(image);
+
+    if (cleanImages.length === 0 && fallbackImage) {
+      cleanImages.push(fallbackImage);
+    }
+
+    const mainImage = cleanImages[0] || "";
+    const result = await pool.query(
+      `
+        UPDATE products
+        SET name = $3,
+            price = $4,
+            category = $5,
+            description = $6,
+            image = $7,
+            images = $8::jsonb,
+            location = $9,
+            phone = $10,
+            allow_messages = $11,
+            status = $12,
+            updated_at = NOW()
+        WHERE id = $1
+          AND owner_id = $2
+          AND COALESCE(status, 'active') <> 'deleted'
+        RETURNING *;
+      `,
+      [
+        productId,
+        req.telegramUser.id,
+        cleanName,
+        cleanPrice,
+        cleanCategory,
+        cleanDescription,
+        mainImage,
+        JSON.stringify(cleanImages),
+        cleanLocation,
+        cleanPhone,
+        allowMessages !== false,
+        ["active", "sold", "draft"].includes(cleanStatus) ? cleanStatus : "active"
+      ]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        error: "Объявление не найдено или у вас нет прав"
+      });
+    }
+
+    res.json({
+      ok: true,
+      product: mapProduct(result.rows[0])
+    });
+  } catch (error) {
+    console.error("Update product error:", error);
+    res.status(500).json({
+      ok: false,
+      error: "Не удалось обновить объявление"
+    });
+  }
+});
+
 app.post("/api/products/:id/view", async (req, res) => {
   try {
     const productId = normalizeText(req.params.id, 64);
@@ -769,7 +980,9 @@ app.post("/api/products/:id/view", async (req, res) => {
       `
         UPDATE products
         SET views = COALESCE(views, 0) + 1
-        WHERE id = $1 AND COALESCE(status, 'active') <> 'deleted'
+        WHERE id = $1
+          AND COALESCE(status, 'active') = 'active'
+          AND COALESCE(hidden, FALSE) = FALSE
         RETURNING *;
       `,
       [productId]
@@ -796,6 +1009,51 @@ app.post("/api/products/:id/view", async (req, res) => {
   }
 });
 
+app.patch("/api/products/:id/status", requireTelegramAuth, syncTelegramUser, async (req, res) => {
+  try {
+    const productId = normalizeText(req.params.id, 64);
+    const status = normalizeProductStatus(req.body?.status, "");
+
+    if (!productId || !["active", "sold", "draft"].includes(status)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Некорректный статус объявления"
+      });
+    }
+
+    const result = await pool.query(
+      `
+        UPDATE products
+        SET status = $3,
+            updated_at = NOW()
+        WHERE id = $1
+          AND owner_id = $2
+          AND COALESCE(status, 'active') <> 'deleted'
+        RETURNING *;
+      `,
+      [productId, req.telegramUser.id, status]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        error: "Объявление не найдено или у вас нет прав"
+      });
+    }
+
+    res.json({
+      ok: true,
+      product: mapProduct(result.rows[0])
+    });
+  } catch (error) {
+    console.error("Update product status error:", error);
+    res.status(500).json({
+      ok: false,
+      error: "Не удалось изменить статус объявления"
+    });
+  }
+});
+
 app.delete("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req, res) => {
   try {
     const productId = normalizeText(req.params.id, 64);
@@ -806,8 +1064,13 @@ app.delete("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (re
 
     const result = await pool.query(
       `
-        DELETE FROM products
-        WHERE id = $1 AND owner_id = $2
+        UPDATE products
+        SET status = 'deleted',
+            hidden = TRUE,
+            updated_at = NOW()
+        WHERE id = $1
+          AND owner_id = $2
+          AND COALESCE(status, 'active') <> 'deleted'
         RETURNING id;
       `,
       [productId, req.telegramUser.id]
@@ -837,19 +1100,23 @@ app.get("/api/favorites", requireTelegramAuth, syncTelegramUser, async (req, res
   try {
     const result = await pool.query(
       `
-        SELECT f.product_id
+        SELECT p.*
         FROM favorites f
         JOIN products p ON p.id = f.product_id
         WHERE f.user_id = $1
-          AND COALESCE(p.status, 'active') <> 'deleted'
-          AND COALESCE(p.hidden, FALSE) = FALSE;
+          AND COALESCE(p.status, 'active') = 'active'
+          AND COALESCE(p.hidden, FALSE) = FALSE
+        ORDER BY f.created_at DESC;
       `,
       [req.telegramUser.id]
     );
 
+    const products = result.rows.map(mapProduct);
+
     res.json({
       ok: true,
-      favorites: result.rows.map(row => row.product_id)
+      favorites: products.map(product => product.id),
+      products
     });
   } catch (error) {
     console.error("Get favorites error:", error);
@@ -893,6 +1160,24 @@ app.post("/api/favorites", requireTelegramAuth, syncTelegramUser, async (req, re
       return res.json({
         ok: true,
         isFavorite: false
+      });
+    }
+
+    const productResult = await pool.query(
+      `
+        SELECT 1
+        FROM products
+        WHERE id = $1
+          AND COALESCE(status, 'active') = 'active'
+          AND COALESCE(hidden, FALSE) = FALSE;
+      `,
+      [productId]
+    );
+
+    if (productResult.rows.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        error: "Товар не найден или недоступен"
       });
     }
 
