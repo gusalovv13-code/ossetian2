@@ -1,15 +1,13 @@
 FROM node:22-alpine
 
-ENV NODE_ENV=production
+ENV NODE_ENV=production \
+    NPM_CONFIG_AUDIT=false \
+    NPM_CONFIG_FUND=false
 
 WORKDIR /app
 
-COPY package*.json ./
-RUN npm config set fetch-retries 5 \
-    && npm config set fetch-retry-factor 2 \
-    && npm config set fetch-timeout 600000 \
-    && npm ci --omit=dev \
-    && npm cache clean --force
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
 
 COPY --chown=node:node . .
 
