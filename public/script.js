@@ -214,7 +214,7 @@ function getAdClientKey() {
 
 async function loadAds() {
   try {
-    const data = await apiRequest("/api/ads", { cache: "no-store" });
+    const data = await apiRequest(`/api/ads?_=${Date.now()}`, { cache: "no-store" });
     state.ads = data.ads || [];
     renderCatalogTopAds();
     renderProductDetailAds();
@@ -241,7 +241,11 @@ async function trackAdEvent(adId, eventType) {
 }
 
 function getAdsByPlacement(placement) {
-  return state.ads.filter(ad => ad.placement === placement && ad.status === "active");
+  const normalizedPlacement = String(placement || "").trim().toLowerCase();
+  return state.ads.filter(ad =>
+    String(ad.placement || "").trim().toLowerCase() === normalizedPlacement &&
+    String(ad.status || "").trim().toLowerCase() === "active"
+  );
 }
 
 function renderAdCard(ad, variant = "feed") {
@@ -278,16 +282,20 @@ async function openAdCampaign(adId) {
 }
 
 function renderCatalogTopAds() {
-  const root = document.getElementById("catalogTopAds");
-  if (!root) return;
-  if (state.page !== "catalog") {
-    root.hidden = true;
-    root.innerHTML = "";
-    return;
+  const topAds = getAdsByPlacement("catalog_top").slice(0, 2);
+  const feedFallback = getAdsByPlacement("catalog_feed").slice(0, 1);
+  const homeAds = topAds.length > 0 ? topAds.slice(0, 1) : feedFallback;
+  const slots = [
+    { root: document.getElementById("homeTopAds"), visible: state.page === "home", ads: homeAds },
+    { root: document.getElementById("catalogTopAds"), visible: state.page === "catalog", ads: topAds }
+  ];
+
+  for (const slot of slots) {
+    if (!slot.root) continue;
+    const visibleAds = slot.visible ? slot.ads : [];
+    slot.root.hidden = visibleAds.length === 0;
+    slot.root.innerHTML = visibleAds.map(ad => renderAdCard(ad, "banner")).join("");
   }
-  const ads = getAdsByPlacement("catalog_top").slice(0, 2);
-  root.hidden = ads.length === 0;
-  root.innerHTML = ads.map(ad => renderAdCard(ad, "banner")).join("");
 }
 
 function renderProductDetailAds() {
@@ -526,6 +534,7 @@ function showPage(page, addToHistory = true, preserveCreateSession = false) {
   // Сначала даём браузеру показать новую страницу, затем начинаем сеть и тяжёлую отрисовку.
   requestAnimationFrame(() => {
     if (state.page !== page) return;
+    if (page === "home" || page === "catalog" || page === "product") loadAds();
     if (page === "catalog") loadProducts();
     if (page === "myAds") loadMyProducts();
     if (page === "favorites") loadFavorites();
@@ -2852,6 +2861,10 @@ async function initApp() {
   renderCurrentPage();
   updateBottomNav();
 
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) loadAds();
+  });
+
   const directProductId = new URLSearchParams(window.location.search).get("product");
   if (directProductId) {
     await openProduct(directProductId);
@@ -3535,7 +3548,7 @@ function getAdDeliveryNote(ad) {
   if (ad.endsAt && Number(ad.endsAt) < now) return `Не показывается: кампания завершилась ${new Date(ad.endsAt).toLocaleString("ru-RU")}.`;
   if (Number(ad.maxImpressions) > 0 && Number(ad.impressions) >= Number(ad.maxImpressions)) return "Не показывается: достигнут лимит показов.";
   if (ad.placement === "catalog_feed") return `Показывается в ленте примерно через каждые ${Math.max(2, Number(ad.insertEvery) || 6)} товаров.`;
-  if (ad.placement === "catalog_top") return "Показывается в верхней части каталога.";
+  if (ad.placement === "catalog_top") return "Показывается на главной и в верхней части каталога.";
   if (ad.placement === "product_detail") return "Показывается внутри карточки товара.";
   return "Кампания готова к показу.";
 }
@@ -3555,7 +3568,7 @@ function renderAdminAds(ads = []) {
         <label class="wide">URL изображения<input id="adCampaignImage" placeholder="https://..."></label>
         <label class="wide">Внешняя ссылка<input id="adCampaignTarget" placeholder="https://..."></label>
         <label>ID объявления<input id="adCampaignProduct" maxlength="64" placeholder="Вместо внешней ссылки"></label>
-        <label>Размещение<select id="adCampaignPlacement"><option value="catalog_top">Верх каталога</option><option value="catalog_feed">В ленте товаров</option><option value="product_detail">В карточке товара</option></select></label>
+        <label>Размещение<select id="adCampaignPlacement"><option value="catalog_top">Главная + верх каталога</option><option value="catalog_feed">В ленте товаров</option><option value="product_detail">В карточке товара</option></select></label>
         <label>Статус<select id="adCampaignStatus"><option value="draft">Черновик</option><option value="active">Активна</option><option value="paused">На паузе</option><option value="ended">Завершена</option></select></label>
         <label>Начало<input id="adCampaignStart" type="datetime-local"></label>
         <label>Окончание<input id="adCampaignEnd" type="datetime-local"></label>

@@ -3352,3 +3352,9 @@ button,
 .related-products img {
   background: #eef0f5;
 }
+
+
+/* v1.11.5: рекламный баннер также виден на главной странице */
+.home-top-ads {
+  margin-top: 14px;
+}

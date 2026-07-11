@@ -18,7 +18,7 @@ test("первая реклама видна даже в короткой лен
 });
 
 test("ответы рекламы не кешируются", () => {
-  assert.match(clientSource, /apiRequest\("\/api\/ads", \{ cache: "no-store" \}\)/);
+  assert.match(clientSource, /apiRequest\(`\/api\/ads\?_\=\$\{Date\.now\(\)\}`, \{ cache: "no-store" \}\)/);
   assert.match(serverSource, /Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate/);
 });
 

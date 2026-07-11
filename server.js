@@ -11,7 +11,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.11.4";
+const APP_VERSION = "1.11.5";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -101,7 +101,14 @@ app.use(express.static(publicDir, {
   maxAge: "1h",
   setHeaders(res, filePath) {
     if (filePath.endsWith("index.html")) {
-      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
+      return;
+    }
+
+    if (filePath.endsWith("script.js") || filePath.endsWith("style.css")) {
+      res.setHeader("Cache-Control", "no-cache, must-revalidate");
     }
   }
 }));
@@ -355,6 +362,9 @@ function mapPublicProduct(row) {
 }
 
 function mapAdCampaign(row) {
+  const normalizedPlacement = String(row.placement || "").trim().toLowerCase();
+  const normalizedStatus = String(row.status || "").trim().toLowerCase();
+
   return {
     id: row.id,
     title: row.title || "",
@@ -363,8 +373,8 @@ function mapAdCampaign(row) {
     targetUrl: row.target_url || "",
     linkedProductId: row.linked_product_id || "",
     buttonText: row.button_text || "Подробнее",
-    placement: AD_PLACEMENTS.has(row.placement) ? row.placement : "catalog_feed",
-    status: AD_STATUSES.has(row.status) ? row.status : "draft",
+    placement: AD_PLACEMENTS.has(normalizedPlacement) ? normalizedPlacement : "catalog_feed",
+    status: AD_STATUSES.has(normalizedStatus) ? normalizedStatus : "draft",
     startsAt: row.starts_at ? new Date(row.starts_at).getTime() : null,
     endsAt: row.ends_at ? new Date(row.ends_at).getTime() : null,
     priority: Number(row.priority) || 0,
@@ -1042,6 +1052,20 @@ async function initDb() {
   await pool.query(`ALTER TABLE advertising_campaigns ADD COLUMN IF NOT EXISTS billing_model TEXT DEFAULT 'flat';`);
   await pool.query(`ALTER TABLE advertising_campaigns ADD COLUMN IF NOT EXISTS rate_amount NUMERIC(12,2) DEFAULT 0;`);
   await pool.query(`ALTER TABLE advertising_campaigns ADD COLUMN IF NOT EXISTS is_paid BOOLEAN DEFAULT FALSE;`);
+  await pool.query(`
+    UPDATE advertising_campaigns
+    SET
+      status = CASE
+        WHEN LOWER(TRIM(COALESCE(status, ''))) IN ('draft', 'active', 'paused', 'ended')
+          THEN LOWER(TRIM(status))
+        ELSE 'draft'
+      END,
+      placement = CASE
+        WHEN LOWER(TRIM(COALESCE(placement, ''))) IN ('catalog_top', 'catalog_feed', 'product_detail')
+          THEN LOWER(TRIM(placement))
+        ELSE 'catalog_feed'
+      END;
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS advertising_events (
@@ -2227,10 +2251,10 @@ app.get("/api/ads", async (req, res) => {
     const requestedPlacement = normalizeText(req.query.placement, 30);
     const values = [];
     const conditions = [
-      "status = 'active'",
+      "LOWER(TRIM(COALESCE(status, ''))) = 'active'",
       "(starts_at IS NULL OR starts_at <= NOW())",
       "(ends_at IS NULL OR ends_at >= NOW())",
-      "(max_impressions = 0 OR impressions < max_impressions)"
+      "(COALESCE(max_impressions, 0) = 0 OR COALESCE(impressions, 0) < COALESCE(max_impressions, 0))"
     ];
 
     if (AD_PLACEMENTS.has(requestedPlacement)) {
@@ -3291,6 +3315,9 @@ a {
 });
 
 app.get("*", (req, res) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
   res.sendFile(path.join(publicDir, "index.html"));
 });
 
