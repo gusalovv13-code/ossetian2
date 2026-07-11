@@ -21,7 +21,21 @@ function safeImageUrl(value) {
     return url;
   }
 
+  if (/^\/api\/products\/[a-z0-9%._~-]+\/(?:thumbnail|media\/\d+)(?:\?v=\d+)?$/i.test(url)) {
+    return url;
+  }
+
+  if (/^\/api\/my-products\/[a-z0-9%._~-]+\/thumbnail\?owner=[a-z0-9%._~-]+&expires=\d+&token=[a-z0-9%._~-]+$/i.test(url)) {
+    return url;
+  }
+
   return DEFAULT_IMAGE;
+}
+
+function handleImageError(image) {
+  if (!image || image.dataset.fallbackApplied === "1") return;
+  image.dataset.fallbackApplied = "1";
+  image.src = DEFAULT_IMAGE;
 }
 
 function findProductById(id) {
@@ -82,10 +96,11 @@ const state = {
   openedProductId: null,
   telegramUser: null,
   products: [],
-  catalogPagination: { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE },
+  catalogPagination: { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE, hasMore: true },
   productsCacheKey: "",
   productsLoadedAt: 0,
   productsLoading: false,
+  productsLoadError: "",
   myProducts: [],
   sellerProducts: [],
   favoriteProducts: [],
@@ -121,30 +136,61 @@ let isPublishingAd = false;
 ======================= */
 
 async function apiRequest(url, options = {}) {
-  const { headers = {}, ...fetchOptions } = options;
+  const {
+    headers = {},
+    signal: externalSignal,
+    timeoutMs = 15_000,
+    ...fetchOptions
+  } = options;
+  const controller = new AbortController();
+  let timedOut = false;
+  let timeoutId = null;
 
-  const response = await fetch(url, {
-    ...fetchOptions,
-    headers: {
-      "Content-Type": "application/json",
-      ...getTelegramAuthHeaders(),
-      ...headers
-    }
-  });
+  const abortFromExternalSignal = () => controller.abort(externalSignal?.reason);
+  if (externalSignal) {
+    if (externalSignal.aborted) abortFromExternalSignal();
+    else externalSignal.addEventListener("abort", abortFromExternalSignal, { once: true });
+  }
 
-  let data;
+  if (Number(timeoutMs) > 0) {
+    timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, Number(timeoutMs));
+  }
 
   try {
-    data = await response.json();
+    const response = await fetch(url, {
+      ...fetchOptions,
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        ...getTelegramAuthHeaders(),
+        ...headers
+      }
+    });
+
+    let data;
+    try {
+      data = await response.json();
+    } catch (error) {
+      throw new Error(`Сервер вернул не JSON. Статус: ${response.status}`);
+    }
+
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || `Ошибка сервера: ${response.status}`);
+    }
+
+    return data;
   } catch (error) {
-    throw new Error(`Сервер вернул не JSON. Статус: ${response.status}`);
+    if (timedOut) {
+      throw new Error("Сервер отвечает слишком долго. Повторите попытку.");
+    }
+    throw error;
+  } finally {
+    if (timeoutId) window.clearTimeout(timeoutId);
+    externalSignal?.removeEventListener?.("abort", abortFromExternalSignal);
   }
-
-  if (!response.ok || !data.ok) {
-    throw new Error(data.error || `Ошибка сервера: ${response.status}`);
-  }
-
-  return data;
 }
 
 async function loadConfig() {
@@ -275,16 +321,17 @@ async function loadProducts({ force = false, append = false } = {}) {
   }
 
   const nextPage = append ? Number(state.catalogPagination.page || 0) + 1 : 1;
-  if (append && nextPage > Number(state.catalogPagination.pages || 1)) return;
+  if (append && state.catalogPagination.hasMore === false) return;
 
   const requestSequence = ++productsRequestSequence;
   productsAbortController?.abort();
   productsAbortController = new AbortController();
   state.productsLoading = true;
+  state.productsLoadError = "";
 
   if (!append && !sameQuery) {
     state.products = [];
-    state.catalogPagination = { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE };
+    state.catalogPagination = { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE, hasMore: true };
   }
   renderProducts();
 
@@ -315,13 +362,16 @@ async function loadProducts({ force = false, append = false } = {}) {
       page: nextPage,
       pages: nextPage,
       total: state.products.length,
-      limit: CATALOG_PAGE_SIZE
+      limit: CATALOG_PAGE_SIZE,
+      hasMore: false
     };
     state.productsCacheKey = cacheKey;
     state.productsLoadedAt = Date.now();
   } catch (error) {
     if (error?.name !== "AbortError" && requestSequence === productsRequestSequence) {
       console.error("Не удалось загрузить товары:", error);
+      state.catalogPagination.hasMore = false;
+      state.productsLoadError = error.message || "Не удалось загрузить объявления";
     }
   } finally {
     if (requestSequence === productsRequestSequence) {
@@ -903,6 +953,18 @@ function renderProducts() {
     return;
   }
 
+  if (state.productsLoadError && products.length === 0) {
+    productList.innerHTML = `
+      <div class="empty-state">
+        <h3>Не удалось загрузить объявления</h3>
+        <p class="muted">${escapeHTML(state.productsLoadError)}</p>
+        <button type="button" class="primary" onclick="loadProducts({ force: true })">Повторить</button>
+      </div>
+    `;
+    if (loadMoreButton) loadMoreButton.hidden = true;
+    return;
+  }
+
   if (products.length === 0) {
     productList.innerHTML = `
       <div class="empty-state">
@@ -919,7 +981,7 @@ function renderProducts() {
   let adIndex = 0;
 
   products.forEach((product, index) => {
-    markup.push(getProductCard(product, { priority: index < 4 }));
+    markup.push(getProductCard(product, { priority: index < 2 }));
     const ad = feedAds[adIndex % Math.max(feedAds.length, 1)];
     if (ad && (index + 1) % Math.max(2, Number(ad.insertEvery) || 6) === 0) {
       markup.push(renderAdCard(ad, "feed"));
@@ -930,7 +992,9 @@ function renderProducts() {
   productList.innerHTML = markup.join("");
 
   if (loadMoreButton) {
-    const hasMore = Number(state.catalogPagination.page || 0) < Number(state.catalogPagination.pages || 1);
+    const hasMore = typeof state.catalogPagination.hasMore === "boolean"
+      ? state.catalogPagination.hasMore
+      : Number(state.catalogPagination.page || 0) < Number(state.catalogPagination.pages || 1);
     loadMoreButton.hidden = !hasMore;
     loadMoreButton.disabled = state.productsLoading;
     loadMoreButton.textContent = state.productsLoading ? "Загружаем…" : "Показать ещё";
@@ -990,7 +1054,7 @@ function getProductCard(product, options = {}) {
 
   return `
     <div class="product-card ${status !== "active" ? "is-inactive" : ""}" onclick="openProduct('${productId}')">
-      <img src="${image}" alt="${name}" loading="${options.priority ? "eager" : "lazy"}" decoding="async" fetchpriority="${options.priority ? "high" : "low"}">
+      <img src="${image}" alt="${name}" loading="${options.priority ? "eager" : "lazy"}" decoding="async" fetchpriority="${options.priority ? "high" : "low"}" onerror="handleImageError(this)">
       <div>
         ${priceDropMarkup}
         <h4>${name}</h4>
@@ -1221,8 +1285,16 @@ function showProductImage(index) {
   const previousButton = document.getElementById("productPrevImage");
   const nextButton = document.getElementById("productNextImage");
 
-  if (imageEl) imageEl.src = source;
-  if (lightboxImage) lightboxImage.src = source;
+  if (imageEl) {
+    imageEl.dataset.fallbackApplied = "0";
+    imageEl.onerror = () => handleImageError(imageEl);
+    imageEl.src = source;
+  }
+  if (lightboxImage) {
+    lightboxImage.dataset.fallbackApplied = "0";
+    lightboxImage.onerror = () => handleImageError(lightboxImage);
+    lightboxImage.src = source;
+  }
   if (counter) counter.textContent = `${normalizedIndex + 1} / ${images.length}`;
   if (lightboxCounter) lightboxCounter.textContent = `${normalizedIndex + 1} / ${images.length}`;
   if (previousButton) previousButton.hidden = images.length <= 1;
@@ -2761,7 +2833,6 @@ async function initApp() {
   await Promise.all([
     loadConfig(),
     loadAds(),
-    loadProducts(),
     loadFavoriteIds()
   ]);
 
@@ -2873,7 +2944,7 @@ async function openSellerProfile(userId) {
 
         return `
           <div class="seller-product-card" onclick="openProduct('${productId}')">
-            <img src="${image}" class="seller-product-image" alt="${name}" loading="lazy">
+            <img src="${image}" class="seller-product-image" alt="${name}" loading="lazy" decoding="async" onerror="handleImageError(this)">
             <div class="seller-product-info">
               <div class="seller-product-name">${name}</div>
               <div class="seller-product-price">${price}</div>

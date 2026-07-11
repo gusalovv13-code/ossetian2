@@ -3,7 +3,7 @@ import compression from "compression";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
-import { randomUUID } from "crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "crypto";
 import pg from "pg";
 import { createTelegramAuthMiddleware } from "./telegram-auth.js";
 
@@ -11,7 +11,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.11.1";
+const APP_VERSION = "1.11.2";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -78,7 +78,13 @@ if (!DATABASE_URL) {
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
-  ssl: DATABASE_SSL ? { rejectUnauthorized: false } : false
+  ssl: DATABASE_SSL ? { rejectUnauthorized: false } : false,
+  max: 15,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 7_000,
+  statement_timeout: 15_000,
+  query_timeout: 15_000,
+  keepAlive: true
 });
 
 const requireTelegramAuth = createTelegramAuthMiddleware({
@@ -179,8 +185,12 @@ const PRODUCT_SUMMARY_COLUMNS = `
   p.price_dropped_at,
   p.category,
   LEFT(p.description, 240) AS description,
-  COALESCE(NULLIF(p.thumbnail, ''), p.image, '') AS thumbnail,
-  COALESCE(NULLIF(p.thumbnail, ''), p.image, '') AS image,
+  CASE
+    WHEN NULLIF(p.thumbnail, '') IS NOT NULL THEN TRUE
+    WHEN NULLIF(p.image, '') IS NOT NULL THEN TRUE
+    WHEN jsonb_typeof(p.images) = 'array' THEN jsonb_array_length(p.images) > 0
+    ELSE FALSE
+  END AS has_image,
   p.location,
   p.district,
   p.condition,
@@ -195,11 +205,92 @@ const PRODUCT_SUMMARY_COLUMNS = `
   p.updated_at
 `;
 
+const PRODUCT_PUBLIC_DETAIL_COLUMNS = `
+  p.id,
+  p.owner_id,
+  p.owner_name,
+  p.owner_username,
+  p.name,
+  p.price,
+  p.price_amount,
+  p.previous_price,
+  p.previous_price_amount,
+  p.price_dropped_at,
+  p.category,
+  p.description,
+  p.location,
+  p.district,
+  p.phone,
+  p.allow_messages,
+  p.condition,
+  p.negotiable,
+  p.delivery,
+  p.specifications,
+  p.views,
+  p.status,
+  p.hidden,
+  p.moderation_status,
+  p.moderation_reason,
+  p.moderation_matches,
+  p.moderation_target_status,
+  p.auto_hidden,
+  p.created_at,
+  p.updated_at,
+  CASE
+    WHEN jsonb_typeof(p.images) = 'array' THEN
+      CASE
+        WHEN jsonb_array_length(p.images) > 0 THEN jsonb_array_length(p.images)
+        WHEN NULLIF(p.image, '') IS NOT NULL THEN 1
+        ELSE 0
+      END
+    WHEN NULLIF(p.image, '') IS NOT NULL THEN 1
+    ELSE 0
+  END AS image_count
+`;
+
+function buildProductMediaUrl(productId, kind, version = "") {
+  const base = `/api/products/${encodeURIComponent(String(productId || ""))}/${kind}`;
+  const versionValue = version ? new Date(version).getTime() : 0;
+  return versionValue > 0 ? `${base}?v=${versionValue}` : base;
+}
+
+function getPrivateMediaExpiry() {
+  const twoHours = 2 * 60 * 60 * 1000;
+  return Math.ceil((Date.now() + twoHours) / 3_600_000) * 3_600_000;
+}
+
+function createPrivateMediaToken(productId, ownerId, expiresAt) {
+  return createHmac("sha256", BOT_TOKEN)
+    .update(`${productId}:${ownerId}:${expiresAt}`)
+    .digest("base64url");
+}
+
+function buildOwnProductThumbnailUrl(row) {
+  if (!row.has_image) return "";
+  const expiresAt = getPrivateMediaExpiry();
+  const ownerId = String(row.owner_id || "");
+  const token = createPrivateMediaToken(row.id, ownerId, expiresAt);
+  return `/api/my-products/${encodeURIComponent(String(row.id || ""))}/thumbnail` +
+    `?owner=${encodeURIComponent(ownerId)}&expires=${expiresAt}&token=${encodeURIComponent(token)}`;
+}
+
+function isValidPrivateMediaToken(productId, ownerId, expiresAt, token) {
+  if (!productId || !ownerId || !Number.isFinite(expiresAt) || expiresAt < Date.now()) return false;
+  if (expiresAt > Date.now() + 3 * 60 * 60 * 1000) return false;
+
+  const expected = createPrivateMediaToken(productId, ownerId, expiresAt);
+  const actualBuffer = Buffer.from(String(token || ""));
+  const expectedBuffer = Buffer.from(expected);
+  return actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer);
+}
+
 function mapProductSummary(row) {
   const currentAmount = Number(row.price_amount) || parsePriceAmount(row.price);
   const previousAmount = Number(row.previous_price_amount) || parsePriceAmount(row.previous_price);
   const priceDropped = Boolean(previousAmount > currentAmount && currentAmount > 0);
-  const image = row.thumbnail || row.image || "";
+  const image = row.has_image
+    ? buildProductMediaUrl(row.id, "thumbnail", row.updated_at || row.created_at)
+    : "";
 
   return {
     id: row.id,
@@ -235,6 +326,32 @@ function mapProductSummary(row) {
     updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : null,
     isSummary: true
   };
+}
+
+function mapOwnProductSummary(row) {
+  const product = mapProductSummary(row);
+  const image = buildOwnProductThumbnailUrl(row);
+  product.image = image;
+  product.thumbnail = image;
+  return product;
+}
+
+function mapPublicProduct(row) {
+  const product = mapProduct(row);
+  const imageCount = Math.max(0, Math.min(5, Number(row.image_count) || 0));
+  const version = row.updated_at || row.created_at;
+  const images = Array.from({ length: imageCount }, (_, index) =>
+    buildProductMediaUrl(row.id, `media/${index}`, version)
+  );
+
+  product.images = images;
+  product.image = images[0] || "";
+  product.thumbnail = imageCount > 0
+    ? buildProductMediaUrl(row.id, "thumbnail", version)
+    : "";
+  product.isSummary = false;
+  product.quality = calculateListingQuality(product);
+  return product;
 }
 
 function mapAdCampaign(row) {
@@ -1019,6 +1136,11 @@ async function initDb() {
       AND moderation_status = 'approved';
   `);
 
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_product_images_product_position
+    ON product_images (product_id, position);
+  `);
+
   console.log("Database initialized");
 }
 
@@ -1262,6 +1384,138 @@ app.get("/api/users/:id/products", async (req, res) => {
   }
 });
 
+function sendProductMedia(res, source, cacheSeconds = 86_400, cacheScope = "public") {
+  const value = String(source || "").trim();
+
+  if (/^https:\/\/[^\s"'<>]+$/i.test(value)) {
+    res.setHeader("Cache-Control", `${cacheScope}, max-age=${cacheSeconds}, stale-while-revalidate=604800`);
+    return res.redirect(302, value);
+  }
+
+  const match = value.match(/^data:image\/(jpeg|jpg|png|webp);base64,([a-z0-9+/=\s]+)$/i);
+  if (!match) return res.status(404).end();
+
+  try {
+    const mimeSubtype = match[1].toLowerCase() === "jpg" ? "jpeg" : match[1].toLowerCase();
+    const buffer = Buffer.from(match[2].replace(/\s+/g, ""), "base64");
+    if (!buffer.length) return res.status(404).end();
+
+    res.setHeader("Content-Type", `image/${mimeSubtype}`);
+    res.setHeader("Content-Length", String(buffer.length));
+    res.setHeader("Cache-Control", `${cacheScope}, max-age=${cacheSeconds}, stale-while-revalidate=604800`);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    return res.send(buffer);
+  } catch (error) {
+    console.error("Product media decode error:", error);
+    return res.status(500).end();
+  }
+}
+
+app.get("/api/my-products/:id/thumbnail", async (req, res) => {
+  try {
+    const productId = normalizeText(req.params.id, 64);
+    const ownerId = normalizeText(req.query.owner, 64);
+    const expiresAt = Number(req.query.expires);
+    const token = String(req.query.token || "");
+
+    if (!isValidPrivateMediaToken(productId, ownerId, expiresAt, token)) {
+      return res.status(403).end();
+    }
+
+    const result = await pool.query(
+      `
+        SELECT COALESCE(
+          NULLIF(thumbnail, ''),
+          NULLIF(image, ''),
+          CASE
+            WHEN jsonb_typeof(images) = 'array' THEN images ->> 0
+            ELSE NULL
+          END
+        ) AS source
+        FROM products
+        WHERE id = $1
+          AND owner_id = $2
+          AND COALESCE(status, 'active') <> 'deleted'
+        LIMIT 1;
+      `,
+      [productId, ownerId]
+    );
+
+    if (result.rows.length === 0) return res.status(404).end();
+    return sendProductMedia(res, result.rows[0].source, 3_600, "private");
+  } catch (error) {
+    console.error("Own product thumbnail error:", error);
+    return res.status(500).end();
+  }
+});
+
+app.get("/api/products/:id/thumbnail", async (req, res) => {
+  try {
+    const productId = normalizeText(req.params.id, 64);
+    if (!productId) return res.status(400).end();
+
+    const result = await pool.query(
+      `
+        SELECT COALESCE(
+          NULLIF(thumbnail, ''),
+          NULLIF(image, ''),
+          CASE
+            WHEN jsonb_typeof(images) = 'array' THEN images ->> 0
+            ELSE NULL
+          END
+        ) AS source
+        FROM products
+        WHERE id = $1
+          AND COALESCE(status, 'active') = 'active'
+          AND COALESCE(hidden, FALSE) = FALSE
+          AND COALESCE(moderation_status, 'approved') = 'approved'
+        LIMIT 1;
+      `,
+      [productId]
+    );
+
+    if (result.rows.length === 0) return res.status(404).end();
+    return sendProductMedia(res, result.rows[0].source);
+  } catch (error) {
+    console.error("Product thumbnail error:", error);
+    return res.status(500).end();
+  }
+});
+
+app.get("/api/products/:id/media/:index", async (req, res) => {
+  try {
+    const productId = normalizeText(req.params.id, 64);
+    const rawIndex = String(req.params.index || "");
+    if (!productId || !/^\d+$/.test(rawIndex)) return res.status(400).end();
+    const index = Number(rawIndex);
+    if (!Number.isInteger(index) || index < 0 || index > 4) return res.status(400).end();
+
+    const result = await pool.query(
+      `
+        SELECT CASE
+          WHEN jsonb_typeof(images) = 'array' THEN
+            COALESCE(images ->> $2, CASE WHEN $2 = 0 THEN NULLIF(image, '') END)
+          WHEN $2 = 0 THEN NULLIF(image, '')
+          ELSE NULL
+        END AS source
+        FROM products
+        WHERE id = $1
+          AND COALESCE(status, 'active') = 'active'
+          AND COALESCE(hidden, FALSE) = FALSE
+          AND COALESCE(moderation_status, 'approved') = 'approved'
+        LIMIT 1;
+      `,
+      [productId, index]
+    );
+
+    if (result.rows.length === 0) return res.status(404).end();
+    return sendProductMedia(res, result.rows[0].source);
+  } catch (error) {
+    console.error("Product media error:", error);
+    return res.status(500).end();
+  }
+});
+
 app.get("/api/products", async (req, res) => {
   try {
     const page = normalizePositiveInteger(req.query.page, 1, 100000);
@@ -1291,32 +1545,30 @@ app.get("/api/products", async (req, res) => {
     }
 
     const whereSql = conditions.join(" AND ");
-    const queryValues = [...values, limit, offset];
-    const [countResult, result] = await Promise.all([
-      pool.query(`SELECT COUNT(*)::int AS count FROM products p WHERE ${whereSql};`, values),
-      pool.query(
-        `
-          SELECT ${PRODUCT_SUMMARY_COLUMNS}
-          FROM products p
-          WHERE ${whereSql}
-          ORDER BY p.created_at DESC
-          LIMIT $${values.length + 1}
-          OFFSET $${values.length + 2};
-        `,
-        queryValues
-      )
-    ]);
+    const queryValues = [...values, limit + 1, offset];
+    const result = await pool.query(
+      `
+        SELECT ${PRODUCT_SUMMARY_COLUMNS}
+        FROM products p
+        WHERE ${whereSql}
+        ORDER BY p.created_at DESC
+        LIMIT $${values.length + 1}
+        OFFSET $${values.length + 2};
+      `,
+      queryValues
+    );
 
-    const total = countResult.rows[0]?.count || 0;
+    const hasMore = result.rows.length > limit;
+    const visibleRows = hasMore ? result.rows.slice(0, limit) : result.rows;
     res.setHeader("Cache-Control", "public, max-age=10, stale-while-revalidate=30");
     res.json({
       ok: true,
-      products: result.rows.map(mapProductSummary),
+      products: visibleRows.map(mapProductSummary),
       pagination: {
         page,
         limit,
-        total,
-        pages: Math.max(1, Math.ceil(total / limit))
+        hasMore,
+        pages: hasMore ? page + 1 : page
       }
     });
   } catch (error) {
@@ -1338,7 +1590,7 @@ app.get("/api/my-products", requireTelegramAuth, syncTelegramUser, async (req, r
       [req.telegramUser.id]
     );
 
-    res.json({ ok: true, products: result.rows.map(mapProductSummary) });
+    res.json({ ok: true, products: result.rows.map(mapOwnProductSummary) });
   } catch (error) {
     console.error("Get my products error:", error);
     res.status(500).json({ ok: false, error: "Не удалось получить мои объявления" });
@@ -1630,7 +1882,7 @@ app.get("/api/products/:id/details", async (req, res) => {
     const productResult = await pool.query(
       `
         SELECT
-          p.*,
+          ${PRODUCT_PUBLIC_DETAIL_COLUMNS},
           (SELECT COUNT(*)::int FROM favorites f WHERE f.product_id = p.id) AS favorite_count,
           (SELECT COUNT(*)::int FROM reports r WHERE r.product_id = p.id AND r.status = 'pending') AS report_count
         FROM products p
@@ -1694,7 +1946,7 @@ app.get("/api/products/:id/details", async (req, res) => {
 
     res.json({
       ok: true,
-      product: mapProduct(row),
+      product: mapPublicProduct(row),
       similarProducts: similarResult.rows.map(mapProductSummary),
       sellerProducts: sellerResult.rows.map(mapProductSummary),
       priceHistory: priceHistoryResult.rows

@@ -3322,7 +3322,31 @@ body.dark-mode .skeleton-line {
   }
 }
 
+/* v1.11.2: быстрые тапы и изоляция отрисовки тяжёлых карточек. */
+button,
+[role="button"],
+.product-card,
+.seller-product-card,
+.advertising-card,
+.menu-card {
+  touch-action: manipulation;
+}
+
 .product-card {
   content-visibility: auto;
   contain-intrinsic-size: 116px;
+  contain: layout paint style;
+}
+
+.seller-product-card,
+.advertising-card {
+  content-visibility: auto;
+  contain-intrinsic-size: 160px;
+  contain: layout paint style;
+}
+
+.product-card img,
+.seller-product-card img,
+.related-products img {
+  background: #eef0f5;
 }

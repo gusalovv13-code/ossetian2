@@ -56,3 +56,26 @@ test("сервер сжимает текстовые ответы", () => {
   assert.equal(typeof packageSource.dependencies.compression, "string");
   assert.match(serverSource, /app\.use\(compression/);
 });
+
+
+test("публичный каталог не передаёт Base64-фотографии внутри JSON", () => {
+  const summaryColumns = serverSource.match(/const PRODUCT_SUMMARY_COLUMNS = `[\s\S]*?`;/)?.[0] || "";
+  assert.match(summaryColumns, /AS has_image/);
+  assert.doesNotMatch(summaryColumns, /AS thumbnail/);
+  assert.doesNotMatch(summaryColumns, /AS image/);
+  assert.match(serverSource, /\/api\/products\/:id\/thumbnail/);
+  assert.match(serverSource, /\/api\/products\/:id\/media\/:index/);
+});
+
+test("главный экран не начинает загрузку каталога в фоне", () => {
+  const initBlock = clientSource.match(/async function initApp\(\)[\s\S]*?\n\}/)?.[0] || "";
+  assert.doesNotMatch(initBlock, /loadProducts\(\)/);
+  assert.match(clientSource, /if \(page === "catalog"\) loadProducts\(\)/);
+});
+
+test("каталог не выполняет отдельный COUNT перед каждой страницей", () => {
+  const productsRoute = serverSource.match(/app\.get\("\/api\/products"[\s\S]*?\n\}\);/)?.[0] || "";
+  assert.doesNotMatch(productsRoute, /SELECT COUNT\(\*\)/);
+  assert.match(productsRoute, /limit \+ 1/);
+  assert.match(productsRoute, /hasMore/);
+});
