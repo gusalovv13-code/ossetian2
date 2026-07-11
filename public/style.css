@@ -3201,6 +3201,8 @@ body.dark-mode .admin-badge.warning {
 .admin-record-image { width: 82px; height: 82px; border-radius: 13px; object-fit: cover; flex: 0 0 auto; }
 .admin-moderation-record,
 .ad-admin-record { align-items: flex-start; }
+.ad-delivery-note { display: block; margin-top: 8px; color: #6b7280; line-height: 1.4; }
+body.dark-mode .ad-delivery-note { color: #aeb5c2; }
 .ad-editor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; }
 .ad-editor-grid label { display: grid; gap: 5px; font-size: 12px; font-weight: 750; }
 .ad-editor-grid label.wide { grid-column: 1 / -1; }

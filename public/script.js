@@ -214,7 +214,7 @@ function getAdClientKey() {
 
 async function loadAds() {
   try {
-    const data = await apiRequest("/api/ads");
+    const data = await apiRequest("/api/ads", { cache: "no-store" });
     state.ads = data.ads || [];
     renderCatalogTopAds();
     renderProductDetailAds();
@@ -979,13 +979,26 @@ function renderProducts() {
   const feedAds = getAdsByPlacement("catalog_feed");
   const markup = [];
   let adIndex = 0;
+  let nextAdPosition = Number.POSITIVE_INFINITY;
+
+  if (feedAds.length > 0) {
+    const firstInterval = Math.max(2, Number(feedAds[0].insertEvery) || 6);
+    // Даже в небольшом каталоге первая активная реклама должна быть видна.
+    nextAdPosition = Math.min(firstInterval, products.length);
+  }
 
   products.forEach((product, index) => {
     markup.push(getProductCard(product, { priority: index < 2 }));
-    const ad = feedAds[adIndex % Math.max(feedAds.length, 1)];
-    if (ad && (index + 1) % Math.max(2, Number(ad.insertEvery) || 6) === 0) {
+    const productPosition = index + 1;
+
+    if (feedAds.length > 0 && productPosition === nextAdPosition) {
+      const ad = feedAds[adIndex % feedAds.length];
       markup.push(renderAdCard(ad, "feed"));
       adIndex += 1;
+
+      const nextAd = feedAds[adIndex % feedAds.length];
+      const nextInterval = Math.max(2, Number(nextAd?.insertEvery) || 6);
+      nextAdPosition = productPosition + nextInterval;
     }
   });
 
@@ -3515,6 +3528,18 @@ function adDateInput(timestamp) {
 
 let adminAdsCache = [];
 
+function getAdDeliveryNote(ad) {
+  const now = Date.now();
+  if (ad.status !== "active") return "Не показывается: статус кампании не «Активна».";
+  if (ad.startsAt && Number(ad.startsAt) > now) return `Показы начнутся ${new Date(ad.startsAt).toLocaleString("ru-RU")}.`;
+  if (ad.endsAt && Number(ad.endsAt) < now) return `Не показывается: кампания завершилась ${new Date(ad.endsAt).toLocaleString("ru-RU")}.`;
+  if (Number(ad.maxImpressions) > 0 && Number(ad.impressions) >= Number(ad.maxImpressions)) return "Не показывается: достигнут лимит показов.";
+  if (ad.placement === "catalog_feed") return `Показывается в ленте примерно через каждые ${Math.max(2, Number(ad.insertEvery) || 6)} товаров.`;
+  if (ad.placement === "catalog_top") return "Показывается в верхней части каталога.";
+  if (ad.placement === "product_detail") return "Показывается внутри карточки товара.";
+  return "Кампания готова к показу.";
+}
+
 function renderAdminAds(ads = []) {
   adminAdsCache = ads;
   const root = document.getElementById("adminContent");
@@ -3552,11 +3577,20 @@ function renderAdminAds(ads = []) {
             <div class="admin-record-title-row"><b>${escapeHTML(ad.title)}</b><span class="admin-badge ${ad.status === "active" ? "success" : "warning"}">${escapeHTML(ad.status)}</span></div>
             <p>${escapeHTML(ad.description || "Без описания")}</p>
             <div class="admin-record-meta"><span>${escapeHTML(ad.placement)}</span><span>👁 ${Number(ad.impressions)||0}</span><span>🖱 ${Number(ad.clicks)||0}</span><strong>CTR ${Number(ad.ctr)||0}%</strong><strong>Доход ${Number(ad.estimatedRevenue||0).toLocaleString("ru-RU", {maximumFractionDigits:2})} ₽</strong><span class="admin-badge ${ad.isPaid ? "success" : "warning"}">${ad.isPaid ? "Оплачено" : "Не оплачено"}</span></div>
+            <small class="ad-delivery-note">${escapeHTML(getAdDeliveryNote(ad))}</small>
             <div class="admin-report-actions"><button type="button" class="admin-action-button restore" onclick="editAdCampaignById('${escapeHTML(ad.id)}')">Редактировать</button><button type="button" class="admin-action-button danger" onclick="deleteAdCampaign('${escapeHTML(ad.id)}',this)">Удалить</button></div>
           </div>
         </article>`).join("") : '<div class="admin-state"><span>📣</span><b>Рекламы пока нет</b><small>Создайте первую кампанию выше.</small></div>'}
     </div>
   `;
+}
+
+function datetimeLocalToISOString(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return null;
+
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
 function getAdCampaignFormData() {
@@ -3569,8 +3603,8 @@ function getAdCampaignFormData() {
     buttonText: document.getElementById("adCampaignButton")?.value.trim() || "Подробнее",
     placement: document.getElementById("adCampaignPlacement")?.value || "catalog_feed",
     status: document.getElementById("adCampaignStatus")?.value || "draft",
-    startsAt: document.getElementById("adCampaignStart")?.value || null,
-    endsAt: document.getElementById("adCampaignEnd")?.value || null,
+    startsAt: datetimeLocalToISOString(document.getElementById("adCampaignStart")?.value),
+    endsAt: datetimeLocalToISOString(document.getElementById("adCampaignEnd")?.value),
     priority: Number(document.getElementById("adCampaignPriority")?.value) || 0,
     insertEvery: Number(document.getElementById("adCampaignEvery")?.value) || 6,
     maxImpressions: Number(document.getElementById("adCampaignLimit")?.value) || 0,

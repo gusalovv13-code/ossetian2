@@ -11,7 +11,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.11.3";
+const APP_VERSION = "1.11.4";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -2223,6 +2223,7 @@ app.post("/api/favorites", requireTelegramAuth, syncTelegramUser, async (req, re
 
 app.get("/api/ads", async (req, res) => {
   try {
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
     const requestedPlacement = normalizeText(req.query.placement, 30);
     const values = [];
     const conditions = [
