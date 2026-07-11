@@ -1,4 +1,5 @@
 import express from "express";
+import compression from "compression";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -10,7 +11,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.11.0";
+const APP_VERSION = "1.11.1";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -86,8 +87,18 @@ const requireTelegramAuth = createTelegramAuthMiddleware({
 });
 
 app.disable("x-powered-by");
+app.use(compression({ threshold: 1024 }));
 app.use(express.json({ limit: "30mb" }));
-app.use(express.static(publicDir));
+app.use(express.static(publicDir, {
+  etag: true,
+  lastModified: true,
+  maxAge: "1h",
+  setHeaders(res, filePath) {
+    if (filePath.endsWith("index.html")) {
+      res.setHeader("Cache-Control", "no-cache");
+    }
+  }
+}));
 
 function normalizeImages(row) {
   if (Array.isArray(row.images) && row.images.length > 0) {
@@ -121,6 +132,7 @@ function mapProduct(row) {
     category: row.category,
     desc: row.description,
     image: images[0] || row.image || "",
+    thumbnail: row.thumbnail || images[0] || row.image || "",
     images,
     location: row.location,
     district: row.district || "",
@@ -152,6 +164,77 @@ function mapProduct(row) {
     : 0;
   product.quality = calculateListingQuality(product);
   return product;
+}
+
+const PRODUCT_SUMMARY_COLUMNS = `
+  p.id,
+  p.owner_id,
+  p.owner_name,
+  p.owner_username,
+  p.name,
+  p.price,
+  p.price_amount,
+  p.previous_price,
+  p.previous_price_amount,
+  p.price_dropped_at,
+  p.category,
+  LEFT(p.description, 240) AS description,
+  COALESCE(NULLIF(p.thumbnail, ''), p.image, '') AS thumbnail,
+  COALESCE(NULLIF(p.thumbnail, ''), p.image, '') AS image,
+  p.location,
+  p.district,
+  p.condition,
+  p.negotiable,
+  p.delivery,
+  p.views,
+  p.status,
+  p.hidden,
+  p.moderation_status,
+  p.moderation_reason,
+  p.created_at,
+  p.updated_at
+`;
+
+function mapProductSummary(row) {
+  const currentAmount = Number(row.price_amount) || parsePriceAmount(row.price);
+  const previousAmount = Number(row.previous_price_amount) || parsePriceAmount(row.previous_price);
+  const priceDropped = Boolean(previousAmount > currentAmount && currentAmount > 0);
+  const image = row.thumbnail || row.image || "";
+
+  return {
+    id: row.id,
+    ownerId: row.owner_id,
+    ownerName: row.owner_name,
+    ownerUsername: row.owner_username,
+    name: row.name,
+    price: row.price,
+    priceAmount: currentAmount,
+    previousPrice: row.previous_price || "",
+    previousPriceAmount: previousAmount,
+    priceDroppedAt: row.price_dropped_at ? new Date(row.price_dropped_at).getTime() : null,
+    priceDropped,
+    priceDropPercent: priceDropped
+      ? Math.max(1, Math.round(((previousAmount - currentAmount) / previousAmount) * 100))
+      : 0,
+    category: row.category,
+    desc: row.description || "",
+    image,
+    thumbnail: image,
+    location: row.location,
+    district: row.district || "",
+    condition: PRODUCT_CONDITIONS.has(row.condition) ? row.condition : "used",
+    negotiable: Boolean(row.negotiable),
+    delivery: Boolean(row.delivery),
+    views: Number(row.views) || 0,
+    favoriteCount: Number(row.favorite_count) || 0,
+    status: row.status || "active",
+    hidden: Boolean(row.hidden),
+    moderationStatus: MODERATION_STATUSES.has(row.moderation_status) ? row.moderation_status : "approved",
+    moderationReason: row.moderation_reason || "",
+    createdAt: row.created_at ? new Date(row.created_at).getTime() : null,
+    updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : null,
+    isSummary: true
+  };
 }
 
 function mapAdCampaign(row) {
@@ -567,6 +650,11 @@ async function initDb() {
   `);
 
   await pool.query(`
+    ALTER TABLE products
+    ADD COLUMN IF NOT EXISTS thumbnail TEXT DEFAULT '';
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       telegram_id TEXT PRIMARY KEY,
       username TEXT,
@@ -923,6 +1011,14 @@ async function initDb() {
     ON advertising_campaigns (status, placement, priority DESC, created_at DESC);
   `);
 
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_products_public_feed
+    ON products (created_at DESC)
+    WHERE status = 'active'
+      AND hidden = FALSE
+      AND moderation_status = 'approved';
+  `);
+
   console.log("Database initialized");
 }
 
@@ -1141,92 +1237,81 @@ app.get("/api/users/:id/products", async (req, res) => {
     const userId = normalizeText(req.params.id, 64);
 
     if (!userId) {
-      return res.status(400).json({
-        ok: false,
-        error: "Некорректный ID продавца"
-      });
+      return res.status(400).json({ ok: false, error: "Некорректный ID продавца" });
     }
 
     const result = await pool.query(
       `
-      SELECT *
-      FROM products
-      WHERE owner_id = $1
-        AND COALESCE(status, 'active') = 'active'
-        AND COALESCE(hidden, FALSE) = FALSE
-          AND COALESCE(moderation_status, 'approved') = 'approved'
-      ORDER BY created_at DESC;
+        SELECT ${PRODUCT_SUMMARY_COLUMNS}
+        FROM products p
+        WHERE p.owner_id = $1
+          AND COALESCE(p.status, 'active') = 'active'
+          AND COALESCE(p.hidden, FALSE) = FALSE
+          AND COALESCE(p.moderation_status, 'approved') = 'approved'
+        ORDER BY p.created_at DESC
+        LIMIT 30;
       `,
       [userId]
     );
 
-    res.json({
-      ok: true,
-      products: result.rows.map(mapProduct)
-    });
+    res.setHeader("Cache-Control", "public, max-age=15, stale-while-revalidate=30");
+    res.json({ ok: true, products: result.rows.map(mapProductSummary) });
   } catch (error) {
     console.error("Get seller products error:", error);
-    res.status(500).json({
-      ok: false,
-      error: "Не удалось получить товары продавца"
-    });
+    res.status(500).json({ ok: false, error: "Не удалось получить товары продавца" });
   }
 });
 
 app.get("/api/products", async (req, res) => {
   try {
     const page = normalizePositiveInteger(req.query.page, 1, 100000);
-    const limit = normalizePositiveInteger(req.query.limit, 50, 100);
+    const limit = normalizePositiveInteger(req.query.limit, 12, 30);
     const offset = (page - 1) * limit;
     const search = normalizeText(req.query.q, 100);
     const requestedCategory = normalizeText(req.query.category, 60);
-    const category = PRODUCT_CATEGORIES.has(requestedCategory)
-      ? requestedCategory
-      : "";
+    const category = PRODUCT_CATEGORIES.has(requestedCategory) ? requestedCategory : "";
 
     const conditions = [
-      "COALESCE(status, 'active') = $1",
-      "COALESCE(hidden, FALSE) = FALSE",
-      "COALESCE(moderation_status, 'approved') = 'approved"
+      "COALESCE(p.status, 'active') = $1",
+      "COALESCE(p.hidden, FALSE) = FALSE",
+      "COALESCE(p.moderation_status, 'approved') = 'approved'"
     ];
     const values = [PUBLIC_PRODUCT_STATUS];
 
     if (search) {
       values.push(`%${search}%`);
       conditions.push(
-        `(name ILIKE $${values.length} OR description ILIKE $${values.length} OR category ILIKE $${values.length})`
+        `(p.name ILIKE $${values.length} OR p.description ILIKE $${values.length} OR p.category ILIKE $${values.length})`
       );
     }
 
     if (category) {
       values.push(category);
-      conditions.push(`category = $${values.length}`);
+      conditions.push(`p.category = $${values.length}`);
     }
 
     const whereSql = conditions.join(" AND ");
-    const countResult = await pool.query(
-      `SELECT COUNT(*)::int AS count FROM products WHERE ${whereSql};`,
-      values
-    );
-
     const queryValues = [...values, limit, offset];
-    const result = await pool.query(
-      `
-        SELECT *
-        FROM products
-        WHERE ${whereSql}
-        ORDER BY created_at DESC
-        LIMIT $${values.length + 1}
-        OFFSET $${values.length + 2};
-      `,
-      queryValues
-    );
+    const [countResult, result] = await Promise.all([
+      pool.query(`SELECT COUNT(*)::int AS count FROM products p WHERE ${whereSql};`, values),
+      pool.query(
+        `
+          SELECT ${PRODUCT_SUMMARY_COLUMNS}
+          FROM products p
+          WHERE ${whereSql}
+          ORDER BY p.created_at DESC
+          LIMIT $${values.length + 1}
+          OFFSET $${values.length + 2};
+        `,
+        queryValues
+      )
+    ]);
 
     const total = countResult.rows[0]?.count || 0;
-
+    res.setHeader("Cache-Control", "public, max-age=10, stale-while-revalidate=30");
     res.json({
       ok: true,
-      products: result.rows.map(mapProduct),
+      products: result.rows.map(mapProductSummary),
       pagination: {
         page,
         limit,
@@ -1236,11 +1321,7 @@ app.get("/api/products", async (req, res) => {
     });
   } catch (error) {
     console.error("Get products error:", error);
-
-    res.status(500).json({
-      ok: false,
-      error: "Не удалось получить товары"
-    });
+    res.status(500).json({ ok: false, error: "Не удалось получить товары" });
   }
 });
 
@@ -1248,25 +1329,44 @@ app.get("/api/my-products", requireTelegramAuth, syncTelegramUser, async (req, r
   try {
     const result = await pool.query(
       `
-        SELECT *
-        FROM products
-        WHERE owner_id = $1 AND COALESCE(status, 'active') <> 'deleted'
-        ORDER BY created_at DESC;
+        SELECT ${PRODUCT_SUMMARY_COLUMNS}
+        FROM products p
+        WHERE p.owner_id = $1 AND COALESCE(p.status, 'active') <> 'deleted'
+        ORDER BY p.created_at DESC
+        LIMIT 100;
       `,
       [req.telegramUser.id]
     );
 
-    res.json({
-      ok: true,
-      products: result.rows.map(mapProduct)
-    });
+    res.json({ ok: true, products: result.rows.map(mapProductSummary) });
   } catch (error) {
     console.error("Get my products error:", error);
+    res.status(500).json({ ok: false, error: "Не удалось получить мои объявления" });
+  }
+});
 
-    res.status(500).json({
-      ok: false,
-      error: "Не удалось получить мои объявления"
-    });
+app.get("/api/my-products/:id/details", requireTelegramAuth, syncTelegramUser, async (req, res) => {
+  try {
+    const productId = normalizeText(req.params.id, 64);
+    const result = await pool.query(
+      `
+        SELECT *
+        FROM products
+        WHERE id = $1
+          AND owner_id = $2
+          AND COALESCE(status, 'active') <> 'deleted';
+      `,
+      [productId, req.telegramUser.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ ok: false, error: "Объявление не найдено" });
+    }
+
+    res.json({ ok: true, product: mapProduct(result.rows[0]) });
+  } catch (error) {
+    console.error("Get own product details error:", error);
+    res.status(500).json({ ok: false, error: "Не удалось загрузить объявление" });
   }
 });
 
@@ -1274,7 +1374,7 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
   const client = await pool.connect();
   try {
     const {
-      name, price, category, desc, image, images, location, phone,
+      name, price, category, desc, image, thumbnail, images, location, phone,
       allowMessages, condition, negotiable, delivery, district,
       specifications, status
     } = req.body;
@@ -1302,6 +1402,7 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
     const cleanImages = sourceImages.map(normalizeProductImage).filter(Boolean).slice(0, 5);
     const fallbackImage = normalizeProductImage(image);
     if (cleanImages.length === 0 && fallbackImage) cleanImages.push(fallbackImage);
+    const cleanThumbnail = normalizeProductImage(thumbnail) || cleanImages[0] || "";
 
     const moderation = await evaluateProductModeration({
       name: cleanName,
@@ -1343,6 +1444,11 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
       ]
     );
 
+    if (cleanThumbnail) {
+      await client.query(`UPDATE products SET thumbnail = $2 WHERE id = $1`, [id, cleanThumbnail]);
+      result.rows[0].thumbnail = cleanThumbnail;
+    }
+
     for (const [index, url] of cleanImages.entries()) {
       await client.query(
         `INSERT INTO product_images (id, product_id, url, position) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
@@ -1377,7 +1483,7 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
   try {
     const productId = normalizeText(req.params.id, 64);
     const {
-      name, price, category, desc, image, images, location, phone,
+      name, price, category, desc, image, thumbnail, images, location, phone,
       allowMessages, condition, negotiable, delivery, district,
       specifications, status
     } = req.body;
@@ -1407,6 +1513,7 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
       .map(normalizeProductImage).filter(Boolean).slice(0, 5);
     const fallbackImage = normalizeProductImage(image);
     if (cleanImages.length === 0 && fallbackImage) cleanImages.push(fallbackImage);
+    const requestedThumbnail = normalizeProductImage(thumbnail);
 
     await client.query("BEGIN");
     const existingResult = await client.query(
@@ -1419,6 +1526,7 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     }
 
     const existing = existingResult.rows[0];
+    const cleanThumbnail = requestedThumbnail || existing.thumbnail || cleanImages[0] || "";
     const oldPriceAmount = Number(existing.price_amount) || parsePriceAmount(existing.price);
     const priceChanged = oldPriceAmount > 0 && oldPriceAmount !== cleanPriceAmount;
     const priceDropped = priceChanged && cleanPriceAmount < oldPriceAmount;
@@ -1452,6 +1560,7 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
               ELSE hidden
             END,
             auto_hidden = $24,
+            thumbnail = $26,
             updated_at = NOW()
         WHERE id = $1 AND owner_id = $2
         RETURNING *;
@@ -1464,7 +1573,7 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
         JSON.stringify(cleanSpecifications), finalStatus, priceDropped, oldPriceAmount,
         moderation.blocked ? "blocked" : "approved", moderation.reason,
         JSON.stringify(moderation.matches), moderation.blocked,
-        requestedStatus
+        requestedStatus, cleanThumbnail
       ]
     );
 
@@ -1542,7 +1651,7 @@ app.get("/api/products/:id/details", async (req, res) => {
       pool.query(
         `
           SELECT
-            p.*,
+            ${PRODUCT_SUMMARY_COLUMNS},
             (SELECT COUNT(*)::int FROM favorites f WHERE f.product_id = p.id) AS favorite_count
           FROM products p
           WHERE p.id <> $1
@@ -1558,7 +1667,7 @@ app.get("/api/products/:id/details", async (req, res) => {
       pool.query(
         `
           SELECT
-            p.*,
+            ${PRODUCT_SUMMARY_COLUMNS},
             (SELECT COUNT(*)::int FROM favorites f WHERE f.product_id = p.id) AS favorite_count
           FROM products p
           WHERE p.id <> $1
@@ -1586,8 +1695,8 @@ app.get("/api/products/:id/details", async (req, res) => {
     res.json({
       ok: true,
       product: mapProduct(row),
-      similarProducts: similarResult.rows.map(mapProduct),
-      sellerProducts: sellerResult.rows.map(mapProduct),
+      similarProducts: similarResult.rows.map(mapProductSummary),
+      sellerProducts: sellerResult.rows.map(mapProductSummary),
       priceHistory: priceHistoryResult.rows
     });
   } catch (error) {
@@ -1612,7 +1721,7 @@ app.post("/api/products/:id/view", async (req, res) => {
           AND COALESCE(status, 'active') = 'active'
           AND COALESCE(hidden, FALSE) = FALSE
           AND COALESCE(moderation_status, 'approved') = 'approved'
-        RETURNING *;
+        RETURNING id, views;
       `,
       [productId]
     );
@@ -1624,15 +1733,9 @@ app.post("/api/products/:id/view", async (req, res) => {
       });
     }
 
-    const favoriteResult = await pool.query(
-      "SELECT COUNT(*)::int AS count FROM favorites WHERE product_id = $1",
-      [productId]
-    );
-    result.rows[0].favorite_count = favoriteResult.rows[0]?.count || 0;
-
     res.json({
       ok: true,
-      product: mapProduct(result.rows[0])
+      product: { id: result.rows[0].id, views: Number(result.rows[0].views) || 0 }
     });
   } catch (error) {
     console.error("View product error:", error);
@@ -1734,36 +1837,49 @@ app.delete("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (re
   }
 });
 
+app.get("/api/favorites/ids", requireTelegramAuth, syncTelegramUser, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `
+        SELECT f.product_id
+        FROM favorites f
+        JOIN products p ON p.id = f.product_id
+        WHERE f.user_id = $1
+          AND COALESCE(p.status, 'active') = 'active'
+          AND COALESCE(p.hidden, FALSE) = FALSE
+          AND COALESCE(p.moderation_status, 'approved') = 'approved';
+      `,
+      [req.telegramUser.id]
+    );
+    res.json({ ok: true, favorites: result.rows.map(row => row.product_id) });
+  } catch (error) {
+    console.error("Get favorite ids error:", error);
+    res.status(500).json({ ok: false, error: "Не удалось получить избранное" });
+  }
+});
+
 app.get("/api/favorites", requireTelegramAuth, syncTelegramUser, async (req, res) => {
   try {
     const result = await pool.query(
       `
-        SELECT p.*
+        SELECT ${PRODUCT_SUMMARY_COLUMNS}
         FROM favorites f
         JOIN products p ON p.id = f.product_id
         WHERE f.user_id = $1
           AND COALESCE(p.status, 'active') = 'active'
           AND COALESCE(p.hidden, FALSE) = FALSE
           AND COALESCE(p.moderation_status, 'approved') = 'approved'
-        ORDER BY f.created_at DESC;
+        ORDER BY f.created_at DESC
+        LIMIT 100;
       `,
       [req.telegramUser.id]
     );
 
-    const products = result.rows.map(mapProduct);
-
-    res.json({
-      ok: true,
-      favorites: products.map(product => product.id),
-      products
-    });
+    const products = result.rows.map(mapProductSummary);
+    res.json({ ok: true, favorites: products.map(product => product.id), products });
   } catch (error) {
     console.error("Get favorites error:", error);
-
-    res.status(500).json({
-      ok: false,
-      error: "Не удалось получить избранное"
-    });
+    res.status(500).json({ ok: false, error: "Не удалось получить избранное" });
   }
 });
 
@@ -2354,7 +2470,7 @@ app.get(
         SELECT
           m.id, m.product_id, m.user_id, m.source, m.reason, m.matches,
           m.status, m.created_at, p.name AS product_name, p.description,
-          p.owner_name, p.owner_username, p.image, p.price
+          p.owner_name, p.owner_username, COALESCE(NULLIF(p.thumbnail, ''), p.image) AS image, p.price
         FROM moderation_events m
         JOIN products p ON p.id = m.product_id
         WHERE m.status = 'pending'

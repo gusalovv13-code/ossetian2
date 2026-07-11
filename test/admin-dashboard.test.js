@@ -19,7 +19,7 @@ const cssSource = await readFile(
 test("админка автоматически загружается при открытии страницы", () => {
   assert.match(
     clientSource,
-    /if \(page === "admin"\) \{\s*loadAdminPanel\(\);\s*\}/
+    /if \(page === "admin"\) loadAdminPanel\(\);/
   );
 });
 

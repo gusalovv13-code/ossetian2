@@ -1,6 +1,6 @@
 {
   "name": "ossetian-market",
-  "version": "1.11.0",
+  "version": "1.11.1",
   "type": "module",
   "scripts": {
     "start": "node server.js",
@@ -9,6 +9,7 @@
     "check": "node --check server.js && node --check telegram-auth.js && node --check public/script.js"
   },
   "dependencies": {
+    "compression": "^1.8.1",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "pg": "^8.13.1"

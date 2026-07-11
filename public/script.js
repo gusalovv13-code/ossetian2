@@ -54,11 +54,16 @@ const DEFAULT_IMAGE =
 
 const MAX_PHOTOS = 5;
 const MAX_PRICE = 100000000;
+const CATALOG_PAGE_SIZE = 12;
+const DATA_CACHE_TTL_MS = 30_000;
+const PRODUCT_DETAILS_CACHE_TTL_MS = 60_000;
 
 const tg = window.Telegram?.WebApp || null;
 let telegramAvatarObjectUrl = null;
 let productSearchTimer = null;
 let productsRequestSequence = 0;
+let productsAbortController = null;
+let productOpenSequence = 0;
 
 function getTelegramAuthHeaders() {
   const initData = tg?.initData?.trim();
@@ -77,13 +82,22 @@ const state = {
   openedProductId: null,
   telegramUser: null,
   products: [],
+  catalogPagination: { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE },
+  productsCacheKey: "",
+  productsLoadedAt: 0,
+  productsLoading: false,
   myProducts: [],
   sellerProducts: [],
   favoriteProducts: [],
   favorites: [],
+  myProductsLoadedAt: 0,
+  myProductsLoading: false,
+  favoritesLoadedAt: 0,
+  favoritesLoading: false,
   similarProducts: [],
   sellerOtherProducts: [],
   priceHistory: [],
+  productDetailsCache: {},
   ads: [],
   currentProductImageIndex: 0,
   myAdsTab: "active",
@@ -95,7 +109,9 @@ const state = {
 };
 
 const draftAd = {
-  images: []
+  images: [],
+  thumbnail: "",
+  thumbnailSource: ""
 };
 
 let isPublishingAd = false;
@@ -241,62 +257,155 @@ function renderProductDetailAds() {
   root.innerHTML = ads.map(ad => renderAdCard(ad, "detail")).join("");
 }
 
-async function loadProducts() {
-  const requestSequence = ++productsRequestSequence;
-  const params = new URLSearchParams({ limit: "100" });
-
-  if (state.search.trim()) {
-    params.set("q", state.search.trim());
-  }
-
-  if (state.category !== "Все") {
-    params.set("category", state.category);
-  }
-
-  try {
-    const data = await apiRequest(`/api/products?${params.toString()}`);
-
-    if (requestSequence !== productsRequestSequence) return;
-
-    state.products = data.products || [];
-    render();
-  } catch (error) {
-    if (requestSequence !== productsRequestSequence) return;
-    console.error("Не удалось загрузить товары:", error);
-  }
+function getProductsCacheKey() {
+  return `${state.search.trim().toLowerCase()}|${state.category}`;
 }
 
-async function loadMyProducts() {
-  if (!state.telegramUser?.id) {
-    state.myProducts = [];
-    render();
+function isFresh(timestamp, ttl = DATA_CACHE_TTL_MS) {
+  return Number(timestamp) > 0 && Date.now() - Number(timestamp) < ttl;
+}
+
+async function loadProducts({ force = false, append = false } = {}) {
+  const cacheKey = getProductsCacheKey();
+  const sameQuery = state.productsCacheKey === cacheKey;
+
+  if (!append && !force && sameQuery && isFresh(state.productsLoadedAt)) {
+    renderProducts();
     return;
   }
 
+  const nextPage = append ? Number(state.catalogPagination.page || 0) + 1 : 1;
+  if (append && nextPage > Number(state.catalogPagination.pages || 1)) return;
+
+  const requestSequence = ++productsRequestSequence;
+  productsAbortController?.abort();
+  productsAbortController = new AbortController();
+  state.productsLoading = true;
+
+  if (!append && !sameQuery) {
+    state.products = [];
+    state.catalogPagination = { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE };
+  }
+  renderProducts();
+
+  const params = new URLSearchParams({
+    limit: String(CATALOG_PAGE_SIZE),
+    page: String(nextPage)
+  });
+
+  if (state.search.trim()) params.set("q", state.search.trim());
+  if (state.category !== "Все") params.set("category", state.category);
+
+  try {
+    const data = await apiRequest(`/api/products?${params.toString()}`, {
+      signal: productsAbortController.signal
+    });
+
+    if (requestSequence !== productsRequestSequence) return;
+
+    const incoming = data.products || [];
+    if (append) {
+      const knownIds = new Set(state.products.map(item => item.id));
+      state.products.push(...incoming.filter(item => !knownIds.has(item.id)));
+    } else {
+      state.products = incoming;
+    }
+
+    state.catalogPagination = data.pagination || {
+      page: nextPage,
+      pages: nextPage,
+      total: state.products.length,
+      limit: CATALOG_PAGE_SIZE
+    };
+    state.productsCacheKey = cacheKey;
+    state.productsLoadedAt = Date.now();
+  } catch (error) {
+    if (error?.name !== "AbortError" && requestSequence === productsRequestSequence) {
+      console.error("Не удалось загрузить товары:", error);
+    }
+  } finally {
+    if (requestSequence === productsRequestSequence) {
+      state.productsLoading = false;
+      renderProducts();
+    }
+  }
+}
+
+function loadMoreProducts() {
+  if (state.productsLoading) return;
+  loadProducts({ append: true });
+}
+
+async function loadMyProducts({ force = false } = {}) {
+  if (!state.telegramUser?.id) {
+    state.myProducts = [];
+    state.myProductsLoadedAt = Date.now();
+    renderMyAds();
+    return;
+  }
+
+  if (!force && isFresh(state.myProductsLoadedAt)) {
+    renderMyAds();
+    return;
+  }
+
+  state.myProductsLoading = true;
+  renderMyAds();
   try {
     const data = await apiRequest("/api/my-products");
     state.myProducts = data.products || [];
-    render();
+    state.myProductsLoadedAt = Date.now();
   } catch (error) {
     console.error("Не удалось загрузить мои объявления:", error);
+  } finally {
+    state.myProductsLoading = false;
+    renderMyAds();
+    renderProfileCounters();
   }
 }
 
-async function loadFavorites() {
+async function loadFavoriteIds() {
   if (!state.telegramUser?.id) {
     state.favorites = [];
-    state.favoriteProducts = [];
-    render();
     return;
   }
 
+  try {
+    const data = await apiRequest("/api/favorites/ids");
+    state.favorites = data.favorites || [];
+    renderProducts();
+  } catch (error) {
+    console.error("Не удалось загрузить список избранного:", error);
+  }
+}
+
+async function loadFavorites({ force = false } = {}) {
+  if (!state.telegramUser?.id) {
+    state.favorites = [];
+    state.favoriteProducts = [];
+    state.favoritesLoadedAt = Date.now();
+    renderFavorites();
+    return;
+  }
+
+  if (!force && isFresh(state.favoritesLoadedAt)) {
+    renderFavorites();
+    return;
+  }
+
+  state.favoritesLoading = true;
+  renderFavorites();
   try {
     const data = await apiRequest("/api/favorites");
     state.favorites = data.favorites || [];
     state.favoriteProducts = data.products || [];
-    render();
+    state.favoritesLoadedAt = Date.now();
   } catch (error) {
     console.error("Не удалось загрузить избранное:", error);
+  } finally {
+    state.favoritesLoading = false;
+    renderFavorites();
+    renderProducts();
   }
 }
 
@@ -358,33 +467,22 @@ function showPage(page, addToHistory = true, preserveCreateSession = false) {
 
   updateBottomNav();
   updateTelegramBackButton();
-
-  if (page === "catalog") {
-    loadProducts();
-  }
-
-  if (page === "myAds") {
-    loadMyProducts();
-  }
-
-  if (page === "favorites") {
-    loadFavorites();
-  }
+  renderCurrentPage();
 
   if (page === "create3") {
     updatePreviewCard();
   }
 
-  if (page === "admin") {
-    loadAdminPanel();
-  }
-
-  render();
-
-  window.scrollTo({
-    top: 0,
-    behavior: "smooth"
+  // Сначала даём браузеру показать новую страницу, затем начинаем сеть и тяжёлую отрисовку.
+  requestAnimationFrame(() => {
+    if (state.page !== page) return;
+    if (page === "catalog") loadProducts();
+    if (page === "myAds") loadMyProducts();
+    if (page === "favorites") loadFavorites();
+    if (page === "admin") loadAdminPanel();
   });
+
+  window.scrollTo(0, 0);
 }
 
 function goBack() {
@@ -705,7 +803,10 @@ function compressImage(file, maxDimension = 900, quality = 0.72) {
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0, width, height);
 
-        const compressedImage = canvas.toDataURL("image/jpeg", quality);
+        const webpImage = canvas.toDataURL("image/webp", quality);
+        const compressedImage = webpImage.startsWith("data:image/webp")
+          ? webpImage
+          : canvas.toDataURL("image/jpeg", quality);
         resolve(compressedImage);
       };
 
@@ -724,33 +825,92 @@ function compressImage(file, maxDimension = 900, quality = 0.72) {
   });
 }
 
+async function createThumbnailFromImage(source, maxDimension = 360, quality = 0.62) {
+  const value = String(source || "").trim();
+  if (!/^data:image\/(jpeg|jpg|png|webp);base64,/i.test(value)) return value;
+
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const scale = Math.min(
+          1,
+          maxDimension / Math.max(img.width, 1),
+          maxDimension / Math.max(img.height, 1)
+        );
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        const ctx = canvas.getContext("2d", { alpha: false });
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const webpImage = canvas.toDataURL("image/webp", quality);
+        resolve(webpImage.startsWith("data:image/webp")
+          ? webpImage
+          : canvas.toDataURL("image/jpeg", quality));
+      } catch (error) {
+        console.error("Не удалось создать миниатюру:", error);
+        resolve(value);
+      }
+    };
+    img.onerror = () => resolve(value);
+    img.src = value;
+  });
+}
+
 /* =======================
    RENDER
 ======================= */
 
-function render() {
+function renderCurrentPage() {
   renderCatalogTopAds();
   renderProductDetailAds();
-  renderProducts();
-  renderMyAds();
-  renderFavorites();
+
+  if (state.page === "catalog") renderProducts();
+  if (state.page === "myAds") renderMyAds();
+  if (state.page === "favorites") renderFavorites();
+
   renderProfileCounters();
+}
+
+function render() {
+  renderCurrentPage();
+}
+
+function getCatalogSkeletonMarkup(count = 6) {
+  return Array.from({ length: count }, () => `
+    <div class="product-card product-card-skeleton" aria-hidden="true">
+      <span class="skeleton-image"></span>
+      <div>
+        <span class="skeleton-line skeleton-title"></span>
+        <span class="skeleton-line skeleton-price"></span>
+        <span class="skeleton-line skeleton-meta"></span>
+      </div>
+    </div>
+  `).join("");
 }
 
 function renderProducts() {
   const productList = document.getElementById("productList");
+  const loadMoreButton = document.getElementById("catalogLoadMore");
 
   if (!productList || state.page !== "catalog") return;
 
   const products = getFiltered();
 
+  if (state.productsLoading && products.length === 0) {
+    productList.innerHTML = getCatalogSkeletonMarkup();
+    if (loadMoreButton) loadMoreButton.hidden = true;
+    return;
+  }
+
   if (products.length === 0) {
     productList.innerHTML = `
       <div class="empty-state">
         <h3>Объявлений пока нет</h3>
-        <p class="muted">Станьте первым, кто добавит товар.</p>
+        <p class="muted">Попробуйте изменить поиск или категорию.</p>
       </div>
     `;
+    if (loadMoreButton) loadMoreButton.hidden = true;
     return;
   }
 
@@ -759,7 +919,7 @@ function renderProducts() {
   let adIndex = 0;
 
   products.forEach((product, index) => {
-    markup.push(getProductCard(product));
+    markup.push(getProductCard(product, { priority: index < 4 }));
     const ad = feedAds[adIndex % Math.max(feedAds.length, 1)];
     if (ad && (index + 1) % Math.max(2, Number(ad.insertEvery) || 6) === 0) {
       markup.push(renderAdCard(ad, "feed"));
@@ -768,6 +928,13 @@ function renderProducts() {
   });
 
   productList.innerHTML = markup.join("");
+
+  if (loadMoreButton) {
+    const hasMore = Number(state.catalogPagination.page || 0) < Number(state.catalogPagination.pages || 1);
+    loadMoreButton.hidden = !hasMore;
+    loadMoreButton.disabled = state.productsLoading;
+    loadMoreButton.textContent = state.productsLoading ? "Загружаем…" : "Показать ещё";
+  }
 }
 
 function getProductStatusLabel(status, product = null) {
@@ -823,7 +990,7 @@ function getProductCard(product, options = {}) {
 
   return `
     <div class="product-card ${status !== "active" ? "is-inactive" : ""}" onclick="openProduct('${productId}')">
-      <img src="${image}" alt="${name}" loading="lazy">
+      <img src="${image}" alt="${name}" loading="${options.priority ? "eager" : "lazy"}" decoding="async" fetchpriority="${options.priority ? "high" : "low"}">
       <div>
         ${priceDropMarkup}
         <h4>${name}</h4>
@@ -853,6 +1020,11 @@ function renderMyAds() {
         <p class="muted">Так мы поймём, какие объявления ваши.</p>
       </div>
     `;
+    return;
+  }
+
+  if (state.myProductsLoading && state.myProducts.length === 0) {
+    myAdsList.innerHTML = getCatalogSkeletonMarkup(4);
     return;
   }
 
@@ -903,6 +1075,14 @@ function renderFavorites() {
         <h3>Откройте через Telegram</h3>
         <p class="muted">Избранное привязывается к вашему Telegram-профилю.</p>
       </div>
+    `;
+    return;
+  }
+
+  if (state.favoritesLoading && state.favoriteProducts.length === 0) {
+    favoritesPage.innerHTML = `
+      <h2>Избранное</h2>
+      <div class="product-list">${getCatalogSkeletonMarkup(4)}</div>
     `;
     return;
   }
@@ -984,6 +1164,7 @@ async function toggleFav(id) {
       }
     }
 
+    state.favoritesLoadedAt = Date.now();
     if (state.openedProductId === id && product) {
       renderProductDetails(product);
     }
@@ -1365,47 +1546,83 @@ function renderProductDetails(product) {
 async function openProduct(id) {
   if (!id) return;
 
+  const openSequence = ++productOpenSequence;
   state.openedProductId = id;
   state.currentProductImageIndex = 0;
   showPage("product");
 
-  const nameEl = document.getElementById("productName");
-  const priceEl = document.getElementById("productPrice");
-  if (nameEl) nameEl.textContent = "Загрузка объявления…";
-  if (priceEl) priceEl.textContent = "";
-
   let product = findProductById(id);
+  const cachedBundle = state.productDetailsCache[id];
+  const cacheIsFresh = cachedBundle && isFresh(cachedBundle.loadedAt, PRODUCT_DETAILS_CACHE_TTL_MS);
 
-  try {
-    const details = await apiRequest(`/api/products/${encodeURIComponent(id)}/details`);
-    product = details.product;
-    state.similarProducts = details.similarProducts || [];
-    state.sellerOtherProducts = details.sellerProducts || [];
-    state.priceHistory = details.priceHistory || [];
+  if (cacheIsFresh) {
+    product = cachedBundle.product;
+    state.similarProducts = cachedBundle.similarProducts || [];
+    state.sellerOtherProducts = cachedBundle.sellerProducts || [];
+    state.priceHistory = cachedBundle.priceHistory || [];
     cacheProduct(product);
-  } catch (error) {
-    console.error("Не удалось загрузить карточку товара:", error);
-    if (!product) {
-      alert(error.message || "Объявление не найдено");
-      goBack();
-      return;
-    }
+    renderProductDetails(product);
+  } else if (product) {
     state.similarProducts = [];
     state.sellerOtherProducts = [];
     state.priceHistory = [];
+    renderProductDetails(product);
+  } else {
+    const nameEl = document.getElementById("productName");
+    const priceEl = document.getElementById("productPrice");
+    if (nameEl) nameEl.textContent = "Загрузка объявления…";
+    if (priceEl) priceEl.textContent = "";
   }
 
-  try {
-    const viewData = await apiRequest(`/api/products/${encodeURIComponent(id)}/view`, {
-      method: "POST"
-    });
+  const viewPromise = apiRequest(`/api/products/${encodeURIComponent(id)}/view`, {
+    method: "POST"
+  }).catch(error => {
+    console.error("Не удалось обновить просмотры:", error);
+    return null;
+  });
+
+  if (!cacheIsFresh) {
+    try {
+      const details = await apiRequest(`/api/products/${encodeURIComponent(id)}/details`);
+      if (openSequence !== productOpenSequence || state.openedProductId !== id) return;
+
+      product = details.product;
+      state.similarProducts = details.similarProducts || [];
+      state.sellerOtherProducts = details.sellerProducts || [];
+      state.priceHistory = details.priceHistory || [];
+      state.productDetailsCache[id] = {
+        loadedAt: Date.now(),
+        product,
+        similarProducts: state.similarProducts,
+        sellerProducts: state.sellerOtherProducts,
+        priceHistory: state.priceHistory
+      };
+      cacheProduct(product);
+      renderProductDetails(product);
+    } catch (error) {
+      console.error("Не удалось загрузить карточку товара:", error);
+      if (!product) {
+        alert(error.message || "Объявление не найдено");
+        goBack();
+        return;
+      }
+    }
+  }
+
+  const viewData = await viewPromise;
+  if (
+    viewData?.product &&
+    openSequence === productOpenSequence &&
+    state.openedProductId === id &&
+    product
+  ) {
     product = { ...product, ...viewData.product };
     cacheProduct(product);
-  } catch (error) {
-    console.error("Не удалось обновить просмотры:", error);
+    if (state.productDetailsCache[id]) {
+      state.productDetailsCache[id].product = product;
+    }
+    renderProductDetails(product);
   }
-
-  renderProductDetails(product);
 }
 
 function openReportDialog() {
@@ -1638,6 +1855,8 @@ function renderPhotoPreview() {
 
 function removeDraftPhoto(index) {
   draftAd.images.splice(index, 1);
+  draftAd.thumbnail = "";
+  draftAd.thumbnailSource = "";
   renderPhotoPreview();
   updatePreviewCard();
 
@@ -1731,6 +1950,11 @@ async function publishAd(status = "active") {
 
     const images = draftAd.images.slice(0, MAX_PHOTOS);
     const mainImage = images[0] || DEFAULT_IMAGE;
+    if (draftAd.thumbnailSource !== mainImage || !draftAd.thumbnail) {
+      draftAd.thumbnail = await createThumbnailFromImage(mainImage);
+      draftAd.thumbnailSource = mainImage;
+    }
+    const thumbnail = draftAd.thumbnail || mainImage;
 
     const editingId = state.editingProductId;
     const endpoint = editingId
@@ -1744,6 +1968,7 @@ async function publishAd(status = "active") {
         category: ad.category,
         desc: ad.desc,
         image: mainImage,
+        thumbnail,
         images,
         location: ad.location,
         district: ad.district,
@@ -1784,6 +2009,9 @@ async function publishAd(status = "active") {
     }
 
     const wasEditing = Boolean(editingId);
+    state.myProductsLoadedAt = Date.now();
+    state.productsLoadedAt = 0;
+    state.favoritesLoadedAt = 0;
     state.myAdsTab = savedProduct.status;
     clearCreateForm();
     showPage("myAds");
@@ -1849,6 +2077,8 @@ function clearCreateForm() {
   if (photoInput) photoInput.value = "";
 
   draftAd.images = [];
+  draftAd.thumbnail = "";
+  draftAd.thumbnailSource = "";
   state.editingProductId = null;
 
   const publishBtn = document.getElementById("publishBtn");
@@ -1861,12 +2091,24 @@ function clearCreateForm() {
   updateListingQuality();
 }
 
-function editAd(id) {
-  const product = state.myProducts.find(item => item.id === id);
+async function editAd(id) {
+  let product = state.myProducts.find(item => item.id === id);
 
   if (!product) {
     alert("Объявление не найдено");
     return;
+  }
+
+  if (product.isSummary || !Array.isArray(product.images) || typeof product.desc === "undefined") {
+    try {
+      const data = await apiRequest(`/api/my-products/${encodeURIComponent(id)}/details`);
+      product = data.product;
+      cacheProduct(product);
+    } catch (error) {
+      console.error("Не удалось загрузить объявление для редактирования:", error);
+      alert(error.message || "Не удалось открыть объявление");
+      return;
+    }
   }
 
   state.editingProductId = id;
@@ -1902,9 +2144,9 @@ function editAd(id) {
   if (phone) phone.value = product.phone || "";
   if (allowMessages) allowMessages.checked = product.allowMessages !== false;
 
-  draftAd.images = getProductImages(product)
-    .filter(Boolean)
-    .slice(0, MAX_PHOTOS);
+  draftAd.images = getProductImages(product).filter(Boolean).slice(0, MAX_PHOTOS);
+  draftAd.thumbnail = product.thumbnail || "";
+  draftAd.thumbnailSource = draftAd.images[0] || "";
 
   showPage("create1", true, true);
   renderPhotoPreview();
@@ -2007,12 +2249,13 @@ function initEvents() {
 
   searchInput?.addEventListener("input", event => {
     state.search = event.target.value;
+    state.catalogPagination = { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE };
     renderProducts();
 
     clearTimeout(productSearchTimer);
     productSearchTimer = setTimeout(() => {
-      loadProducts();
-    }, 250);
+      loadProducts({ force: true });
+    }, 350);
   });
 
   searchInput?.addEventListener("keydown", hideKeyboardOnEnter);
@@ -2071,10 +2314,12 @@ function initEvents() {
             continue;
           }
 
-          const compressed = await compressImage(file, 900, 0.72);
+          const compressed = await compressImage(file, 800, 0.68);
           draftAd.images.push(compressed);
         }
 
+        draftAd.thumbnail = "";
+        draftAd.thumbnailSource = "";
         renderPhotoPreview();
         updatePreviewCard();
         updateCreateButtons();
@@ -2099,11 +2344,12 @@ function initEvents() {
     button.classList.add("active");
 
     state.category = button.dataset.category || button.innerText.trim();
-
     state.page = "catalog";
+    state.productsLoadedAt = 0;
+    state.catalogPagination = { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE };
 
     renderProducts();
-    loadProducts();
+    loadProducts({ force: true });
   });
 });
 
@@ -2516,11 +2762,10 @@ async function initApp() {
     loadConfig(),
     loadAds(),
     loadProducts(),
-    loadMyProducts(),
-    loadFavorites()
+    loadFavoriteIds()
   ]);
 
-  render();
+  renderCurrentPage();
   updateBottomNav();
 
   const directProductId = new URLSearchParams(window.location.search).get("product");
