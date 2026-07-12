@@ -12,51 +12,38 @@ function escapeHTML(value = "") {
 
 function safeImageUrl(value) {
   const url = String(value || "").trim();
-  if (/^data:image\/(jpeg|jpg|png|webp);base64,/i.test(url)) return url;
-  if (/^https:\/\/[^\s"'<>]+$/i.test(url)) return url;
-  if (/^\/api\/products\/[a-z0-9%._~-]+\/(?:thumbnail|media\/\d+)(?:\?v=\d+)?$/i.test(url)) return url;
-  if (/^\/api\/my-products\/[a-z0-9%._~-]+\/thumbnail\?owner=[a-z0-9%._~-]+&expires=\d+&token=[a-z0-9%._~-]+(?:&v=\d+)?$/i.test(url)) return url;
-  if (/^\/api\/ads\/[a-z0-9%._~-]+\/image(?:\?v=\d+)?$/i.test(url)) return url;
-  if (url === "/image-placeholder.svg") return url;
+
+  if (/^data:image\/(jpeg|jpg|png|webp);base64,/i.test(url)) {
+    return url;
+  }
+
+  if (/^https:\/\/[^\s"'<>]+$/i.test(url)) {
+    return url;
+  }
+
+  if (/^\/api\/products\/[a-z0-9%._~-]+\/(?:thumbnail|media\/\d+)(?:\?v=\d+)?$/i.test(url)) {
+    return url;
+  }
+
+  if (/^\/api\/my-products\/[a-z0-9%._~-]+\/thumbnail\?owner=[a-z0-9%._~-]+&expires=\d+&token=[a-z0-9%._~-]+$/i.test(url)) {
+    return url;
+  }
+
+  if (/^\/api\/ads\/[a-z0-9%._~-]+\/image(?:\?v=\d+)?$/i.test(url)) {
+    return url;
+  }
+
+  if (/^\/placeholder\.svg(?:\?v=[a-z0-9._-]+)?$/i.test(url)) {
+    return url;
+  }
+
   return DEFAULT_IMAGE;
 }
 
-function withImageRetryToken(source) {
-  const url = String(source || "");
-  if (!url || url.startsWith("data:") || url === DEFAULT_IMAGE) return url;
-  return `${url}${url.includes("?") ? "&" : "?"}retry=${Date.now()}`;
-}
-
 function handleImageError(image) {
-  if (!image) return;
-  if (image.dataset.retryApplied !== "1") {
-    image.dataset.retryApplied = "1";
-    const original = image.dataset.originalSrc || image.currentSrc || image.src;
-    const retrySource = withImageRetryToken(original);
-    if (retrySource && retrySource !== original) {
-      image.src = retrySource;
-      return;
-    }
-  }
-  if (image.dataset.fallbackApplied === "1") return;
+  if (!image || image.dataset.fallbackApplied === "1") return;
   image.dataset.fallbackApplied = "1";
-  image.classList.remove("image-loading");
   image.src = DEFAULT_IMAGE;
-}
-
-function setReliableImageSource(image, source, { fade = false } = {}) {
-  if (!image) return;
-  const safeSource = safeImageUrl(source);
-  const current = image.getAttribute("src") || "";
-  const original = image.dataset.originalSrc || current;
-  if (original === safeSource && current && image.complete) return;
-  image.dataset.originalSrc = safeSource;
-  image.dataset.retryApplied = "0";
-  image.dataset.fallbackApplied = "0";
-  if (fade) image.classList.add("image-loading");
-  image.onerror = () => handleImageError(image);
-  image.onload = () => image.classList.remove("image-loading");
-  image.src = safeSource;
 }
 
 function findProductById(id) {
@@ -84,7 +71,7 @@ function getSellerStatus(lastSeen) {
   return { icon: "🕘", label: getTimeAgo(Number(lastSeen)) };
 }
 
-const DEFAULT_IMAGE = "/image-placeholder.svg";
+const DEFAULT_IMAGE = "/placeholder.svg?v=1.12.0";
 
 const MAX_PHOTOS = 5;
 const MAX_PRICE = 100000000;
@@ -93,6 +80,8 @@ const MAX_AD_IMAGE_DATA_LENGTH = 8_000_000;
 const CATALOG_PAGE_SIZE = 12;
 const DATA_CACHE_TTL_MS = 30_000;
 const PRODUCT_DETAILS_CACHE_TTL_MS = 60_000;
+const ADS_CACHE_KEY = "alania-market-ads-v1";
+const ADS_CACHE_TTL_MS = 5 * 60_000;
 
 const tg = window.Telegram?.WebApp || null;
 let telegramAvatarObjectUrl = null;
@@ -120,6 +109,10 @@ function writeBrowserStorage(storageName, key, value) {
 }
 let productsAbortController = null;
 let productOpenSequence = 0;
+let stableImageSequence = 0;
+let lightboxScale = 1;
+let lightboxTranslateX = 0;
+let lightboxTranslateY = 0;
 
 function getTelegramAuthHeaders() {
   const initData = tg?.initData?.trim();
@@ -156,22 +149,12 @@ const state = {
   priceHistory: [],
   productDetailsCache: {},
   ads: [],
-  adsLoadedAt: 0,
   currentProductImageIndex: 0,
   myAdsTab: "active",
   editingProductId: null,
-  chats: [],
-  chatsLoadedAt: 0,
-  chatsLoading: false,
-  activeChatId: "",
-  activeChatProductId: "",
-  activeChatMessages: [],
-  chatPollTimer: null,
   config: {
     version: "",
-    supportUsername: "",
-    productLifetimeDays: 15,
-    highlightPlans: []
+    supportUsername: ""
   }
 };
 
@@ -250,9 +233,6 @@ async function loadConfig() {
     const data = await apiRequest("/api/config");
     state.config.version = data.version || "";
     state.config.supportUsername = data.supportUsername || "";
-    state.config.productLifetimeDays = Number(data.productLifetimeDays) || 15;
-    state.config.highlightPlans = Array.isArray(data.highlightPlans) ? data.highlightPlans : [];
-    renderHighlightPlans();
   } catch (error) {
     console.error("Не удалось загрузить конфигурацию:", error);
   }
@@ -265,28 +245,35 @@ function getAdClientKey() {
   return fallbackAdClientKey;
 }
 
-async function loadAds({ force = false } = {}) {
-  if (!force && isFresh(state.adsLoadedAt, 30_000) && state.ads.length > 0) {
+function restoreCachedAds() {
+  try {
+    const cached = JSON.parse(readBrowserStorage("sessionStorage", ADS_CACHE_KEY) || "null");
+    if (!cached || !Array.isArray(cached.ads) || Date.now() - Number(cached.savedAt || 0) > ADS_CACHE_TTL_MS) return false;
+    state.ads = cached.ads;
     renderCatalogTopAds();
     renderProductDetailAds();
-    return;
+    return true;
+  } catch (error) {
+    return false;
   }
+}
 
+function cacheAds(ads) {
+  writeBrowserStorage("sessionStorage", ADS_CACHE_KEY, JSON.stringify({ ads, savedAt: Date.now() }));
+}
+
+async function loadAds() {
   try {
-    const data = await apiRequest(`/api/ads?_=${Date.now()}`, { cache: "no-store", timeoutMs: 8_000 });
-    state.ads = Array.isArray(data.ads) ? data.ads : [];
-    state.adsLoadedAt = Date.now();
-    writeBrowserStorage("localStorage", "ossetianMarketAdsCache", JSON.stringify({
-      savedAt: state.adsLoadedAt,
-      ads: state.ads
-    }));
+    const data = await apiRequest(`/api/ads?_=${Date.now()}`, { cache: "no-store" });
+    state.ads = data.ads || [];
+    cacheAds(state.ads);
     renderCatalogTopAds();
     renderProductDetailAds();
   } catch (error) {
     console.error("Не удалось загрузить рекламу:", error);
-    // Не убираем уже показанную рекламу при временной ошибке сети.
-    renderCatalogTopAds();
-    renderProductDetailAds();
+    if (state.ads.length === 0) {
+      restoreCachedAds();
+    }
   }
 }
 
@@ -317,12 +304,11 @@ function getAdsByPlacement(placement) {
 function renderAdCard(ad, variant = "feed") {
   const adId = escapeHTML(ad.id || "");
   const image = ad.imageUrl ? safeImageUrl(ad.imageUrl) : "";
-  const isBanner = variant === "banner";
   queueMicrotask(() => trackAdEvent(ad.id, "impression"));
 
   return `
     <article class="advertising-card advertising-${escapeHTML(variant)}" onclick="openAdCampaign('${adId}')">
-      ${image ? `<img src="${escapeHTML(image)}" data-original-src="${escapeHTML(image)}" alt="${escapeHTML(ad.title || "Реклама")}" loading="${isBanner ? "eager" : "lazy"}" decoding="async" fetchpriority="${isBanner ? "high" : "low"}" onerror="handleImageError(this)">` : '<div class="advertising-placeholder">📣</div>'}
+      ${image ? `<img src="${escapeHTML(image)}" alt="${escapeHTML(ad.title || "Реклама")}" loading="eager" decoding="async" fetchpriority="high" onerror="handleImageError(this)">` : '<div class="advertising-placeholder">📣</div>'}
       <div class="advertising-content">
         <span class="advertising-label">Реклама</span>
         <h4>${escapeHTML(ad.title || "Рекламное предложение")}</h4>
@@ -333,13 +319,13 @@ function renderAdCard(ad, variant = "feed") {
   `;
 }
 
-function openAdCampaign(adId) {
+async function openAdCampaign(adId) {
   const ad = state.ads.find(item => item.id === adId);
   if (!ad) return;
-  trackAdEvent(ad.id, "click");
+  await trackAdEvent(ad.id, "click");
 
   if (ad.linkedProductId) {
-    openProduct(ad.linkedProductId);
+    await openProduct(ad.linkedProductId);
     return;
   }
   if (ad.targetUrl) {
@@ -361,8 +347,7 @@ function renderCatalogTopAds() {
     if (!slot.root) continue;
     const visibleAds = slot.visible ? slot.ads : [];
     slot.root.hidden = visibleAds.length === 0;
-    const key = visibleAds.map(ad => `${ad.id}:${ad.updatedAt || ad.imageUrl || ""}`).join("|");
-    setStableMarkup(slot.root, visibleAds.map(ad => renderAdCard(ad, "banner")).join(""), `ads:${key}`);
+    slot.root.innerHTML = visibleAds.map(ad => renderAdCard(ad, "banner")).join("");
   }
 }
 
@@ -371,13 +356,12 @@ function renderProductDetailAds() {
   if (!root) return;
   if (state.page !== "product" || !state.openedProductId) {
     root.hidden = true;
-    setStableMarkup(root, "", "ads:none");
+    root.innerHTML = "";
     return;
   }
   const ads = getAdsByPlacement("product_detail").slice(0, 1);
   root.hidden = ads.length === 0;
-  const key = ads.map(ad => `${ad.id}:${ad.updatedAt || ad.imageUrl || ""}`).join("|");
-  setStableMarkup(root, ads.map(ad => renderAdCard(ad, "detail")).join(""), `detail:${state.openedProductId}:${key}`);
+  root.innerHTML = ads.map(ad => renderAdCard(ad, "detail")).join("");
 }
 
 function getProductsCacheKey() {
@@ -550,12 +534,21 @@ function showPage(page, addToHistory = true, preserveCreateSession = false) {
     clearCreateForm();
   }
 
-  if (state.page === "chat" && page !== "chat") stopChatPolling();
-  if (addToHistory && state.page !== page) state.history.push(state.page);
+  if (addToHistory && state.page !== page) {
+    state.history.push(state.page);
+  }
+
   state.page = page;
 
-  document.querySelectorAll(".page").forEach(pageEl => pageEl.classList.remove("active"));
-  document.getElementById(page)?.classList.add("active");
+  document.querySelectorAll(".page").forEach(pageEl => {
+    pageEl.classList.remove("active");
+  });
+
+  const targetPage = document.getElementById(page);
+
+  if (targetPage) {
+    targetPage.classList.add("active");
+  }
 
   const titles = {
     home: "Алания Маркет",
@@ -570,28 +563,34 @@ function showPage(page, addToHistory = true, preserveCreateSession = false) {
     sellerProfile: "Профиль продавца",
     settings: "Настройки",
     chats: "Чаты",
-    chat: "Сообщения",
     admin: "Администратор"
   };
 
   const titleEl = document.getElementById("pageTitle");
+
   if (titleEl) {
-    const isEditingPage = state.editingProductId && ["create1", "create2", "create3"].includes(page);
-    titleEl.innerText = isEditingPage ? "Редактирование объявления" : titles[page] || "Алания Маркет";
+    const isEditingPage =
+      state.editingProductId && ["create1", "create2", "create3"].includes(page);
+    titleEl.innerText = isEditingPage
+      ? "Редактирование объявления"
+      : titles[page] || "Алания Маркет";
   }
 
   updateBottomNav();
   updateTelegramBackButton();
   renderCurrentPage();
-  if (page === "create3") updatePreviewCard();
 
+  if (page === "create3") {
+    updatePreviewCard();
+  }
+
+  // Сначала даём браузеру показать новую страницу, затем начинаем сеть и тяжёлую отрисовку.
   requestAnimationFrame(() => {
     if (state.page !== page) return;
-    if (["home", "catalog", "product"].includes(page)) loadAds();
+    if (page === "home" || page === "catalog" || page === "product") loadAds();
     if (page === "catalog") loadProducts();
     if (page === "myAds") loadMyProducts();
     if (page === "favorites") loadFavorites();
-    if (page === "chats") loadChats();
     if (page === "admin") loadAdminPanel();
   });
 
@@ -608,12 +607,6 @@ function goBack() {
   const reportDialog = document.getElementById("reportDialog");
   if (reportDialog?.open) {
     closeReportDialog();
-    return;
-  }
-
-  const highlightDialog = document.getElementById("highlightDialog");
-  if (highlightDialog?.open) {
-    closeHighlightDialog();
     return;
   }
 
@@ -880,21 +873,8 @@ function getProductImages(product) {
 
 function getFiltered() {
   return state.products.filter(product => {
-    const search = state.search.toLowerCase();
-
-    const name = String(product.name || "").toLowerCase();
-    const desc = String(product.desc || "").toLowerCase();
-    const category = String(product.category || "").toLowerCase();
-
-    const matchSearch =
-      name.includes(search) ||
-      desc.includes(search) ||
-      category.includes(search);
-
-    const matchCategory =
-      state.category === "Все" || product.category === state.category;
-
-    return matchSearch && matchCategory && product.status === "active";
+    const matchCategory = state.category === "Все" || product.category === state.category;
+    return matchCategory && product.status === "active";
   });
 }
 
@@ -1021,36 +1001,36 @@ function getCatalogSkeletonMarkup(count = 6) {
 function renderProducts() {
   const productList = document.getElementById("productList");
   const loadMoreButton = document.getElementById("catalogLoadMore");
+
   if (!productList || state.page !== "catalog") return;
 
   const products = getFiltered();
-  renderSearchSummary(products.length);
 
   if (state.productsLoading && products.length === 0) {
-    setStableMarkup(productList, getCatalogSkeletonMarkup(), "catalog:skeleton");
+    productList.innerHTML = getCatalogSkeletonMarkup();
     if (loadMoreButton) loadMoreButton.hidden = true;
     return;
   }
 
   if (state.productsLoadError && products.length === 0) {
-    setStableMarkup(productList, `
+    productList.innerHTML = `
       <div class="empty-state">
         <h3>Не удалось загрузить объявления</h3>
         <p class="muted">${escapeHTML(state.productsLoadError)}</p>
         <button type="button" class="primary" onclick="loadProducts({ force: true })">Повторить</button>
       </div>
-    `, `catalog:error:${state.productsLoadError}`);
+    `;
     if (loadMoreButton) loadMoreButton.hidden = true;
     return;
   }
 
   if (products.length === 0) {
-    setStableMarkup(productList, `
+    productList.innerHTML = `
       <div class="empty-state">
-        <h3>Ничего не найдено</h3>
-        <p class="muted">Измените запрос, город или категорию.</p>
+        <h3>Объявлений пока нет</h3>
+        <p class="muted">Попробуйте изменить поиск или категорию.</p>
       </div>
-    `, `catalog:empty:${state.search}:${state.category}`);
+    `;
     if (loadMoreButton) loadMoreButton.hidden = true;
     return;
   }
@@ -1059,30 +1039,29 @@ function renderProducts() {
   const markup = [];
   let adIndex = 0;
   let nextAdPosition = Number.POSITIVE_INFINITY;
+
   if (feedAds.length > 0) {
     const firstInterval = Math.max(2, Number(feedAds[0].insertEvery) || 6);
+    // Даже в небольшом каталоге первая активная реклама должна быть видна.
     nextAdPosition = Math.min(firstInterval, products.length);
   }
 
   products.forEach((product, index) => {
     markup.push(getProductCard(product, { priority: index < 2 }));
     const productPosition = index + 1;
+
     if (feedAds.length > 0 && productPosition === nextAdPosition) {
       const ad = feedAds[adIndex % feedAds.length];
       markup.push(renderAdCard(ad, "feed"));
       adIndex += 1;
+
       const nextAd = feedAds[adIndex % feedAds.length];
-      nextAdPosition = productPosition + Math.max(2, Number(nextAd?.insertEvery) || 6);
+      const nextInterval = Math.max(2, Number(nextAd?.insertEvery) || 6);
+      nextAdPosition = productPosition + nextInterval;
     }
   });
 
-  const key = [
-    state.search,
-    state.category,
-    ...products.map(item => `${item.id}:${item.updatedAt || 0}:${item.status}:${item.highlightUntil || 0}:${state.favorites.includes(item.id)}`),
-    ...feedAds.map(ad => `ad:${ad.id}:${ad.updatedAt || 0}`)
-  ].join("|");
-  setStableMarkup(productList, markup.join(""), key);
+  productList.innerHTML = markup.join("");
 
   if (loadMoreButton) {
     const hasMore = typeof state.catalogPagination.hasMore === "boolean"
@@ -1096,13 +1075,14 @@ function renderProducts() {
 
 function getProductStatusLabel(status, product = null) {
   if (product?.moderationStatus === "blocked") return "Заблокировано автомодерацией";
-  if (product?.moderationStatus === "rejected") return "Нужно исправить после модерации";
+  if (product?.moderationStatus === "rejected") return "Отклонено модератором";
   const labels = {
     active: "Активно",
     sold: "Продано",
     draft: "Черновик",
     archived: "В архиве"
   };
+
   return labels[status] || "Неизвестно";
 }
 
@@ -1115,67 +1095,58 @@ function getProductCard(product, options = {}) {
   const image = escapeHTML(safeImageUrl(images[0]));
   const price = escapeHTML(formatPrice(product.price) || product.price || "");
   const previousPrice = escapeHTML(formatPrice(product.previousPrice) || product.previousPrice || "");
-  const status = product.status || "active";
-  const highlighted = Boolean(product.isHighlighted && product.highlightColor);
-  const highlightClass = highlighted ? ` is-highlighted highlight-${escapeHTML(product.highlightColor)}` : "";
   const priceDropMarkup = product.priceDropped
     ? `<span class="price-drop-card-badge">Цена снизилась${product.priceDropPercent ? ` −${Number(product.priceDropPercent)}%` : ""}</span>`
     : "";
-  const highlightMarkup = highlighted
-    ? `<span class="promoted-card-badge">★ Выделено</span>`
-    : "";
+  const status = product.status || "active";
+  const promotedClass = product.isPromoted ? ` is-promoted highlight-${escapeHTML(product.highlightColor || "violet")}` : "";
+  const promotedMarkup = product.isPromoted ? '<span class="promoted-card-badge">Выделено</span>' : "";
 
   let actions = `
-    <button class="heart" type="button" aria-label="${isFav ? "Убрать из избранного" : "Добавить в избранное"}" onclick="event.stopPropagation(); toggleFav('${productId}')">${isFav ? "♥" : "♡"}</button>
+    <button
+      class="heart"
+      type="button"
+      aria-label="${isFav ? "Убрать из избранного" : "Добавить в избранное"}"
+      onclick="event.stopPropagation(); toggleFav('${productId}')"
+    >${isFav ? "♥" : "♡"}</button>
   `;
 
   if (options.ownerActions) {
-    const publishButton = status !== "active"
-      ? `<button type="button" class="owner-action publish" onclick="event.stopPropagation(); changeAdStatus('${productId}', 'active')">↻ Опубликовать</button>`
-      : `<button type="button" class="owner-action sold" onclick="event.stopPropagation(); changeAdStatus('${productId}', 'sold')">✓ Продано</button>`;
-    const archiveButton = status === "active"
-      ? `<button type="button" class="owner-action archive" onclick="event.stopPropagation(); changeAdStatus('${productId}', 'archived')">▣ В архив</button>`
-      : "";
-    const promoteButton = status === "active"
-      ? `<button type="button" class="owner-action promote" onclick="event.stopPropagation(); openHighlightDialog('${productId}')">★ Выделить</button>`
-      : "";
+    const statusAction = product.moderationStatus === "blocked"
+      ? `<button type="button" class="card-action status" title="Исправьте объявление перед публикацией" disabled>🛡</button>`
+      : status === "active"
+        ? `<button type="button" class="card-action status" title="Отметить проданным" onclick="event.stopPropagation(); changeAdStatus('${productId}', 'sold')">✓</button>`
+        : `<button type="button" class="card-action status" title="Опубликовать снова" onclick="event.stopPropagation(); changeAdStatus('${productId}', 'active')">↻</button>`;
 
     actions = `
-      <div class="product-owner-actions">
-        <button type="button" class="owner-action edit" onclick="event.stopPropagation(); editAd('${productId}')">✎ Изменить</button>
-        ${publishButton}
-        ${archiveButton}
-        ${promoteButton}
-        <button type="button" class="owner-action delete" onclick="event.stopPropagation(); deleteAd('${productId}')">🗑 Удалить</button>
+      <div class="product-card-actions">
+        <button type="button" class="card-action edit" title="Редактировать объявление" onclick="event.stopPropagation(); editAd('${productId}')">✎</button>
+        ${statusAction}
+        <button type="button" class="card-action delete" title="Удалить объявление" onclick="event.stopPropagation(); deleteAd('${productId}')">🗑</button>
       </div>
     `;
   }
 
-  const moderationReason = options.showStatus && ["blocked", "rejected"].includes(product.moderationStatus) && product.moderationReason
-    ? `<p class="moderation-owner-reason">${escapeHTML(product.moderationReason)}</p>`
-    : "";
-
   return `
-    <article class="product-card ${status !== "active" ? "is-inactive" : ""}${highlightClass}" data-product-id="${productId}" onclick="openProduct('${productId}')">
-      <div class="product-card-image-wrap">
-        <img src="${image}" data-original-src="${image}" alt="${name}" loading="${options.priority ? "eager" : "lazy"}" decoding="async" fetchpriority="${options.priority ? "high" : "low"}" onerror="handleImageError(this)">
-        ${highlightMarkup}
-      </div>
-      <div class="product-card-copy">
+    <div class="product-card ${status !== "active" ? "is-inactive" : ""}${promotedClass}" onclick="openProduct('${productId}')">
+      <img src="${image}" alt="${name}" loading="${options.priority ? "eager" : "lazy"}" decoding="async" fetchpriority="${options.priority ? "high" : "low"}" onload="this.classList.add('is-loaded')" onerror="handleImageError(this)">
+      <div>
+        ${promotedMarkup}
         ${priceDropMarkup}
         <h4>${name}</h4>
         <div class="card-price-row"><b>${price}</b>${product.priceDropped && previousPrice ? `<s>${previousPrice}</s>` : ""}</div>
-        <p>${location} · ${getTimeAgo(product.publishedAt || product.createdAt)}</p>
-        ${options.showStatus ? `<p class="product-status status-${escapeHTML(status)}">${escapeHTML(product.hidden ? "Скрыто модератором" : getProductStatusLabel(status, product))}</p>` : ""}
-        ${moderationReason}
+        <p>${location} · ${getTimeAgo(product.createdAt)}</p>
+        ${options.showStatus ? `<p class="product-status status-${escapeHTML(status)}">${escapeHTML(product.moderationStatus === "blocked" ? getProductStatusLabel(status, product) : (product.hidden ? "Скрыто модератором" : getProductStatusLabel(status, product)))}</p>` : ""}
+        ${options.showStatus && product.moderationStatus === "blocked" && product.moderationReason ? `<p class="moderation-owner-reason">${escapeHTML(product.moderationReason)}</p>` : ""}
       </div>
       ${actions}
-    </article>
+    </div>
   `;
 }
 
 function renderMyAds() {
   const myAdsList = document.getElementById("myAdsList");
+
   if (!myAdsList || state.page !== "myAds") return;
 
   document.querySelectorAll("#myAdsTabs [data-status]").forEach(button => {
@@ -1183,29 +1154,50 @@ function renderMyAds() {
   });
 
   if (!state.telegramUser?.id) {
-    setStableMarkup(myAdsList, `<div class="empty-state"><h3>Откройте через Telegram</h3><p class="muted">Так мы поймём, какие объявления ваши.</p></div>`, "myads:noauth");
-    return;
-  }
-  if (state.myProductsLoading && state.myProducts.length === 0) {
-    setStableMarkup(myAdsList, getCatalogSkeletonMarkup(4), "myads:skeleton");
+    myAdsList.innerHTML = `
+      <div class="empty-state">
+        <h3>Откройте через Telegram</h3>
+        <p class="muted">Так мы поймём, какие объявления ваши.</p>
+      </div>
+    `;
     return;
   }
 
-  const products = state.myProducts.filter(product => (product.status || "active") === state.myAdsTab);
+  if (state.myProductsLoading && state.myProducts.length === 0) {
+    myAdsList.innerHTML = getCatalogSkeletonMarkup(4);
+    return;
+  }
+
+  const products = state.myProducts.filter(
+    product => (product.status || "active") === state.myAdsTab
+  );
+
   if (products.length === 0) {
     const emptyCopy = {
       active: ["Нет активных объявлений", "Опубликуйте товар, и он появится здесь."],
       sold: ["Нет проданных товаров", "Отмеченные проданными объявления появятся здесь."],
-      draft: ["Нет черновиков", "Черновики и объявления на доработке появятся здесь."],
-      archived: ["Архив пуст", `Через ${state.config.productLifetimeDays || 15} дней активные объявления автоматически переходят сюда.`]
+      draft: ["Нет черновиков", "Сохраните объявление как черновик перед публикацией."],
+      archived: ["Архив пуст", "Объявления старше 15 дней автоматически перемещаются сюда."]
     };
     const [title, text] = emptyCopy[state.myAdsTab] || emptyCopy.active;
-    setStableMarkup(myAdsList, `<div class="empty-state"><h3>${escapeHTML(title)}</h3><p class="muted">${escapeHTML(text)}</p></div>`, `myads:empty:${state.myAdsTab}`);
+
+    myAdsList.innerHTML = `
+      <div class="empty-state">
+        <h3>${title}</h3>
+        <p class="muted">${text}</p>
+      </div>
+    `;
     return;
   }
 
-  const key = `${state.myAdsTab}|${products.map(product => `${product.id}:${product.updatedAt || 0}:${product.status}:${product.highlightUntil || 0}`).join("|")}`;
-  setStableMarkup(myAdsList, products.map(product => getProductCard(product, { ownerActions: true, showStatus: true })).join(""), key);
+  myAdsList.innerHTML = products
+    .map(product =>
+      getProductCard(product, {
+        ownerActions: true,
+        showStatus: true
+      })
+    )
+    .join("");
 }
 
 function renderFavorites() {
@@ -1352,15 +1344,67 @@ function cacheProduct(product) {
   }
 }
 
+function setStableImage(imageEl, source, onReady = null) {
+  if (!imageEl) return;
+  const safeSource = safeImageUrl(source);
+  const sequence = String(++stableImageSequence);
+  imageEl.dataset.loadSequence = sequence;
+  imageEl.classList.add("image-pending");
+
+  const preloader = new Image();
+  preloader.onload = async () => {
+    if (imageEl.dataset.loadSequence !== sequence) return;
+    imageEl.dataset.fallbackApplied = "0";
+    imageEl.src = safeSource;
+    try { await imageEl.decode?.(); } catch (error) {}
+    if (imageEl.dataset.loadSequence !== sequence) return;
+    imageEl.classList.remove("image-pending");
+    onReady?.();
+  };
+  preloader.onerror = () => {
+    if (imageEl.dataset.loadSequence !== sequence) return;
+    imageEl.src = DEFAULT_IMAGE;
+    imageEl.classList.remove("image-pending");
+    onReady?.();
+  };
+  preloader.src = safeSource;
+}
+
+function applyPhotoZoom() {
+  const image = document.getElementById("lightboxImage");
+  const resetButton = document.querySelector(".lightbox-zoom-controls button:nth-child(2)");
+  if (!image) return;
+  image.style.transform = `translate3d(${lightboxTranslateX}px, ${lightboxTranslateY}px, 0) scale(${lightboxScale})`;
+  image.classList.toggle("is-zoomed", lightboxScale > 1);
+  if (resetButton) resetButton.textContent = `${Math.round(lightboxScale * 100)}%`;
+}
+
+function zoomPhoto(delta) {
+  lightboxScale = Math.max(1, Math.min(4, Math.round((lightboxScale + Number(delta || 0)) * 10) / 10));
+  if (lightboxScale === 1) {
+    lightboxTranslateX = 0;
+    lightboxTranslateY = 0;
+  }
+  applyPhotoZoom();
+}
+
+function resetPhotoZoom() {
+  lightboxScale = 1;
+  lightboxTranslateX = 0;
+  lightboxTranslateY = 0;
+  applyPhotoZoom();
+}
+
 function showProductImage(index) {
   const product = findProductById(state.openedProductId);
   if (!product) return;
+
   const images = getProductImages(product);
   if (images.length === 0) return;
 
   const normalizedIndex = ((Number(index) || 0) + images.length) % images.length;
-  const changed = normalizedIndex !== state.currentProductImageIndex;
   state.currentProductImageIndex = normalizedIndex;
+
   const source = safeImageUrl(images[normalizedIndex]);
   const imageEl = document.getElementById("productImage");
   const counter = document.getElementById("productImageCounter");
@@ -1369,30 +1413,35 @@ function showProductImage(index) {
   const previousButton = document.getElementById("productPrevImage");
   const nextButton = document.getElementById("productNextImage");
 
-  setReliableImageSource(imageEl, source, { fade: changed });
-  if (lightboxImage && !document.getElementById("photoLightbox")?.hidden) {
-    setReliableImageSource(lightboxImage, source, { fade: changed });
+  if (imageEl) {
+    imageEl.onerror = () => handleImageError(imageEl);
+    setStableImage(imageEl, source, () => document.getElementById("productGallery")?.classList.remove("is-loading"));
   }
-  if (changed) resetLightboxZoom();
+  if (lightboxImage) {
+    lightboxImage.onerror = () => handleImageError(lightboxImage);
+    setStableImage(lightboxImage, source);
+  }
   if (counter) counter.textContent = `${normalizedIndex + 1} / ${images.length}`;
   if (lightboxCounter) lightboxCounter.textContent = `${normalizedIndex + 1} / ${images.length}`;
   if (previousButton) previousButton.hidden = images.length <= 1;
   if (nextButton) nextButton.hidden = images.length <= 1;
-  document.querySelectorAll("#productThumbs img").forEach((img, itemIndex) => img.classList.toggle("active", itemIndex === normalizedIndex));
+
+  document.querySelectorAll("#productThumbs img").forEach((img, itemIndex) => {
+    img.classList.toggle("active", itemIndex === normalizedIndex);
+  });
 }
 
 function changeProductImage(delta) {
+  if (lightboxScale > 1) resetPhotoZoom();
   showProductImage(state.currentProductImageIndex + Number(delta || 0));
 }
 
 function openPhotoLightbox() {
   const lightbox = document.getElementById("photoLightbox");
-  const image = document.getElementById("lightboxImage");
-  const product = findProductById(state.openedProductId);
-  if (!lightbox || !product) return;
-  const source = getProductImages(product)[state.currentProductImageIndex];
-  resetLightboxZoom();
-  setReliableImageSource(image, source);
+  if (!lightbox || !state.openedProductId) return;
+
+  resetPhotoZoom();
+  showProductImage(state.currentProductImageIndex);
   lightbox.hidden = false;
   document.body.classList.add("lightbox-open");
 }
@@ -1400,7 +1449,7 @@ function openPhotoLightbox() {
 function closePhotoLightbox() {
   const lightbox = document.getElementById("photoLightbox");
   if (lightbox) lightbox.hidden = true;
-  resetLightboxZoom();
+  resetPhotoZoom();
   document.body.classList.remove("lightbox-open");
 }
 
@@ -1408,12 +1457,11 @@ function initProductGalleryGestures() {
   const attachSwipe = element => {
     if (!element || element.dataset.swipeReady === "1") return;
     element.dataset.swipeReady = "1";
+
     let startX = 0;
     let startY = 0;
-    let oneFinger = false;
 
     element.addEventListener("touchstart", event => {
-      oneFinger = event.touches?.length === 1;
       const touch = event.touches?.[0];
       if (!touch) return;
       startX = touch.clientX;
@@ -1421,20 +1469,91 @@ function initProductGalleryGestures() {
     }, { passive: true });
 
     element.addEventListener("touchend", event => {
-      if (!oneFinger || lightboxTransform.scale > 1.01) return;
       const touch = event.changedTouches?.[0];
       if (!touch) return;
+
+      if (element.id === "photoLightbox" && lightboxScale > 1) return;
       const deltaX = touch.clientX - startX;
       const deltaY = Math.abs(touch.clientY - startY);
       if (Math.abs(deltaX) < 45 || deltaY > 70) return;
+
       changeProductImage(deltaX < 0 ? 1 : -1);
     }, { passive: true });
   };
 
   attachSwipe(document.getElementById("productGallery"));
-  attachSwipe(document.getElementById("lightboxViewport"));
-  document.getElementById("productPrevImage")?.addEventListener("click", event => { event.stopPropagation(); changeProductImage(-1); });
-  document.getElementById("productNextImage")?.addEventListener("click", event => { event.stopPropagation(); changeProductImage(1); });
+  attachSwipe(document.getElementById("photoLightbox"));
+
+  document.getElementById("productPrevImage")?.addEventListener("click", event => {
+    event.stopPropagation();
+    changeProductImage(-1);
+  });
+
+  document.getElementById("productNextImage")?.addEventListener("click", event => {
+    event.stopPropagation();
+    changeProductImage(1);
+  });
+
+  const stage = document.getElementById("lightboxImageStage");
+  if (stage && stage.dataset.zoomReady !== "1") {
+    stage.dataset.zoomReady = "1";
+    let pinchStartDistance = 0;
+    let pinchStartScale = 1;
+    let panStartX = 0;
+    let panStartY = 0;
+    let panOriginX = 0;
+    let panOriginY = 0;
+    let lastTapAt = 0;
+
+    const touchDistance = touches => Math.hypot(
+      touches[0].clientX - touches[1].clientX,
+      touches[0].clientY - touches[1].clientY
+    );
+
+    stage.addEventListener("touchstart", event => {
+      if (event.touches.length === 2) {
+        pinchStartDistance = touchDistance(event.touches);
+        pinchStartScale = lightboxScale;
+        event.preventDefault();
+      } else if (event.touches.length === 1 && lightboxScale > 1) {
+        panStartX = event.touches[0].clientX;
+        panStartY = event.touches[0].clientY;
+        panOriginX = lightboxTranslateX;
+        panOriginY = lightboxTranslateY;
+      }
+    }, { passive: false });
+
+    stage.addEventListener("touchmove", event => {
+      if (event.touches.length === 2 && pinchStartDistance > 0) {
+        lightboxScale = Math.max(1, Math.min(4, pinchStartScale * touchDistance(event.touches) / pinchStartDistance));
+        applyPhotoZoom();
+        event.preventDefault();
+      } else if (event.touches.length === 1 && lightboxScale > 1) {
+        lightboxTranslateX = panOriginX + event.touches[0].clientX - panStartX;
+        lightboxTranslateY = panOriginY + event.touches[0].clientY - panStartY;
+        applyPhotoZoom();
+        event.preventDefault();
+      }
+    }, { passive: false });
+
+    stage.addEventListener("touchend", event => {
+      pinchStartDistance = 0;
+      if (event.changedTouches.length === 1) {
+        const now = Date.now();
+        if (now - lastTapAt < 280) {
+          lightboxScale > 1 ? resetPhotoZoom() : zoomPhoto(1);
+          lastTapAt = 0;
+        } else {
+          lastTapAt = now;
+        }
+      }
+    }, { passive: true });
+
+    stage.addEventListener("dblclick", event => {
+      event.preventDefault();
+      lightboxScale > 1 ? resetPhotoZoom() : zoomPhoto(1);
+    });
+  }
 }
 
 function getProductLink(productId = state.openedProductId) {
@@ -1633,14 +1752,17 @@ function renderProductDetails(product) {
   }
 
   if (messageBtn) {
-    const isOwn = String(product.ownerId || "") === String(state.telegramUser?.id || "");
-    if (isAvailable && allowMessages && state.telegramUser?.id && !isOwn) {
+    if (isAvailable && allowMessages && sellerUsername) {
       messageBtn.disabled = false;
       messageBtn.textContent = "💬 Написать";
-      messageBtn.onclick = () => startProductChat(product.id);
+      messageBtn.onclick = () => {
+        const url = `https://t.me/${sellerUsername}`;
+        if (tg?.openTelegramLink) tg.openTelegramLink(url);
+        else window.open(url, "_blank", "noopener,noreferrer");
+      };
     } else {
       messageBtn.disabled = true;
-      messageBtn.textContent = isOwn ? "💬 Ваше объявление" : (state.telegramUser?.id ? "💬 Недоступно" : "💬 Откройте в Telegram");
+      messageBtn.textContent = "💬 Недоступно";
       messageBtn.onclick = null;
     }
   }
@@ -1690,6 +1812,10 @@ async function openProduct(id) {
   const openSequence = ++productOpenSequence;
   state.openedProductId = id;
   state.currentProductImageIndex = 0;
+  const gallery = document.getElementById("productGallery");
+  const productImage = document.getElementById("productImage");
+  gallery?.classList.add("is-loading");
+  productImage?.classList.add("image-pending");
   showPage("product");
 
   let product = findProductById(id);
@@ -2090,12 +2216,16 @@ async function publishAd(status = "active") {
     }
 
     const images = draftAd.images.slice(0, MAX_PHOTOS);
-    const mainImage = images[0] || DEFAULT_IMAGE;
-    if (draftAd.thumbnailSource !== mainImage || !draftAd.thumbnail) {
+    if (targetStatus === "active" && images.length === 0) {
+      alert("Добавьте хотя бы одно фото объявления");
+      return;
+    }
+    const mainImage = images[0] || "";
+    if (mainImage && (draftAd.thumbnailSource !== mainImage || !draftAd.thumbnail)) {
       draftAd.thumbnail = await createThumbnailFromImage(mainImage);
       draftAd.thumbnailSource = mainImage;
     }
-    const thumbnail = draftAd.thumbnail || mainImage;
+    const thumbnail = mainImage ? (draftAd.thumbnail || mainImage) : "";
 
     const editingId = state.editingProductId;
     const endpoint = editingId
@@ -2240,16 +2370,14 @@ async function editAd(id) {
     return;
   }
 
-  if (product.isSummary || !Array.isArray(product.images) || typeof product.desc === "undefined") {
-    try {
-      const data = await apiRequest(`/api/my-products/${encodeURIComponent(id)}/details`);
-      product = data.product;
-      cacheProduct(product);
-    } catch (error) {
-      console.error("Не удалось загрузить объявление для редактирования:", error);
-      alert(error.message || "Не удалось открыть объявление");
-      return;
-    }
+  try {
+    const data = await apiRequest(`/api/my-products/${encodeURIComponent(id)}/details`);
+    product = data.product;
+    cacheProduct(product);
+  } catch (error) {
+    console.error("Не удалось загрузить объявление для редактирования:", error);
+    alert(error.message || "Не удалось открыть объявление");
+    return;
   }
 
   state.editingProductId = id;
@@ -2385,496 +2513,197 @@ async function deleteAd(id) {
 
 function initEvents() {
   const searchForm = document.getElementById("searchForm");
-  const searchInput = document.getElementById("searchInput") || document.querySelector(".search");
-  const clearSearchButton = document.getElementById("clearSearchBtn");
+  const searchInput =
+    document.getElementById("searchInput") || document.querySelector(".search");
 
-  const updateSearch = value => {
-    state.search = String(value || "");
-    if (clearSearchButton) clearSearchButton.hidden = !state.search;
-    state.catalogPagination = { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE, hasMore: true };
+  searchInput?.addEventListener("input", event => {
+    state.search = event.target.value;
+    state.catalogPagination = { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE };
     renderProducts();
-    clearTimeout(productSearchTimer);
-    productSearchTimer = setTimeout(() => loadProducts({ force: true }), 350);
-  };
 
-  searchInput?.addEventListener("input", event => updateSearch(event.target.value));
-  searchInput?.addEventListener("search", event => { updateSearch(event.target.value); hideKeyboard(); });
+    clearTimeout(productSearchTimer);
+    productSearchTimer = setTimeout(() => {
+      loadProducts({ force: true });
+    }, 250);
+  });
+
   searchInput?.addEventListener("keydown", hideKeyboardOnEnter);
+
+  searchInput?.addEventListener("search", () => {
+    hideKeyboard();
+  });
+
   searchForm?.addEventListener("submit", event => {
     event.preventDefault();
     clearTimeout(productSearchTimer);
-    state.search = searchInput?.value || "";
     hideKeyboard();
     loadProducts({ force: true });
   });
-  clearSearchButton?.addEventListener("click", () => {
-    if (searchInput) searchInput.value = "";
-    updateSearch("");
-    searchInput?.focus();
-  });
 
-  const imageInput = document.getElementById("adImageInput");
-  imageInput?.addEventListener("change", async event => {
-    const files = Array.from(event.target.files || []);
-    if (files.length === 0) return;
-    const slotsLeft = MAX_PHOTOS - draftAd.images.length;
-    if (slotsLeft <= 0) {
-      alert(`Можно добавить максимум ${MAX_PHOTOS} фото`);
-      event.target.value = "";
-      return;
-    }
-    const filesToAdd = files.slice(0, slotsLeft);
-    if (files.length > slotsLeft) alert(`Добавим только ${slotsLeft} фото. Максимум — ${MAX_PHOTOS}.`);
-    try {
-      for (const file of filesToAdd) {
-        if (!file.type.startsWith("image/")) continue;
-        if (file.size > 15 * 1024 * 1024) {
-          alert(`Файл «${file.name}» больше 15 МБ и будет пропущен.`);
-          continue;
-        }
-        draftAd.images.push(await compressImage(file, 800, 0.68));
+  const addPhotoBtn = document.getElementById("addPhotoBtn");
+  const photoInput = document.getElementById("photoInput");
+
+  if (addPhotoBtn) {
+    addPhotoBtn.addEventListener("click", () => {
+      if (draftAd.images.length >= MAX_PHOTOS) {
+        alert(`Можно добавить максимум ${MAX_PHOTOS} фото`);
+        return;
       }
-      draftAd.thumbnail = "";
-      draftAd.thumbnailSource = "";
-      renderPhotoPreview();
-      updatePreviewCard();
-      updateCreateButtons();
-    } catch (error) {
-      console.error("Ошибка обработки фото:", error);
-      alert("Не удалось загрузить фото");
-    } finally {
-      event.target.value = "";
-    }
-  });
+
+      photoInput?.click();
+    });
+  }
+
+  if (photoInput) {
+    photoInput.addEventListener("change", async event => {
+      const files = Array.from(event.target.files || []);
+
+      if (files.length === 0) return;
+
+      const slotsLeft = MAX_PHOTOS - draftAd.images.length;
+
+      if (slotsLeft <= 0) {
+        alert(`Можно добавить максимум ${MAX_PHOTOS} фото`);
+        event.target.value = "";
+        return;
+      }
+
+      const filesToAdd = files.slice(0, slotsLeft);
+
+      if (files.length > slotsLeft) {
+        alert(`Добавим только ${slotsLeft} фото. Максимум — ${MAX_PHOTOS}.`);
+      }
+
+      try {
+        for (const file of filesToAdd) {
+          if (!file.type.startsWith("image/")) {
+            continue;
+          }
+
+          if (file.size > 15 * 1024 * 1024) {
+            alert(`Файл «${file.name}» больше 15 МБ и будет пропущен.`);
+            continue;
+          }
+
+          const compressed = await compressImage(file, 800, 0.68);
+          draftAd.images.push(compressed);
+        }
+
+        draftAd.thumbnail = "";
+        draftAd.thumbnailSource = "";
+        renderPhotoPreview();
+        updatePreviewCard();
+        updateCreateButtons();
+      } catch (error) {
+        console.error("Ошибка обработки фото:", error);
+        alert("Не удалось загрузить фото");
+      } finally {
+        event.target.value = "";
+      }
+    });
+  }
 
   document.querySelectorAll(".categories button").forEach(button => {
-    button.addEventListener("click", event => {
-      event.preventDefault();
-      document.querySelectorAll(".categories button").forEach(item => item.classList.remove("active"));
-      button.classList.add("active");
-      state.category = button.dataset.category || button.innerText.trim();
-      state.productsLoadedAt = 0;
-      state.catalogPagination = { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE, hasMore: true };
-      renderProducts();
-      loadProducts({ force: true });
+  button.addEventListener("click", event => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    document.querySelectorAll(".categories button").forEach(item => {
+      item.classList.remove("active");
     });
+
+    button.classList.add("active");
+
+    state.category = button.dataset.category || button.innerText.trim();
+    state.page = "catalog";
+    state.productsLoadedAt = 0;
+    state.catalogPagination = { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE };
+
+    renderProducts();
+    loadProducts({ force: true });
   });
+});
 
   const adPriceInput = document.getElementById("adPrice");
-  adPriceInput?.addEventListener("input", event => normalizePriceInput(event.target));
-  adPriceInput?.addEventListener("focus", event => { event.target.value = String(event.target.value || "").replace(/[^\d]/g, ""); });
+
+  adPriceInput?.addEventListener("input", event => {
+    normalizePriceInput(event.target);
+  });
+
+  adPriceInput?.addEventListener("focus", event => {
+    const onlyNums = String(event.target.value || "").replace(/[^\d]/g, "");
+    event.target.value = onlyNums;
+  });
+
   adPriceInput?.addEventListener("blur", event => {
     normalizePriceInput(event.target);
+
     const priceNumber = getPriceNumber(event.target.value);
-    if (priceNumber > 0) event.target.value = formatPrice(priceNumber);
+
+    if (priceNumber > 0) {
+      event.target.value = formatPrice(priceNumber);
+    }
+
     updateCreateButtons();
     updatePreviewCard();
   });
 
-  ["adTitle", "adPrice", "adDesc", "adCategory", "adCondition", "adLocation", "adDistrict", "adNegotiable", "adDelivery", "adSpecifications", "adPhone", "adAllowMessages"].forEach(id => {
+  [
+    "adTitle",
+    "adPrice",
+    "adDesc",
+    "adCategory",
+    "adCondition",
+    "adLocation",
+    "adDistrict",
+    "adNegotiable",
+    "adDelivery",
+    "adSpecifications",
+    "adPhone",
+    "adAllowMessages"
+  ].forEach(id => {
     const el = document.getElementById(id);
-    el?.addEventListener("input", () => { updatePreviewCard(); updateCreateButtons(); });
-    el?.addEventListener("change", () => { updatePreviewCard(); updateCreateButtons(); });
+
+    el?.addEventListener("input", () => {
+      updatePreviewCard();
+      updateCreateButtons();
+    });
+
+    el?.addEventListener("change", () => {
+      updatePreviewCard();
+      updateCreateButtons();
+    });
   });
-  ["adTitle", "adPrice", "adDesc", "adDistrict", "adPhone", "searchInput"].forEach(id => document.getElementById(id)?.addEventListener("keydown", hideKeyboardOnEnter));
+
+  ["adTitle", "adPrice", "adDesc", "adDistrict", "adPhone", "searchInput"].forEach(id => {
+    const el = document.getElementById(id);
+
+    el?.addEventListener("keydown", hideKeyboardOnEnter);
+  });
+
+  
 
   initProductGalleryGestures();
-  initLightboxZoom();
-  document.getElementById("reportDialog")?.addEventListener("click", event => { if (event.target.id === "reportDialog") closeReportDialog(); });
-  document.getElementById("highlightDialog")?.addEventListener("click", event => { if (event.target.id === "highlightDialog") closeHighlightDialog(); });
+
+  const reportDialog = document.getElementById("reportDialog");
+  reportDialog?.addEventListener("click", event => {
+    if (event.target === reportDialog) closeReportDialog();
+  });
+
   document.addEventListener("keydown", event => {
     if (event.key !== "Escape") return;
     const lightbox = document.getElementById("photoLightbox");
     if (lightbox && !lightbox.hidden) closePhotoLightbox();
   });
+
   renderPhotoPreview();
   updateCreateButtons();
   updateListingQuality();
 }
 
-
 /* =======================
-   v1.12.0 STABILITY, CHAT, PROMOTION
+   TELEGRAM MINI APP UX
 ======================= */
-
-function setStableMarkup(root, markup, key = markup) {
-  if (!root) return false;
-  const renderKey = String(key || "");
-  if (root.dataset.renderKey === renderKey) return false;
-  root.innerHTML = markup;
-  root.dataset.renderKey = renderKey;
-  return true;
-}
-
-function hydrateAdsCache() {
-  try {
-    const raw = readBrowserStorage("localStorage", "ossetianMarketAdsCache");
-    if (!raw) return;
-    const cached = JSON.parse(raw);
-    if (!Array.isArray(cached.ads)) return;
-    state.ads = cached.ads;
-    state.adsLoadedAt = Number(cached.savedAt) || 0;
-    renderCatalogTopAds();
-    renderProductDetailAds();
-  } catch (error) {
-    console.warn("Кэш рекламы повреждён:", error);
-  }
-}
-
-function renderSearchSummary(visibleCount = 0) {
-  const root = document.getElementById("searchSummary");
-  const clearButton = document.getElementById("clearSearchBtn");
-  if (clearButton) clearButton.hidden = !state.search;
-  if (!root) return;
-  const total = Number(state.catalogPagination.total);
-  if (state.productsLoading && state.products.length === 0) {
-    root.textContent = "Ищем объявления…";
-    return;
-  }
-  const filters = [];
-  if (state.search.trim()) filters.push(`«${state.search.trim()}»`);
-  if (state.category !== "Все") filters.push(state.category);
-  if (filters.length === 0) {
-    root.textContent = Number.isFinite(total) && total > 0 ? `Найдено объявлений: ${total}` : "";
-    return;
-  }
-  root.textContent = `Найдено: ${Number.isFinite(total) ? total : visibleCount} · ${filters.join(" · ")}`;
-}
-
-async function loadChats({ force = false } = {}) {
-  if (!state.telegramUser?.id) {
-    state.chats = [];
-    state.chatsLoadedAt = Date.now();
-    renderChats();
-    updateChatUnreadBadge();
-    return;
-  }
-  if (state.chatsLoading) return;
-  if (!force && isFresh(state.chatsLoadedAt, 10_000)) {
-    renderChats();
-    updateChatUnreadBadge();
-    return;
-  }
-  state.chatsLoading = true;
-  renderChats();
-  try {
-    const data = await apiRequest("/api/chats", { timeoutMs: 10_000 });
-    state.chats = Array.isArray(data.chats) ? data.chats : [];
-    state.chatsLoadedAt = Date.now();
-  } catch (error) {
-    console.error("Не удалось загрузить чаты:", error);
-    if (state.page === "chats" && state.chats.length === 0) {
-      const root = document.getElementById("chatList");
-      if (root) root.innerHTML = `<div class="empty-state"><h3>Чаты не загрузились</h3><p class="muted">${escapeHTML(error.message)}</p><button class="primary" onclick="loadChats({force:true})">Повторить</button></div>`;
-    }
-  } finally {
-    state.chatsLoading = false;
-    renderChats();
-    updateChatUnreadBadge();
-  }
-}
-
-function updateChatUnreadBadge() {
-  const badge = document.getElementById("chatUnreadBadge");
-  if (!badge) return;
-  const count = state.chats.reduce((sum, chat) => sum + (Number(chat.unreadCount) || 0), 0);
-  badge.hidden = count <= 0;
-  badge.textContent = count > 99 ? "99+" : String(count);
-}
-
-function renderChats() {
-  const root = document.getElementById("chatList");
-  if (!root || state.page !== "chats") return;
-  if (!state.telegramUser?.id) {
-    setStableMarkup(root, `<div class="empty-state"><h3>Откройте через Telegram</h3><p class="muted">Чаты доступны после безопасной авторизации.</p></div>`, "chats:noauth");
-    return;
-  }
-  if (state.chatsLoading && state.chats.length === 0) {
-    setStableMarkup(root, `<div class="chat-list-skeleton">${Array.from({length:4}, () => '<div class="chat-row skeleton-chat"></div>').join("")}</div>`, "chats:loading");
-    return;
-  }
-  if (state.chats.length === 0) {
-    setStableMarkup(root, `<div class="empty-state"><h3>Сообщений пока нет</h3><p class="muted">Откройте объявление и нажмите «Написать».</p></div>`, "chats:empty");
-    return;
-  }
-  const markup = state.chats.map(chat => {
-    const image = escapeHTML(safeImageUrl(chat.productImage));
-    const unread = Number(chat.unreadCount) || 0;
-    return `<button type="button" class="chat-row ${unread ? "has-unread" : ""}" onclick="openChat('${escapeHTML(chat.id)}')">
-      <img src="${image}" data-original-src="${image}" alt="" loading="lazy" onerror="handleImageError(this)">
-      <span class="chat-row-copy"><b>${escapeHTML(chat.counterpartName || "Пользователь")}</b><small>${escapeHTML(chat.productName || "Объявление")}</small><em>${escapeHTML(chat.lastMessage || "Начните переписку")}</em></span>
-      <span class="chat-row-meta"><time>${escapeHTML(chat.lastMessageAt ? getTimeAgo(chat.lastMessageAt) : "")}</time>${unread ? `<strong>${unread > 99 ? "99+" : unread}</strong>` : ""}</span>
-    </button>`;
-  }).join("");
-  const key = state.chats.map(chat => `${chat.id}:${chat.lastMessageAt || 0}:${chat.unreadCount}`).join("|");
-  setStableMarkup(root, markup, key);
-}
-
-async function startProductChat(productId) {
-  if (!state.telegramUser?.id) return alert("Откройте приложение через Telegram");
-  try {
-    const data = await apiRequest("/api/chats/start", { method: "POST", body: JSON.stringify({ productId }) });
-    state.chatsLoadedAt = 0;
-    await loadChats({ force: true });
-    await openChat(data.chatId, { addToHistory: true });
-  } catch (error) {
-    alert(error.message || "Не удалось открыть чат");
-  }
-}
-
-async function openChat(chatId, { addToHistory = true } = {}) {
-  if (!chatId) return;
-  state.activeChatId = chatId;
-  const chat = state.chats.find(item => item.id === chatId);
-  if (chat) {
-    state.activeChatProductId = chat.productId;
-    document.getElementById("chatProductName").textContent = chat.productName || "Объявление";
-    document.getElementById("chatCounterpartName").textContent = chat.counterpartName || "";
-    setReliableImageSource(document.getElementById("chatProductImage"), chat.productImage);
-  }
-  const openProductButton = document.getElementById("openChatProductBtn");
-  if (openProductButton) openProductButton.onclick = () => state.activeChatProductId && openProduct(state.activeChatProductId);
-  showPage("chat", addToHistory);
-  await loadChatMessages({ silent: false });
-  startChatPolling();
-}
-
-async function loadChatMessages({ silent = true } = {}) {
-  const chatId = state.activeChatId;
-  if (!chatId || state.page !== "chat") return;
-  const root = document.getElementById("chatMessages");
-  if (!silent && root) root.innerHTML = '<div class="chat-loading">Загружаем сообщения…</div>';
-  try {
-    const data = await apiRequest(`/api/chats/${encodeURIComponent(chatId)}/messages`, { timeoutMs: 8_000 });
-    if (state.activeChatId !== chatId) return;
-    state.activeChatMessages = Array.isArray(data.messages) ? data.messages : [];
-    state.activeChatProductId = data.chat?.productId || state.activeChatProductId;
-    if (data.chat?.productName) document.getElementById("chatProductName").textContent = data.chat.productName;
-    const chat = state.chats.find(item => item.id === chatId);
-    if (chat) chat.unreadCount = 0;
-    renderChatMessages();
-    updateChatUnreadBadge();
-  } catch (error) {
-    if (!silent && root) root.innerHTML = `<div class="empty-state"><h3>Сообщения не загрузились</h3><button class="primary" onclick="loadChatMessages({silent:false})">Повторить</button></div>`;
-  }
-}
-
-function renderChatMessages() {
-  const root = document.getElementById("chatMessages");
-  if (!root || state.page !== "chat") return;
-  if (state.activeChatMessages.length === 0) {
-    setStableMarkup(root, '<div class="chat-empty">Напишите первое сообщение по этому объявлению.</div>', `chat:${state.activeChatId}:empty`);
-    return;
-  }
-  const markup = state.activeChatMessages.map(message => {
-    const own = String(message.senderId) === String(state.telegramUser?.id);
-    return `<div class="chat-message ${own ? "own" : "incoming"}"><p>${escapeHTML(message.body)}</p><small>${escapeHTML(formatChatTime(message.createdAt))}${own && message.readAt ? " · прочитано" : ""}</small></div>`;
-  }).join("");
-  const key = state.activeChatMessages.map(message => `${message.id}:${message.readAt || 0}`).join("|");
-  const changed = setStableMarkup(root, markup, `chat:${state.activeChatId}:${key}`);
-  if (changed) requestAnimationFrame(() => { root.scrollTop = root.scrollHeight; });
-}
-
-function formatChatTime(timestamp) {
-  if (!timestamp) return "";
-  const date = new Date(Number(timestamp));
-  if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date);
-}
-
-async function sendChatMessage(event) {
-  event?.preventDefault();
-  const input = document.getElementById("chatMessageInput");
-  const button = document.getElementById("sendChatMessageBtn");
-  const body = String(input?.value || "").trim();
-  if (!body || !state.activeChatId) return;
-  if (button) button.disabled = true;
-  try {
-    const data = await apiRequest(`/api/chats/${encodeURIComponent(state.activeChatId)}/messages`, {
-      method: "POST",
-      body: JSON.stringify({ body })
-    });
-    if (input) input.value = "";
-    if (data.message) state.activeChatMessages.push(data.message);
-    renderChatMessages();
-    state.chatsLoadedAt = 0;
-    loadChats({ force: true });
-  } catch (error) {
-    alert(error.message || "Не удалось отправить сообщение");
-  } finally {
-    if (button) button.disabled = false;
-    input?.focus();
-  }
-}
-
-function startChatPolling() {
-  stopChatPolling();
-  state.chatPollTimer = window.setInterval(() => {
-    if (state.page === "chat" && !document.hidden) loadChatMessages({ silent: true });
-  }, 5000);
-}
-
-function stopChatPolling() {
-  if (state.chatPollTimer) window.clearInterval(state.chatPollTimer);
-  state.chatPollTimer = null;
-}
-
-function renderHighlightPlans() {
-  const select = document.getElementById("highlightPlan");
-  if (!select) return;
-  const plans = state.config.highlightPlans.length ? state.config.highlightPlans : [
-    { id: "3d", days: 3, price: 99 },
-    { id: "7d", days: 7, price: 199 },
-    { id: "15d", days: 15, price: 349 }
-  ];
-  select.innerHTML = plans.map(plan => `<option value="${escapeHTML(plan.id)}">${Number(plan.days)} дн. — ${Number(plan.price).toLocaleString("ru-RU")} ₽</option>`).join("");
-}
-
-function openHighlightDialog(productId) {
-  const product = state.myProducts.find(item => item.id === productId);
-  if (!product || product.status !== "active") return alert("Выделить можно только активное объявление");
-  document.getElementById("highlightProductId").value = productId;
-  renderHighlightPlans();
-  const dialog = document.getElementById("highlightDialog");
-  if (dialog?.showModal) dialog.showModal(); else dialog?.setAttribute("open", "");
-}
-
-function closeHighlightDialog() {
-  const dialog = document.getElementById("highlightDialog");
-  if (dialog?.close) dialog.close(); else dialog?.removeAttribute("open");
-}
-
-async function submitHighlightRequest(event) {
-  event?.preventDefault();
-  const productId = document.getElementById("highlightProductId")?.value || "";
-  const color = document.getElementById("highlightColor")?.value || "violet";
-  const planId = document.getElementById("highlightPlan")?.value || "";
-  const button = document.getElementById("submitHighlightBtn");
-  if (!productId || !planId) return;
-  if (button) button.disabled = true;
-  try {
-    await apiRequest(`/api/products/${encodeURIComponent(productId)}/highlight-request`, {
-      method: "POST",
-      body: JSON.stringify({ color, planId })
-    });
-    closeHighlightDialog();
-    alert("Заявка отправлена. После подтверждения оплаты администратор включит выделение.");
-  } catch (error) {
-    alert(error.message || "Не удалось отправить заявку");
-  } finally {
-    if (button) button.disabled = false;
-  }
-}
-
-const lightboxTransform = { scale: 1, x: 0, y: 0, startX: 0, startY: 0, startDistance: 0, startScale: 1 };
-
-function clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }
-function applyLightboxTransform() {
-  const image = document.getElementById("lightboxImage");
-  const label = document.getElementById("lightboxZoomLabel");
-  if (image) image.style.transform = `translate3d(${lightboxTransform.x}px, ${lightboxTransform.y}px, 0) scale(${lightboxTransform.scale})`;
-  if (label) label.textContent = `${Math.round(lightboxTransform.scale * 100)}%`;
-}
-function resetLightboxZoom() {
-  lightboxTransform.scale = 1; lightboxTransform.x = 0; lightboxTransform.y = 0;
-  applyLightboxTransform();
-}
-function changeLightboxZoom(delta) {
-  lightboxTransform.scale = clamp(lightboxTransform.scale + Number(delta || 0), 1, 4);
-  if (lightboxTransform.scale === 1) { lightboxTransform.x = 0; lightboxTransform.y = 0; }
-  applyLightboxTransform();
-}
-function getTouchDistance(touches) {
-  if (!touches || touches.length < 2) return 0;
-  return Math.hypot(touches[1].clientX - touches[0].clientX, touches[1].clientY - touches[0].clientY);
-}
-function initLightboxZoom() {
-  const viewport = document.getElementById("lightboxViewport");
-  if (!viewport || viewport.dataset.zoomReady === "1") return;
-  viewport.dataset.zoomReady = "1";
-  let dragging = false;
-  let pinching = false;
-  let lastTap = 0;
-
-  viewport.addEventListener("wheel", event => {
-    event.preventDefault();
-    changeLightboxZoom(event.deltaY < 0 ? 0.25 : -0.25);
-  }, { passive: false });
-  viewport.addEventListener("touchstart", event => {
-    if (event.touches.length === 2) {
-      pinching = true;
-      lightboxTransform.startDistance = getTouchDistance(event.touches);
-      lightboxTransform.startScale = lightboxTransform.scale;
-      return;
-    }
-    if (event.touches.length === 1) {
-      const now = Date.now();
-      if (now - lastTap < 280) {
-        event.preventDefault();
-        lightboxTransform.scale = lightboxTransform.scale > 1 ? 1 : 2;
-        if (lightboxTransform.scale === 1) { lightboxTransform.x = 0; lightboxTransform.y = 0; }
-        applyLightboxTransform();
-      }
-      lastTap = now;
-      dragging = lightboxTransform.scale > 1;
-      lightboxTransform.startX = event.touches[0].clientX - lightboxTransform.x;
-      lightboxTransform.startY = event.touches[0].clientY - lightboxTransform.y;
-    }
-  }, { passive: false });
-  viewport.addEventListener("touchmove", event => {
-    if (event.touches.length === 2 && pinching) {
-      event.preventDefault();
-      lightboxTransform.scale = clamp(lightboxTransform.startScale * (getTouchDistance(event.touches) / Math.max(1, lightboxTransform.startDistance)), 1, 4);
-      if (lightboxTransform.scale === 1) { lightboxTransform.x = 0; lightboxTransform.y = 0; }
-      applyLightboxTransform();
-      return;
-    }
-    if (event.touches.length === 1 && dragging && lightboxTransform.scale > 1) {
-      event.preventDefault();
-      const max = 180 * lightboxTransform.scale;
-      lightboxTransform.x = clamp(event.touches[0].clientX - lightboxTransform.startX, -max, max);
-      lightboxTransform.y = clamp(event.touches[0].clientY - lightboxTransform.startY, -max, max);
-      applyLightboxTransform();
-    }
-  }, { passive: false });
-  viewport.addEventListener("touchend", event => {
-    if (event.touches.length < 2) pinching = false;
-    if (event.touches.length === 0) dragging = false;
-  }, { passive: true });
-}
-
-function renderAdminHighlightsSection(requests = []) {
-  const root = document.getElementById("adminContent");
-  if (!root) return;
-  const pending = requests.filter(item => item.status === "pending");
-  const recent = requests.filter(item => item.status !== "pending").slice(0, 20);
-  root.insertAdjacentHTML("afterbegin", `<section class="admin-config-card highlight-admin-section">
-    <div class="admin-section-heading"><div><b>Платное выделение объявлений</b><small>${pending.length} заявок ожидают подтверждения оплаты</small></div></div>
-    <div class="admin-list">${pending.length ? pending.map(renderAdminHighlightRequest).join("") : '<div class="admin-state compact"><span>✅</span><b>Новых заявок нет</b></div>'}</div>
-    ${recent.length ? `<details class="highlight-history"><summary>Последние обработанные (${recent.length})</summary><div class="admin-list">${recent.map(renderAdminHighlightRequest).join("")}</div></details>` : ""}
-  </section>`);
-}
-function renderAdminHighlightRequest(request) {
-  const statusLabels = { pending: "Ожидает", approved: "Активировано", rejected: "Отклонено", expired: "Завершено" };
-  return `<article class="admin-record highlight-request-record">
-    <div class="admin-record-main"><div class="admin-record-title-row"><b>${escapeHTML(request.product_name || "Объявление")}</b><span class="admin-badge ${request.status === "pending" ? "warning" : request.status === "approved" ? "success" : ""}">${escapeHTML(statusLabels[request.status] || request.status)}</span></div>
-    <p>${escapeHTML(request.owner_name || request.owner_username || request.owner_id || "Владелец")} · ${escapeHTML(request.color)} · ${Number(request.duration_days)} дн.</p>
-    <div class="admin-record-meta"><strong>${Number(request.amount || 0).toLocaleString("ru-RU")} ₽</strong><span>${escapeHTML(formatAdminDate(request.created_at))}</span></div></div>
-    ${request.status === "pending" ? `<div class="admin-report-actions"><button class="admin-action-button restore" onclick="reviewHighlightRequest('${escapeHTML(request.id)}','approve',this)">Подтвердить оплату</button><button class="admin-action-button danger" onclick="reviewHighlightRequest('${escapeHTML(request.id)}','reject',this)">Отклонить</button></div>` : ""}
-  </article>`;
-}
-async function reviewHighlightRequest(id, decision, button) {
-  if (!id || !["approve", "reject"].includes(decision)) return;
-  if (decision === "approve" && !confirm("Подтвердить оплату и включить выделение?")) return;
-  if (button) button.disabled = true;
-  try {
-    await apiRequest(`/api/admin/highlights/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ decision }) });
-    await Promise.all([loadAdminAds(), loadProducts({ force: true }), loadMyProducts({ force: true })]);
-  } catch (error) {
-    alert(error.message || "Не удалось обработать заявку");
-    if (button) button.disabled = false;
-  }
-}
 
 function initTelegramAppUI() {
   if (!tg) return;
@@ -2935,19 +2764,47 @@ function updateTelegramBackButton() {
 }
 
 function initZoomLock() {
-  const insideLightbox = event => Boolean(event.target?.closest?.(".photo-lightbox"));
-  document.addEventListener("gesturestart", event => { if (!insideLightbox(event)) event.preventDefault(); }, { passive: false });
-  document.addEventListener("gesturechange", event => { if (!insideLightbox(event)) event.preventDefault(); }, { passive: false });
-  document.addEventListener("touchmove", event => {
-    if (!insideLightbox(event) && event.scale && event.scale !== 1) event.preventDefault();
-  }, { passive: false });
+  document.addEventListener(
+    "gesturestart",
+    event => {
+      event.preventDefault();
+    },
+    { passive: false }
+  );
+
+  document.addEventListener(
+    "gesturechange",
+    event => {
+      event.preventDefault();
+    },
+    { passive: false }
+  );
+
+  document.addEventListener(
+    "touchmove",
+    event => {
+      if (event.scale && event.scale !== 1) {
+        event.preventDefault();
+      }
+    },
+    { passive: false }
+  );
+
   let lastTouchEnd = 0;
-  document.addEventListener("touchend", event => {
-    if (insideLightbox(event)) return;
-    const now = Date.now();
-    if (now - lastTouchEnd <= 300) event.preventDefault();
-    lastTouchEnd = now;
-  }, { passive: false });
+
+  document.addEventListener(
+    "touchend",
+    event => {
+      const now = Date.now();
+
+      if (now - lastTouchEnd <= 300) {
+        event.preventDefault();
+      }
+
+      lastTouchEnd = now;
+    },
+    { passive: false }
+  );
 }
 
 function getSwipeBackIndicator() {
@@ -3169,25 +3026,30 @@ async function initApp() {
   initSwipeBack();
   initKeyboardAutoHide();
   initEvents();
-  hydrateAdsCache();
+  restoreCachedAds();
   const adsPromise = loadAds();
+  const configPromise = loadConfig();
+
   await initTelegramUser();
   updateAdminMenu();
 
-  await Promise.all([loadConfig(), adsPromise, loadFavoriteIds()]);
+  await Promise.all([
+    configPromise,
+    adsPromise,
+    loadFavoriteIds()
+  ]);
+
   renderCurrentPage();
   updateBottomNav();
-  if (state.telegramUser?.id) loadChats().catch(() => {});
 
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) {
-      loadAds({ force: true });
-      if (state.telegramUser?.id) loadChats({ force: true });
-    }
+    if (!document.hidden) loadAds();
   });
 
   const directProductId = new URLSearchParams(window.location.search).get("product");
-  if (directProductId) await openProduct(directProductId);
+  if (directProductId) {
+    await openProduct(directProductId);
+  }
 }
 
 async function openSellerProfile(userId) {
@@ -3340,7 +3202,7 @@ function applyTheme(enabled, persist = true) {
   const toggle = document.getElementById("darkModeToggle");
   if (toggle) toggle.checked = enabled;
 
-  const background = enabled ? "#000000" : "#f5f6fb";
+  const background = enabled ? "#0f1117" : "#f5f6fb";
   document.documentElement.style.background = background;
   document.body.style.background = background;
 
@@ -3533,6 +3395,7 @@ function renderAdminProducts(products = []) {
                 : ""}
               ${product.moderation_status === "blocked" ? '<span class="admin-badge danger">Автоблокировка</span>' : ""}
               ${product.previous_price ? '<span class="admin-badge price-drop">Цена снижена</span>' : ""}
+              ${product.promoted_until && new Date(product.promoted_until).getTime() > Date.now() ? '<span class="admin-badge promotion">Платное выделение</span>' : ""}
             </div>
             <p>${escapeHTML(product.owner_name || "Без имени")} · ${escapeHTML(product.category || "Без категории")}</p>
             <div class="admin-record-meta">
@@ -3541,13 +3404,22 @@ function renderAdminProducts(products = []) {
               <span>${escapeHTML(formatAdminDate(product.created_at))}</span>
             </div>
           </div>
-          <button
-            class="admin-action-button ${product.hidden ? "restore" : "danger"}"
-            type="button"
-            onclick="hideAdminProduct('${escapeHTML(product.id)}', this)"
-          >
-            ${product.hidden ? "👁 Показать" : "🙈 Скрыть"}
-          </button>
+          <div class="admin-record-actions">
+            <button
+              class="admin-action-button promotion"
+              type="button"
+              onclick="toggleProductPromotion('${escapeHTML(product.id)}', ${product.promoted_until && new Date(product.promoted_until).getTime() > Date.now() ? "false" : "true"}, this)"
+            >
+              ${product.promoted_until && new Date(product.promoted_until).getTime() > Date.now() ? "Снять выделение" : "Выделить 7 дней"}
+            </button>
+            <button
+              class="admin-action-button ${product.hidden ? "restore" : "danger"}"
+              type="button"
+              onclick="hideAdminProduct('${escapeHTML(product.id)}', this)"
+            >
+              ${product.hidden ? "👁 Показать" : "🙈 Скрыть"}
+            </button>
+          </div>
         </article>
       `).join("")}
     </div>
@@ -3616,9 +3488,7 @@ function getAdminActionLabel(action) {
     report_resolved: "Обработал жалобу",
     report_rejected: "Отклонил жалобу",
     moderation_approve: "Одобрил автоблокировку",
-    moderation_reject: "Вернул объявление на доработку",
-    highlight_approve: "Подтвердил выделение",
-    highlight_reject: "Отклонил выделение",
+    moderation_reject: "Отклонил объявление",
     moderation_rule_create: "Добавил правило модерации",
     moderation_rule_toggle: "Изменил правило модерации",
     moderation_rule_delete: "Удалил правило модерации",
@@ -3794,7 +3664,7 @@ function renderAdminModeration(data) {
             <input id="moderationNote-${escapeHTML(event.id)}" maxlength="1000" placeholder="Комментарий модератора">
             <div class="admin-report-actions">
               <button type="button" class="admin-action-button restore" onclick="reviewAutoModeration('${escapeHTML(event.id)}','approve',this)">Одобрить публикацию</button>
-              <button type="button" class="admin-action-button danger" onclick="reviewAutoModeration('${escapeHTML(event.id)}','reject',this)">Вернуть на доработку</button>
+              <button type="button" class="admin-action-button danger" onclick="reviewAutoModeration('${escapeHTML(event.id)}','reject',this)">Отклонить</button>
             </div>
           </div>
         </article>`).join("") : '<div class="admin-state"><span>✅</span><b>Очередь пуста</b><small>Автомодерация пока не поймала новых нарушений.</small></div>'}
@@ -3844,7 +3714,7 @@ async function deleteModerationRule(id, button) {
 }
 
 async function reviewAutoModeration(id, decision, button) {
-  if (decision === "reject" && !confirm("Вернуть объявление владельцу на доработку?")) return;
+  if (decision === "reject" && !confirm("Отклонить и архивировать объявление?")) return;
   const adminNote = document.getElementById(`moderationNote-${id}`)?.value.trim() || "";
   if (button) button.disabled = true;
   try {
@@ -4257,21 +4127,13 @@ async function loadAdminModeration() {
 async function loadAdminAds() {
   const requestVersion = ++adminState.requestVersion;
   setAdminActiveTab("ads");
-  setAdminLoading("Загружаем рекламу и заявки на выделение…");
+  setAdminLoading("Загружаем рекламные кампании…");
   try {
-    const [stats, data, highlights] = await Promise.all([
-      apiRequest("/api/admin/stats"),
-      apiRequest("/api/admin/ads"),
-      apiRequest("/api/admin/highlights")
-    ]);
+    const [stats, data] = await Promise.all([apiRequest("/api/admin/stats"), apiRequest("/api/admin/ads")]);
     if (requestVersion !== adminState.requestVersion) return;
     renderAdminStats(stats);
     renderAdminAds(data.ads || []);
-    renderAdminHighlightsSection(highlights.requests || []);
-  } catch (error) {
-    if (requestVersion !== adminState.requestVersion) return;
-    setAdminError(error);
-  }
+  } catch (error) { if (requestVersion !== adminState.requestVersion) return; setAdminError(error); }
 }
 
 async function loadAdminUsers() {
@@ -4332,6 +4194,27 @@ async function loadAdminGrowth() {
     if (requestVersion !== adminState.requestVersion) return;
     console.error("Admin growth error:", error);
     setAdminError(error);
+  }
+}
+
+async function toggleProductPromotion(id, enabled, button) {
+  if (!id || button?.disabled) return;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Сохраняем…";
+  }
+
+  try {
+    await apiRequest(`/api/admin/products/${encodeURIComponent(id)}/promotion`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled, durationDays: 7, color: "violet" })
+    });
+    state.productsLoadedAt = 0;
+    await loadAdminPanel();
+  } catch (error) {
+    console.error("Product promotion error:", error);
+    alert(error.message || "Не удалось изменить выделение объявления");
+    if (button) button.disabled = false;
   }
 }
 

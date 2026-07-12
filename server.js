@@ -17,12 +17,6 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
   .trim()
   .replace(/^@/, "");
-const PRODUCT_LIFETIME_DAYS = Math.max(1, Math.min(365, Number(process.env.PRODUCT_LIFETIME_DAYS) || 15));
-const HIGHLIGHT_PLANS = [
-  { id: "3d", days: 3, price: Math.max(0, Number(process.env.HIGHLIGHT_PRICE_3_DAYS) || 99) },
-  { id: "7d", days: 7, price: Math.max(0, Number(process.env.HIGHLIGHT_PRICE_7_DAYS) || 199) },
-  { id: "15d", days: 15, price: Math.max(0, Number(process.env.HIGHLIGHT_PRICE_15_DAYS) || 349) }
-];
 const DATABASE_SSL = String(process.env.DATABASE_SSL || "true").toLowerCase() !== "false";
 const configuredAuthMaxAge = Number(
   process.env.TELEGRAM_AUTH_MAX_AGE_SECONDS || 86400
@@ -71,8 +65,6 @@ const MODERATION_MATCH_TYPES = new Set(["word", "phrase", "domain"]);
 const AD_PLACEMENTS = new Set(["catalog_top", "catalog_feed", "product_detail"]);
 const AD_STATUSES = new Set(["draft", "active", "paused", "ended"]);
 const AD_BILLING_MODELS = new Set(["flat", "cpm", "cpc"]);
-const HIGHLIGHT_COLORS = new Set(["violet", "gold", "green"]);
-const HIGHLIGHT_REQUEST_STATUSES = new Set(["pending", "approved", "rejected", "expired"]);
 const MAX_STORED_IMAGE_BYTES = 6 * 1024 * 1024;
 
 if (!BOT_TOKEN) {
@@ -174,14 +166,14 @@ function mapProduct(row) {
     autoHidden: Boolean(row.auto_hidden),
     hidden: Boolean(row.hidden),
     status: row.status || "active",
-    publishedAt: row.published_at ? new Date(row.published_at).getTime() : null,
     archivedAt: row.archived_at ? new Date(row.archived_at).getTime() : null,
-    highlightColor: HIGHLIGHT_COLORS.has(row.highlight_color) ? row.highlight_color : "",
-    highlightUntil: row.highlight_until ? new Date(row.highlight_until).getTime() : null,
+    promotedUntil: row.promoted_until ? new Date(row.promoted_until).getTime() : null,
+    highlightColor: ["violet", "gold", "blue", "green"].includes(row.highlight_color) ? row.highlight_color : "violet",
+    promotionPaid: Boolean(row.promotion_paid),
+    isPromoted: Boolean(row.promoted_until && new Date(row.promoted_until).getTime() > Date.now()),
     createdAt: row.created_at ? new Date(row.created_at).getTime() : null,
     updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : null
   };
-  product.isHighlighted = Boolean(product.highlightColor && product.highlightUntil && product.highlightUntil > Date.now());
 
   const currentAmount = Number(product.priceAmount) || 0;
   const previousAmount = Number(product.previousPriceAmount) || 0;
@@ -219,13 +211,13 @@ const PRODUCT_SUMMARY_COLUMNS = `
   p.delivery,
   p.views,
   p.status,
+  p.archived_at,
+  p.promoted_until,
+  p.highlight_color,
+  p.promotion_paid,
   p.hidden,
   p.moderation_status,
   p.moderation_reason,
-  p.published_at,
-  p.archived_at,
-  p.highlight_color,
-  p.highlight_until,
   p.created_at,
   p.updated_at
 `;
@@ -253,16 +245,16 @@ const PRODUCT_PUBLIC_DETAIL_COLUMNS = `
   p.specifications,
   p.views,
   p.status,
+  p.archived_at,
+  p.promoted_until,
+  p.highlight_color,
+  p.promotion_paid,
   p.hidden,
   p.moderation_status,
   p.moderation_reason,
   p.moderation_matches,
   p.moderation_target_status,
   p.auto_hidden,
-  p.published_at,
-  p.archived_at,
-  p.highlight_color,
-  p.highlight_until,
   p.created_at,
   p.updated_at,
   CASE
@@ -299,10 +291,8 @@ function buildOwnProductThumbnailUrl(row) {
   const expiresAt = getPrivateMediaExpiry();
   const ownerId = String(row.owner_id || "");
   const token = createPrivateMediaToken(row.id, ownerId, expiresAt);
-  const version = row.updated_at || row.created_at;
-  const versionValue = version ? new Date(version).getTime() : Date.now();
   return `/api/my-products/${encodeURIComponent(String(row.id || ""))}/thumbnail` +
-    `?owner=${encodeURIComponent(ownerId)}&expires=${expiresAt}&token=${encodeURIComponent(token)}&v=${versionValue}`;
+    `?owner=${encodeURIComponent(ownerId)}&expires=${expiresAt}&token=${encodeURIComponent(token)}`;
 }
 
 function isValidPrivateMediaToken(productId, ownerId, expiresAt, token) {
@@ -350,14 +340,14 @@ function mapProductSummary(row) {
     views: Number(row.views) || 0,
     favoriteCount: Number(row.favorite_count) || 0,
     status: row.status || "active",
+    archivedAt: row.archived_at ? new Date(row.archived_at).getTime() : null,
+    promotedUntil: row.promoted_until ? new Date(row.promoted_until).getTime() : null,
+    highlightColor: ["violet", "gold", "blue", "green"].includes(row.highlight_color) ? row.highlight_color : "violet",
+    promotionPaid: Boolean(row.promotion_paid),
+    isPromoted: Boolean(row.promoted_until && new Date(row.promoted_until).getTime() > Date.now()),
     hidden: Boolean(row.hidden),
     moderationStatus: MODERATION_STATUSES.has(row.moderation_status) ? row.moderation_status : "approved",
     moderationReason: row.moderation_reason || "",
-    publishedAt: row.published_at ? new Date(row.published_at).getTime() : null,
-    archivedAt: row.archived_at ? new Date(row.archived_at).getTime() : null,
-    highlightColor: HIGHLIGHT_COLORS.has(row.highlight_color) ? row.highlight_color : "",
-    highlightUntil: row.highlight_until ? new Date(row.highlight_until).getTime() : null,
-    isHighlighted: Boolean(HIGHLIGHT_COLORS.has(row.highlight_color) && row.highlight_until && new Date(row.highlight_until).getTime() > Date.now()),
     createdAt: row.created_at ? new Date(row.created_at).getTime() : null,
     updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : null,
     isSummary: true
@@ -818,6 +808,30 @@ async function resolveTelegramAvatarUrl(user) {
   return `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
 }
 
+let lastArchiveSweepAt = 0;
+
+async function archiveExpiredProducts(force = false) {
+  const now = Date.now();
+  if (!force && now - lastArchiveSweepAt < 5 * 60 * 1000) return 0;
+  lastArchiveSweepAt = now;
+
+  const result = await pool.query(`
+    UPDATE products
+    SET status = 'archived',
+        archived_at = NOW(),
+        updated_at = NOW()
+    WHERE COALESCE(status, 'active') = 'active'
+      AND COALESCE(updated_at, created_at) < NOW() - INTERVAL '15 days'
+      AND (promoted_until IS NULL OR promoted_until <= NOW())
+    RETURNING id;
+  `);
+
+  if (result.rowCount > 0) {
+    console.log(`Archived expired products: ${result.rowCount}`);
+  }
+  return result.rowCount;
+}
+
 async function initDb() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS products (
@@ -1002,15 +1016,10 @@ async function initDb() {
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS moderation_matches JSONB DEFAULT '[]'::jsonb;`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS auto_hidden BOOLEAN DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS moderation_target_status TEXT DEFAULT 'active';`);
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;`);
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS highlight_color TEXT DEFAULT '';`);
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS highlight_until TIMESTAMPTZ;`);
-  await pool.query(`
-    UPDATE products
-    SET published_at = COALESCE(published_at, created_at)
-    WHERE COALESCE(status, 'active') = 'active' AND published_at IS NULL;
-  `);
+  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS promoted_until TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS highlight_color TEXT DEFAULT 'violet';`);
+  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS promotion_paid BOOLEAN DEFAULT FALSE;`);
 
   await pool.query(`
     UPDATE products
@@ -1168,48 +1177,6 @@ async function initDb() {
   `);
 
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS conversations (
-      id TEXT PRIMARY KEY,
-      product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-      buyer_id TEXT NOT NULL,
-      seller_id TEXT NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW(),
-      UNIQUE (product_id, buyer_id, seller_id)
-    );
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS messages (
-      id TEXT PRIMARY KEY,
-      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-      sender_id TEXT NOT NULL,
-      body TEXT NOT NULL,
-      read_at TIMESTAMPTZ,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS highlight_requests (
-      id TEXT PRIMARY KEY,
-      product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-      owner_id TEXT NOT NULL,
-      color TEXT NOT NULL,
-      plan_id TEXT NOT NULL,
-      duration_days INTEGER NOT NULL,
-      amount NUMERIC(12,2) DEFAULT 0,
-      status TEXT DEFAULT 'pending',
-      admin_note TEXT DEFAULT '',
-      reviewed_by TEXT DEFAULT '',
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW(),
-      activated_at TIMESTAMPTZ,
-      expires_at TIMESTAMPTZ
-    );
-  `);
-
-  await pool.query(`
     CREATE TABLE IF NOT EXISTS reports (
       id TEXT PRIMARY KEY,
       product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
@@ -1283,33 +1250,6 @@ async function initDb() {
   `);
 
   await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_conversations_participants_updated
-    ON conversations (buyer_id, seller_id, updated_at DESC);
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_messages_conversation_created
-    ON messages (conversation_id, created_at ASC);
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_messages_unread
-    ON messages (conversation_id, sender_id, read_at);
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_highlight_requests_status_created
-    ON highlight_requests (status, created_at DESC);
-  `);
-  await pool.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_highlight_requests_one_pending
-    ON highlight_requests (product_id)
-    WHERE status = 'pending';
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_products_highlight_until
-    ON products (highlight_until DESC)
-    WHERE highlight_until IS NOT NULL;
-  `);
-
-  await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_products_public_feed
     ON products (created_at DESC)
     WHERE status = 'active'
@@ -1322,83 +1262,19 @@ async function initDb() {
     ON product_images (product_id, position);
   `);
 
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_products_expiration
+    ON products (status, updated_at)
+    WHERE status = 'active';
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_products_promotion
+    ON products (promoted_until DESC, created_at DESC)
+    WHERE status = 'active';
+  `);
+
   console.log("Database initialized");
-}
-
-let listingMaintenancePromise = null;
-let listingMaintenanceRanAt = 0;
-
-async function runListingMaintenance({ force = false } = {}) {
-  if (!force && Date.now() - listingMaintenanceRanAt < 60_000) return;
-  if (listingMaintenancePromise) return listingMaintenancePromise;
-
-  listingMaintenancePromise = (async () => {
-    await pool.query(
-      `
-        UPDATE products
-        SET status = 'archived', archived_at = NOW(), updated_at = NOW()
-        WHERE COALESCE(status, 'active') = 'active'
-          AND COALESCE(hidden, FALSE) = FALSE
-          AND COALESCE(published_at, created_at) < NOW() - ($1::text || ' days')::interval;
-      `,
-      [String(PRODUCT_LIFETIME_DAYS)]
-    );
-
-    await pool.query(`
-      UPDATE products
-      SET highlight_color = '', highlight_until = NULL, updated_at = NOW()
-      WHERE highlight_until IS NOT NULL AND highlight_until <= NOW();
-    `);
-
-    await pool.query(`
-      UPDATE highlight_requests
-      SET status = 'expired', updated_at = NOW()
-      WHERE status = 'approved' AND expires_at IS NOT NULL AND expires_at <= NOW();
-    `);
-
-    listingMaintenanceRanAt = Date.now();
-  })().finally(() => {
-    listingMaintenancePromise = null;
-  });
-
-  return listingMaintenancePromise;
-}
-
-function mapConversationRow(row, currentUserId) {
-  const isBuyer = String(row.buyer_id) === String(currentUserId);
-  const counterpartId = isBuyer ? row.seller_id : row.buyer_id;
-  const counterpartName = isBuyer
-    ? (row.seller_name || row.seller_username || 'Продавец')
-    : (row.buyer_name || row.buyer_username || 'Покупатель');
-  const counterpartUsername = isBuyer ? row.seller_username : row.buyer_username;
-
-  return {
-    id: row.id,
-    productId: row.product_id,
-    productName: row.product_name || 'Объявление',
-    productImage: row.product_has_image
-      ? buildProductMediaUrl(row.product_id, 'thumbnail', row.product_updated_at || row.product_created_at)
-      : '',
-    productStatus: row.product_status || 'active',
-    counterpartId,
-    counterpartName,
-    counterpartUsername: counterpartUsername || '',
-    lastMessage: row.last_message || '',
-    lastMessageAt: row.last_message_at ? new Date(row.last_message_at).getTime() : null,
-    unreadCount: Number(row.unread_count) || 0,
-    updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : null
-  };
-}
-
-function mapMessageRow(row) {
-  return {
-    id: row.id,
-    conversationId: row.conversation_id,
-    senderId: row.sender_id,
-    body: row.body,
-    readAt: row.read_at ? new Date(row.read_at).getTime() : null,
-    createdAt: row.created_at ? new Date(row.created_at).getTime() : null
-  };
 }
 
 app.get("/api/health", async (req, res) => {
@@ -1424,9 +1300,7 @@ app.get("/api/config", (req, res) => {
   res.json({
     ok: true,
     version: APP_VERSION,
-    supportUsername: SUPPORT_USERNAME,
-    productLifetimeDays: PRODUCT_LIFETIME_DAYS,
-    highlightPlans: HIGHLIGHT_PLANS
+    supportUsername: SUPPORT_USERNAME
   });
 });
 
@@ -1643,11 +1517,11 @@ app.get("/api/users/:id/products", async (req, res) => {
   }
 });
 
-function sendProductMedia(res, source, cacheSeconds = 86_400, cacheScope = "public") {
+function sendProductMedia(res, source, cacheSeconds = 900, cacheScope = "public") {
   const value = String(source || "").trim();
 
   if (/^https:\/\/[^\s"'<>]+$/i.test(value)) {
-    res.setHeader("Cache-Control", `${cacheScope}, max-age=${cacheSeconds}, stale-while-revalidate=604800`);
+    res.setHeader("Cache-Control", `${cacheScope}, max-age=${cacheSeconds}, must-revalidate`);
     return res.redirect(302, value);
   }
 
@@ -1661,7 +1535,7 @@ function sendProductMedia(res, source, cacheSeconds = 86_400, cacheScope = "publ
 
     res.setHeader("Content-Type", `image/${mimeSubtype}`);
     res.setHeader("Content-Length", String(buffer.length));
-    res.setHeader("Cache-Control", `${cacheScope}, max-age=${cacheSeconds}, stale-while-revalidate=604800`);
+    res.setHeader("Cache-Control", `${cacheScope}, max-age=${cacheSeconds}, must-revalidate`);
     res.setHeader("X-Content-Type-Options", "nosniff");
     return res.send(buffer);
   } catch (error) {
@@ -1777,16 +1651,16 @@ app.get("/api/products/:id/media/:index", async (req, res) => {
 
 app.get("/api/products", async (req, res) => {
   try {
-    await runListingMaintenance();
-
     const page = normalizePositiveInteger(req.query.page, 1, 100000);
     const limit = normalizePositiveInteger(req.query.limit, 12, 30);
     const offset = (page - 1) * limit;
-    const search = normalizeText(req.query.q, 100).replace(/\s+/g, " ");
-    const searchTokens = search
+    await archiveExpiredProducts();
+
+    const search = normalizeText(req.query.q, 100).replace(/\s+/g, " ").trim();
+    const searchTerms = search
       .split(" ")
-      .map(token => token.trim())
-      .filter(Boolean)
+      .map(term => term.trim())
+      .filter(term => term.length >= 2)
       .slice(0, 6);
     const requestedCategory = normalizeText(req.query.category, 60);
     const category = PRODUCT_CATEGORIES.has(requestedCategory) ? requestedCategory : "";
@@ -1797,34 +1671,22 @@ app.get("/api/products", async (req, res) => {
       "COALESCE(p.moderation_status, 'approved') = 'approved'"
     ];
     const values = [PUBLIC_PRODUCT_STATUS];
-    const searchableSql = `CONCAT_WS(' ', p.name, p.description, p.category, p.location, p.district, COALESCE(p.specifications::text, ''))`;
 
-    for (const token of searchTokens) {
-      values.push(`%${token}%`);
-      conditions.push(`${searchableSql} ILIKE $${values.length}`);
+    for (const term of searchTerms) {
+      values.push(`%${term}%`);
+      conditions.push(`(
+        p.name ILIKE $${values.length}
+        OR p.description ILIKE $${values.length}
+        OR p.category ILIKE $${values.length}
+        OR p.location ILIKE $${values.length}
+        OR p.district ILIKE $${values.length}
+        OR p.owner_name ILIKE $${values.length}
+      )`);
     }
 
     if (category) {
       values.push(category);
       conditions.push(`p.category = $${values.length}`);
-    }
-
-    let relevanceSql = "0";
-    if (search) {
-      values.push(search);
-      const exactParam = `$${values.length}`;
-      values.push(`${search}%`);
-      const prefixParam = `$${values.length}`;
-      values.push(`%${search}%`);
-      const containsParam = `$${values.length}`;
-      relevanceSql = `CASE
-        WHEN LOWER(p.name) = LOWER(${exactParam}) THEN 5
-        WHEN p.name ILIKE ${prefixParam} THEN 4
-        WHEN p.name ILIKE ${containsParam} THEN 3
-        WHEN p.category ILIKE ${containsParam} THEN 2
-        WHEN p.location ILIKE ${containsParam} OR p.district ILIKE ${containsParam} THEN 1
-        ELSE 0
-      END`;
     }
 
     const whereSql = conditions.join(" AND ");
@@ -1835,9 +1697,9 @@ app.get("/api/products", async (req, res) => {
         FROM products p
         WHERE ${whereSql}
         ORDER BY
-          (p.highlight_until IS NOT NULL AND p.highlight_until > NOW()) DESC,
-          ${relevanceSql} DESC,
-          COALESCE(p.published_at, p.created_at) DESC
+          CASE WHEN p.promoted_until > NOW() THEN 0 ELSE 1 END,
+          p.promoted_until DESC NULLS LAST,
+          p.created_at DESC
         LIMIT $${values.length + 1}
         OFFSET $${values.length + 2};
       `,
@@ -1846,11 +1708,10 @@ app.get("/api/products", async (req, res) => {
 
     const hasMore = result.rows.length > limit;
     const visibleRows = hasMore ? result.rows.slice(0, limit) : result.rows;
-    res.setHeader("Cache-Control", "public, max-age=5, stale-while-revalidate=20");
+    res.setHeader("Cache-Control", "public, max-age=10, stale-while-revalidate=30");
     res.json({
       ok: true,
       products: visibleRows.map(mapProductSummary),
-      query: search,
       pagination: {
         page,
         limit,
@@ -1866,7 +1727,7 @@ app.get("/api/products", async (req, res) => {
 
 app.get("/api/my-products", requireTelegramAuth, syncTelegramUser, async (req, res) => {
   try {
-    await runListingMaintenance();
+    await archiveExpiredProducts();
     const result = await pool.query(
       `
         SELECT ${PRODUCT_SUMMARY_COLUMNS}
@@ -1943,6 +1804,9 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
     const fallbackImage = normalizeProductImage(image);
     if (cleanImages.length === 0 && fallbackImage) cleanImages.push(fallbackImage);
     const cleanThumbnail = normalizeProductImage(thumbnail) || cleanImages[0] || "";
+    if (requestedStatus === "active" && cleanImages.length === 0) {
+      return res.status(400).json({ ok: false, error: "Добавьте хотя бы одно фото объявления" });
+    }
 
     const moderation = await evaluateProductModeration({
       name: cleanName,
@@ -1963,12 +1827,11 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
           category, description, image, images, location, phone, allow_messages,
           condition, negotiable, delivery, district, specifications, views, status,
           hidden, auto_hidden, moderation_status, moderation_reason, moderation_matches,
-          moderation_target_status, published_at
+          moderation_target_status
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13,
-          $14, $15, $16, $17, $18, $19::jsonb, 0, $20, $21, $22, $23, $24, $25::jsonb, $26,
-          CASE WHEN $20 = 'active' THEN NOW() ELSE NULL END
+          $14, $15, $16, $17, $18, $19::jsonb, 0, $20, $21, $22, $23, $24, $25::jsonb, $26
         )
         RETURNING *;
       `,
@@ -2053,7 +1916,6 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     const cleanImages = (Array.isArray(images) ? images : [])
       .map(normalizeProductImage).filter(Boolean).slice(0, 5);
     const fallbackImage = normalizeProductImage(image);
-    if (cleanImages.length === 0 && fallbackImage) cleanImages.push(fallbackImage);
     const requestedThumbnail = normalizeProductImage(thumbnail);
 
     await client.query("BEGIN");
@@ -2067,9 +1929,15 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     }
 
     const existing = existingResult.rows[0];
-    const existingImages = normalizeImages(existing);
-    const firstImageChanged = String(cleanImages[0] || "") !== String(existingImages[0] || "");
-    const cleanThumbnail = requestedThumbnail || (firstImageChanged ? (cleanImages[0] || "") : (existing.thumbnail || cleanImages[0] || ""));
+    const existingImages = normalizeImages(existing).map(normalizeProductImage).filter(Boolean).slice(0, 5);
+    if (cleanImages.length === 0 && fallbackImage) cleanImages.push(fallbackImage);
+    if (cleanImages.length === 0 && existingImages.length > 0) cleanImages.push(...existingImages);
+    if (requestedStatus === "active" && cleanImages.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ ok: false, error: "Добавьте хотя бы одно фото объявления" });
+    }
+    const firstImageChanged = cleanImages[0] && cleanImages[0] !== existingImages[0];
+    const cleanThumbnail = requestedThumbnail || (firstImageChanged ? cleanImages[0] : existing.thumbnail) || cleanImages[0] || "";
     const oldPriceAmount = Number(existing.price_amount) || parsePriceAmount(existing.price);
     const priceChanged = oldPriceAmount > 0 && oldPriceAmount !== cleanPriceAmount;
     const priceDropped = priceChanged && cleanPriceAmount < oldPriceAmount;
@@ -2104,12 +1972,6 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
             END,
             auto_hidden = $24,
             thumbnail = $26,
-            published_at = CASE
-              WHEN $18 = 'active' AND COALESCE(status, '') <> 'active' THEN NOW()
-              WHEN $18 = 'active' THEN COALESCE(published_at, NOW())
-              ELSE published_at
-            END,
-            archived_at = CASE WHEN $18 = 'archived' THEN NOW() ELSE NULL END,
             updated_at = NOW()
         WHERE id = $1 AND owner_id = $2
         RETURNING *;
@@ -2312,7 +2174,6 @@ app.patch("/api/products/:id/status", requireTelegramAuth, syncTelegramUser, asy
       `
         UPDATE products
         SET status = $3,
-            published_at = CASE WHEN $3 = 'active' THEN NOW() ELSE published_at END,
             archived_at = CASE WHEN $3 = 'archived' THEN NOW() ELSE NULL END,
             updated_at = NOW()
         WHERE id = $1
@@ -2385,251 +2246,6 @@ app.delete("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (re
       ok: false,
       error: "Не удалось удалить объявление"
     });
-  }
-});
-
-
-app.get("/api/chats", requireTelegramAuth, syncTelegramUser, async (req, res) => {
-  try {
-    const userId = String(req.telegramUser.id);
-    const result = await pool.query(
-      `
-        SELECT
-          c.*,
-          p.name AS product_name,
-          p.status AS product_status,
-          p.created_at AS product_created_at,
-          p.updated_at AS product_updated_at,
-          CASE
-            WHEN NULLIF(p.thumbnail, '') IS NOT NULL THEN TRUE
-            WHEN NULLIF(p.image, '') IS NOT NULL THEN TRUE
-            WHEN jsonb_typeof(p.images) = 'array' THEN jsonb_array_length(p.images) > 0
-            ELSE FALSE
-          END AS product_has_image,
-          COALESCE(NULLIF(su.first_name || ' ' || su.last_name, ' '), NULLIF(su.username, ''), p.owner_name, 'Продавец') AS seller_name,
-          COALESCE(su.username, p.owner_username, '') AS seller_username,
-          COALESCE(NULLIF(bu.first_name || ' ' || bu.last_name, ' '), NULLIF(bu.username, ''), 'Покупатель') AS buyer_name,
-          COALESCE(bu.username, '') AS buyer_username,
-          lm.body AS last_message,
-          lm.created_at AS last_message_at,
-          (
-            SELECT COUNT(*)::int
-            FROM messages unread
-            WHERE unread.conversation_id = c.id
-              AND unread.sender_id <> $1
-              AND unread.read_at IS NULL
-          ) AS unread_count
-        FROM conversations c
-        JOIN products p ON p.id = c.product_id
-        LEFT JOIN users su ON su.telegram_id = c.seller_id
-        LEFT JOIN users bu ON bu.telegram_id = c.buyer_id
-        LEFT JOIN LATERAL (
-          SELECT body, created_at
-          FROM messages
-          WHERE conversation_id = c.id
-          ORDER BY created_at DESC
-          LIMIT 1
-        ) lm ON TRUE
-        WHERE c.buyer_id = $1 OR c.seller_id = $1
-        ORDER BY COALESCE(lm.created_at, c.updated_at) DESC
-        LIMIT 100;
-      `,
-      [userId]
-    );
-
-    res.json({
-      ok: true,
-      chats: result.rows.map(row => mapConversationRow(row, userId))
-    });
-  } catch (error) {
-    console.error("Get chats error:", error);
-    res.status(500).json({ ok: false, error: "Не удалось загрузить чаты" });
-  }
-});
-
-app.post("/api/chats/start", requireTelegramAuth, syncTelegramUser, async (req, res) => {
-  try {
-    const productId = normalizeText(req.body?.productId, 64);
-    if (!productId) return res.status(400).json({ ok: false, error: "Объявление не указано" });
-
-    const productResult = await pool.query(
-      `
-        SELECT id, owner_id, allow_messages
-        FROM products
-        WHERE id = $1
-          AND COALESCE(status, 'active') = 'active'
-          AND COALESCE(hidden, FALSE) = FALSE
-          AND COALESCE(moderation_status, 'approved') = 'approved'
-        LIMIT 1;
-      `,
-      [productId]
-    );
-
-    if (!productResult.rows.length) {
-      return res.status(404).json({ ok: false, error: "Объявление недоступно" });
-    }
-
-    const product = productResult.rows[0];
-    if (String(product.owner_id) === String(req.telegramUser.id)) {
-      return res.status(400).json({ ok: false, error: "Нельзя открыть чат со своим объявлением" });
-    }
-    if (product.allow_messages === false) {
-      return res.status(403).json({ ok: false, error: "Продавец отключил сообщения" });
-    }
-
-    const result = await pool.query(
-      `
-        INSERT INTO conversations (id, product_id, buyer_id, seller_id)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (product_id, buyer_id, seller_id)
-        DO UPDATE SET updated_at = conversations.updated_at
-        RETURNING id;
-      `,
-      [randomUUID(), productId, req.telegramUser.id, product.owner_id]
-    );
-
-    res.json({ ok: true, chatId: result.rows[0].id });
-  } catch (error) {
-    console.error("Start chat error:", error);
-    res.status(500).json({ ok: false, error: "Не удалось открыть чат" });
-  }
-});
-
-app.get("/api/chats/:id/messages", requireTelegramAuth, syncTelegramUser, async (req, res) => {
-  const client = await pool.connect();
-  try {
-    const chatId = normalizeText(req.params.id, 64);
-    const userId = String(req.telegramUser.id);
-    await client.query("BEGIN");
-
-    const chatResult = await client.query(
-      `
-        SELECT c.*, p.name AS product_name
-        FROM conversations c
-        JOIN products p ON p.id = c.product_id
-        WHERE c.id = $1 AND (c.buyer_id = $2 OR c.seller_id = $2)
-        FOR UPDATE;
-      `,
-      [chatId, userId]
-    );
-
-    if (!chatResult.rows.length) {
-      await client.query("ROLLBACK");
-      return res.status(404).json({ ok: false, error: "Чат не найден" });
-    }
-
-    await client.query(
-      `UPDATE messages SET read_at = NOW() WHERE conversation_id = $1 AND sender_id <> $2 AND read_at IS NULL`,
-      [chatId, userId]
-    );
-
-    const messagesResult = await client.query(
-      `
-        SELECT id, conversation_id, sender_id, body, read_at, created_at
-        FROM messages
-        WHERE conversation_id = $1
-        ORDER BY created_at ASC
-        LIMIT 300;
-      `,
-      [chatId]
-    );
-
-    await client.query("COMMIT");
-    const chat = chatResult.rows[0];
-    res.json({
-      ok: true,
-      chat: {
-        id: chat.id,
-        productId: chat.product_id,
-        productName: chat.product_name,
-        buyerId: chat.buyer_id,
-        sellerId: chat.seller_id
-      },
-      messages: messagesResult.rows.map(mapMessageRow)
-    });
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => {});
-    console.error("Get chat messages error:", error);
-    res.status(500).json({ ok: false, error: "Не удалось загрузить сообщения" });
-  } finally {
-    client.release();
-  }
-});
-
-app.post("/api/chats/:id/messages", requireTelegramAuth, syncTelegramUser, async (req, res) => {
-  const client = await pool.connect();
-  try {
-    const chatId = normalizeText(req.params.id, 64);
-    const body = normalizeText(req.body?.body, 2000);
-    const userId = String(req.telegramUser.id);
-    if (!body) return res.status(400).json({ ok: false, error: "Введите сообщение" });
-
-    await client.query("BEGIN");
-    const chatResult = await client.query(
-      `SELECT id FROM conversations WHERE id = $1 AND (buyer_id = $2 OR seller_id = $2) FOR UPDATE`,
-      [chatId, userId]
-    );
-    if (!chatResult.rows.length) {
-      await client.query("ROLLBACK");
-      return res.status(404).json({ ok: false, error: "Чат не найден" });
-    }
-
-    const messageResult = await client.query(
-      `
-        INSERT INTO messages (id, conversation_id, sender_id, body)
-        VALUES ($1, $2, $3, $4)
-        RETURNING *;
-      `,
-      [randomUUID(), chatId, userId, body]
-    );
-    await client.query(`UPDATE conversations SET updated_at = NOW() WHERE id = $1`, [chatId]);
-    await client.query("COMMIT");
-
-    res.status(201).json({ ok: true, message: mapMessageRow(messageResult.rows[0]) });
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => {});
-    console.error("Send chat message error:", error);
-    res.status(500).json({ ok: false, error: "Не удалось отправить сообщение" });
-  } finally {
-    client.release();
-  }
-});
-
-app.post("/api/products/:id/highlight-request", requireTelegramAuth, syncTelegramUser, async (req, res) => {
-  try {
-    const productId = normalizeText(req.params.id, 64);
-    const color = normalizeText(req.body?.color, 20).toLowerCase();
-    const planId = normalizeText(req.body?.planId, 20).toLowerCase();
-    const plan = HIGHLIGHT_PLANS.find(item => item.id === planId);
-
-    if (!productId || !HIGHLIGHT_COLORS.has(color) || !plan) {
-      return res.status(400).json({ ok: false, error: "Выберите цвет и срок выделения" });
-    }
-
-    const productResult = await pool.query(
-      `SELECT id FROM products WHERE id = $1 AND owner_id = $2 AND COALESCE(status, 'active') = 'active'`,
-      [productId, req.telegramUser.id]
-    );
-    if (!productResult.rows.length) {
-      return res.status(404).json({ ok: false, error: "Активное объявление не найдено" });
-    }
-
-    const result = await pool.query(
-      `
-        INSERT INTO highlight_requests (id, product_id, owner_id, color, plan_id, duration_days, amount)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING *;
-      `,
-      [randomUUID(), productId, req.telegramUser.id, color, plan.id, plan.days, plan.price]
-    );
-
-    res.status(201).json({ ok: true, request: result.rows[0] });
-  } catch (error) {
-    if (error?.code === "23505") {
-      return res.status(409).json({ ok: false, error: "Заявка на это объявление уже ожидает проверки" });
-    }
-    console.error("Create highlight request error:", error);
-    res.status(500).json({ ok: false, error: "Не удалось отправить заявку" });
   }
 });
 
@@ -3052,6 +2668,9 @@ app.get(
         moderation_reason,
         previous_price,
         price_dropped_at,
+        promoted_until,
+        highlight_color,
+        promotion_paid,
         (SELECT COUNT(*)::int FROM reports r WHERE r.product_id = products.id AND r.status = 'pending') AS report_count
       FROM products
       WHERE COALESCE(status, 'active') <> 'deleted'
@@ -3063,6 +2682,47 @@ app.get(
       ok: true,
       products: result.rows
     });
+  })
+);
+
+app.patch(
+  "/api/admin/products/:id/promotion",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const productId = normalizeText(req.params.id, 64);
+    const enabled = normalizeBoolean(req.body?.enabled);
+    const durationDays = Math.max(1, Math.min(30, Number(req.body?.durationDays) || 7));
+    const requestedColor = normalizeText(req.body?.color, 20).toLowerCase();
+    const color = ["violet", "gold", "blue", "green"].includes(requestedColor) ? requestedColor : "violet";
+
+    const result = await pool.query(
+      `
+        UPDATE products
+        SET promoted_until = CASE WHEN $2 THEN NOW() + ($3::text || ' days')::interval ELSE NULL END,
+            highlight_color = $4,
+            promotion_paid = $2,
+            updated_at = NOW()
+        WHERE id = $1
+          AND COALESCE(status, 'active') <> 'deleted'
+        RETURNING id, name, promoted_until, highlight_color, promotion_paid;
+      `,
+      [productId, enabled, durationDays, color]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ ok: false, error: "Объявление не найдено" });
+    }
+
+    await addAdminLog(
+      req.telegramUser.id,
+      enabled ? "promote_product" : "unpromote_product",
+      productId,
+      `${result.rows[0].name}; ${enabled ? `${durationDays} дней, ${color}` : "выделение снято"}`
+    );
+
+    res.json({ ok: true, product: result.rows[0] });
   })
 );
 
@@ -3457,17 +3117,8 @@ app.patch(
         );
       } else {
         await client.query(
-          `
-            UPDATE products
-            SET moderation_status = 'rejected',
-                moderation_reason = COALESCE(NULLIF($2, ''), moderation_reason, 'Объявление отклонено модератором'),
-                hidden = TRUE,
-                auto_hidden = TRUE,
-                status = 'draft',
-                updated_at = NOW()
-            WHERE id = $1
-          `,
-          [event.product_id, adminNote]
+          `UPDATE products SET moderation_status = 'rejected', hidden = TRUE, auto_hidden = TRUE, status = 'deleted', updated_at = NOW() WHERE id = $1`,
+          [event.product_id]
         );
       }
       const updated = await client.query(
@@ -3481,106 +3132,6 @@ app.patch(
       await addAdminLog(req.telegramUser.id, `moderation_${decision}`, event.product_id, adminNote, client);
       await client.query('COMMIT');
       res.json({ ok: true, event: updated.rows[0] });
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-  })
-);
-
-app.get(
-  "/api/admin/highlights",
-  requireTelegramAuth,
-  syncTelegramUser,
-  requireAdmin,
-  adminRoute(async (req, res) => {
-    await runListingMaintenance();
-    const result = await pool.query(`
-      SELECT
-        h.*,
-        p.name AS product_name,
-        p.price AS product_price,
-        p.owner_name,
-        p.owner_username,
-        p.status AS product_status,
-        p.highlight_color,
-        p.highlight_until
-      FROM highlight_requests h
-      JOIN products p ON p.id = h.product_id
-      ORDER BY
-        CASE h.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END,
-        h.created_at DESC
-      LIMIT 200;
-    `);
-    res.json({ ok: true, requests: result.rows });
-  })
-);
-
-app.patch(
-  "/api/admin/highlights/:id",
-  requireTelegramAuth,
-  syncTelegramUser,
-  requireAdmin,
-  adminRoute(async (req, res) => {
-    const requestId = normalizeText(req.params.id, 64);
-    const decision = normalizeText(req.body?.decision, 20).toLowerCase();
-    const adminNote = normalizeText(req.body?.adminNote, 1000);
-    if (!['approve', 'reject'].includes(decision)) {
-      return res.status(400).json({ ok: false, error: "Некорректное решение" });
-    }
-
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      const requestResult = await client.query(
-        `SELECT * FROM highlight_requests WHERE id = $1 AND status = 'pending' FOR UPDATE`,
-        [requestId]
-      );
-      if (!requestResult.rows.length) {
-        await client.query('ROLLBACK');
-        return res.status(404).json({ ok: false, error: "Заявка не найдена или уже обработана" });
-      }
-
-      const request = requestResult.rows[0];
-      if (decision === 'approve') {
-        await client.query(
-          `
-            UPDATE products
-            SET highlight_color = $2,
-                highlight_until = NOW() + ($3 * INTERVAL '1 day'),
-                updated_at = NOW()
-            WHERE id = $1 AND COALESCE(status, 'active') = 'active';
-          `,
-          [request.product_id, request.color, Math.max(1, Number(request.duration_days) || 1)]
-        );
-      }
-
-      const updated = await client.query(
-        `
-          UPDATE highlight_requests
-          SET status = $2,
-              admin_note = $3,
-              reviewed_by = $4,
-              activated_at = CASE WHEN $2 = 'approved' THEN NOW() ELSE activated_at END,
-              expires_at = CASE WHEN $2 = 'approved' THEN NOW() + (duration_days * INTERVAL '1 day') ELSE expires_at END,
-              updated_at = NOW()
-          WHERE id = $1
-          RETURNING *;
-        `,
-        [requestId, decision === 'approve' ? 'approved' : 'rejected', adminNote, req.telegramUser.id]
-      );
-
-      await addAdminLog(
-        req.telegramUser.id,
-        `highlight_${decision}`,
-        request.product_id,
-        `${request.color}; ${request.duration_days} дн.; ${request.amount}`,
-        client
-      );
-      await client.query('COMMIT');
-      res.json({ ok: true, request: updated.rows[0] });
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -4017,16 +3568,14 @@ app.use((error, req, res, next) => {
 
 initDb()
   .then(async () => {
-    await runListingMaintenance({ force: true });
+    await archiveExpiredProducts(true);
+    setInterval(() => {
+      archiveExpiredProducts(true).catch(error => console.error("Archive sweep error:", error));
+    }, 60 * 60 * 1000).unref?.();
+
     app.listen(PORT, () => {
       console.log(`Server started on port ${PORT}`);
     });
-    const maintenanceTimer = setInterval(() => {
-      runListingMaintenance({ force: true }).catch(error => {
-        console.error("Listing maintenance error:", error);
-      });
-    }, 10 * 60 * 1000);
-    maintenanceTimer.unref?.();
   })
   .catch(error => {
     console.error("Database init error:", error);

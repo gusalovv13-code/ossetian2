@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" role="img" aria-labelledby="title desc">
+  <title id="title">Нет фотографии</title>
+  <desc id="desc">Нейтральная заглушка объявления без фотографии</desc>
+  <rect width="800" height="600" fill="#e9ebf2"/>
+  <rect x="250" y="170" width="300" height="220" rx="32" fill="#cbd0dc"/>
+  <path d="M315 170l28-54h114l28 54" fill="#b4bac8"/>
+  <circle cx="400" cy="280" r="74" fill="#e9ebf2"/>
+  <circle cx="400" cy="280" r="48" fill="#b4bac8"/>
+  <circle cx="505" cy="220" r="18" fill="#e9ebf2"/>
+  <text x="400" y="465" text-anchor="middle" font-family="Arial, sans-serif" font-size="42" font-weight="700" fill="#697386">Нет фото</text>
+</svg>
