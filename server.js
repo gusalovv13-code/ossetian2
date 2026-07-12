@@ -11,7 +11,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.12.3";
+const APP_VERSION = "1.12.4";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -1012,6 +1012,23 @@ async function initDb() {
   `);
 
   await pool.query(`
+    ALTER TABLE product_feature_requests
+    ADD COLUMN IF NOT EXISTS reviewed_by TEXT DEFAULT '';
+  `);
+  await pool.query(`
+    ALTER TABLE product_feature_requests
+    ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+  `);
+  await pool.query(`
+    ALTER TABLE product_feature_requests
+    ADD COLUMN IF NOT EXISTS admin_note TEXT DEFAULT '';
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_product_feature_requests_status_created
+    ON product_feature_requests (status, created_at DESC);
+  `);
+
+  await pool.query(`
     ALTER TABLE products
     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
   `);
@@ -1328,7 +1345,7 @@ app.get("/api/version", (req, res) => {
     ok: true,
     version: APP_VERSION,
     catalogOrderFix: true,
-    build: "deploy-proof"
+    build: "ads-highlight-admin-requests"
   });
 });
 
@@ -1795,10 +1812,9 @@ app.get("/api/products", async (req, res) => {
 
     const whereSql = conditions.join(" AND ");
     const orderBySql = [
-      "CASE WHEN p.featured_paid = TRUE AND p.featured_until > NOW() THEN 1 ELSE 0 END DESC",
       ...(relevanceSql ? [`${relevanceSql} DESC`] : []),
-      "p.featured_until DESC NULLS LAST",
-      "p.created_at DESC"
+      "p.created_at DESC",
+      "p.id DESC"
     ].join(",\n          ");
     const queryValues = [...values, limit + 1, offset];
     const result = await pool.query(
@@ -2796,7 +2812,7 @@ app.get(
   syncTelegramUser,
   requireAdmin,
   adminRoute(async (req, res) => {
-    const [users, products, hidden, banned, pendingReports, pendingModeration, activeAds, adRevenue, newUsersToday, newProductsToday] =
+    const [users, products, hidden, banned, pendingReports, pendingModeration, pendingFeatureRequests, activeAds, adRevenue, newUsersToday, newProductsToday] =
       await Promise.all([
         pool.query("SELECT COUNT(*)::int AS count FROM users"),
         pool.query(
@@ -2813,6 +2829,9 @@ app.get(
         ),
         pool.query(
           "SELECT COUNT(*)::int AS count FROM moderation_events WHERE status = 'pending'"
+        ),
+        pool.query(
+          "SELECT COUNT(*)::int AS count FROM product_feature_requests WHERE status = 'pending'"
         ),
         pool.query(
           "SELECT COUNT(*)::int AS count FROM advertising_campaigns WHERE status = 'active' AND (ends_at IS NULL OR ends_at >= NOW())"
@@ -2841,11 +2860,221 @@ app.get(
       banned: banned.rows[0].count,
       pendingReports: pendingReports.rows[0].count,
       pendingModeration: pendingModeration.rows[0].count,
+      pendingFeatureRequests: pendingFeatureRequests.rows[0].count,
       activeAds: activeAds.rows[0].count,
       adRevenue: Number(adRevenue.rows[0].amount) || 0,
       newUsersToday: newUsersToday.rows[0].count,
       newProductsToday: newProductsToday.rows[0].count
     });
+  })
+);
+
+app.get(
+  "/api/admin/feature-requests",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const requestedStatus = normalizeText(req.query.status, 20).toLowerCase();
+    const allowedStatuses = new Set(["pending", "approved", "rejected"]);
+    const status = allowedStatuses.has(requestedStatus) ? requestedStatus : "pending";
+
+    const result = await pool.query(
+      `
+        SELECT
+          pfr.id,
+          pfr.product_id,
+          pfr.owner_id,
+          pfr.color,
+          pfr.days,
+          pfr.price_amount,
+          pfr.status,
+          pfr.created_at,
+          pfr.updated_at,
+          pfr.reviewed_by,
+          pfr.reviewed_at,
+          pfr.admin_note,
+          p.name AS product_name,
+          p.price AS product_price,
+          p.category AS product_category,
+          p.status AS product_status,
+          p.hidden AS product_hidden,
+          p.moderation_status AS product_moderation_status,
+          p.updated_at AS product_updated_at,
+          p.owner_name,
+          p.owner_username,
+          u.username AS user_username,
+          u.first_name AS user_first_name,
+          u.last_name AS user_last_name,
+          u.avatar AS user_avatar
+        FROM product_feature_requests pfr
+        JOIN products p ON p.id = pfr.product_id
+        LEFT JOIN users u ON u.telegram_id = pfr.owner_id
+        WHERE pfr.status = $1
+        ORDER BY pfr.created_at ASC
+        LIMIT 200;
+      `,
+      [status]
+    );
+
+    res.json({
+      ok: true,
+      status,
+      requests: result.rows.map(row => ({
+        id: row.id,
+        productId: row.product_id,
+        productName: row.product_name || "Без названия",
+        productPrice: row.product_price || "0",
+        productCategory: row.product_category || "Без категории",
+        productStatus: row.product_status || "active",
+        productHidden: Boolean(row.product_hidden),
+        productModerationStatus: row.product_moderation_status || "approved",
+        productUpdatedAt: row.product_updated_at,
+        ownerId: row.owner_id,
+        ownerName: [row.user_first_name, row.user_last_name].filter(Boolean).join(" ") || row.owner_name || "Пользователь",
+        ownerUsername: row.user_username || row.owner_username || "",
+        ownerAvatar: row.user_avatar || "",
+        color: FEATURE_COLORS.has(row.color) ? row.color : "gold",
+        days: Math.max(1, Number(row.days) || FEATURE_HIGHLIGHT_DAYS),
+        priceAmount: Number(row.price_amount) || 0,
+        status: row.status,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        reviewedBy: row.reviewed_by || "",
+        reviewedAt: row.reviewed_at,
+        adminNote: row.admin_note || ""
+      }))
+    });
+  })
+);
+
+app.patch(
+  "/api/admin/feature-requests/:id",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const requestId = normalizeText(req.params.id, 64);
+    const decision = normalizeText(req.body?.decision, 20).toLowerCase();
+    const adminNote = normalizeText(req.body?.adminNote, 500);
+
+    if (!requestId || !["approve", "reject"].includes(decision)) {
+      return res.status(400).json({ ok: false, error: "Некорректное решение по заявке" });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const requestResult = await client.query(
+        `
+          SELECT *
+          FROM product_feature_requests
+          WHERE id = $1
+          FOR UPDATE;
+        `,
+        [requestId]
+      );
+
+      if (requestResult.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ ok: false, error: "Заявка не найдена" });
+      }
+
+      const featureRequest = requestResult.rows[0];
+      if (featureRequest.status !== "pending") {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ ok: false, error: "Эта заявка уже обработана" });
+      }
+
+      const productResult = await client.query(
+        `
+          SELECT id, name, status, hidden, moderation_status
+          FROM products
+          WHERE id = $1
+          FOR UPDATE;
+        `,
+        [featureRequest.product_id]
+      );
+
+      if (productResult.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ ok: false, error: "Объявление из заявки не найдено" });
+      }
+
+      const product = productResult.rows[0];
+      if (
+        decision === "approve" &&
+        (product.status !== "active" || product.hidden || (product.moderation_status || "approved") !== "approved")
+      ) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          ok: false,
+          error: "Объявление нельзя выделить: оно скрыто, неактивно или заблокировано"
+        });
+      }
+
+      if (decision === "approve") {
+        const days = Math.max(1, Math.min(90, Number(featureRequest.days) || FEATURE_HIGHLIGHT_DAYS));
+        const color = FEATURE_COLORS.has(featureRequest.color) ? featureRequest.color : "gold";
+        const featuredUntil = new Date(Date.now() + days * 86_400_000);
+
+        await client.query(
+          `
+            UPDATE products
+            SET featured_paid = TRUE,
+                featured_color = $2,
+                featured_until = $3,
+                updated_at = NOW()
+            WHERE id = $1;
+          `,
+          [featureRequest.product_id, color, featuredUntil]
+        );
+
+        await client.query(
+          `
+            UPDATE product_feature_requests
+            SET status = 'approved',
+                approved_by = $2,
+                approved_at = NOW(),
+                reviewed_by = $2,
+                reviewed_at = NOW(),
+                admin_note = $3,
+                updated_at = NOW()
+            WHERE id = $1;
+          `,
+          [requestId, req.telegramUser.id, adminNote]
+        );
+      } else {
+        await client.query(
+          `
+            UPDATE product_feature_requests
+            SET status = 'rejected',
+                reviewed_by = $2,
+                reviewed_at = NOW(),
+                admin_note = $3,
+                updated_at = NOW()
+            WHERE id = $1;
+          `,
+          [requestId, req.telegramUser.id, adminNote]
+        );
+      }
+
+      await addAdminLog(
+        req.telegramUser.id,
+        decision === "approve" ? "approve_feature_request" : "reject_feature_request",
+        featureRequest.product_id,
+        `${product.name}; заявитель ${featureRequest.owner_id}; заявка ${requestId}${adminNote ? `; ${adminNote}` : ""}`,
+        client
+      );
+
+      await client.query("COMMIT");
+      res.json({ ok: true, decision, requestId, productId: featureRequest.product_id });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   })
 );
 
@@ -2881,7 +3110,7 @@ app.get(
         (SELECT COUNT(*)::int FROM product_feature_requests pfr WHERE pfr.product_id = products.id AND pfr.status = 'pending') AS pending_feature_requests
       FROM products
       WHERE COALESCE(status, 'active') <> 'deleted'
-      ORDER BY pending_feature_requests DESC, created_at DESC
+      ORDER BY created_at DESC
       LIMIT 100;
     `);
 
@@ -2957,7 +3186,14 @@ app.patch(
             updated_at = NOW()
         WHERE id = $1
           AND COALESCE(status, 'active') <> 'deleted'
-          AND ($2 = FALSE OR status = 'active')
+          AND (
+            $2 = FALSE
+            OR (
+              status = 'active'
+              AND COALESCE(hidden, FALSE) = FALSE
+              AND COALESCE(moderation_status, 'approved') = 'approved'
+            )
+          )
         RETURNING id, name, featured_paid, featured_color, featured_until;
       `,
       [productId, enabled, color, featuredUntil]
@@ -2965,21 +3201,6 @@ app.patch(
 
     if (result.rows.length === 0) {
       return res.status(404).json({ ok: false, error: "Объявление не найдено" });
-    }
-
-    if (enabled) {
-      await pool.query(
-        `
-          UPDATE product_feature_requests
-          SET status = 'approved',
-              approved_by = $2,
-              approved_at = NOW(),
-              updated_at = NOW()
-          WHERE product_id = $1
-            AND status = 'pending';
-        `,
-        [productId, req.telegramUser.id]
-      );
     }
 
     await addAdminLog(
@@ -3824,7 +4045,7 @@ async function runProductLifecycleMaintenance() {
   }
 }
 
-console.log(`[Ossetian Market] starting version ${APP_VERSION}; catalog ORDER BY fix enabled`);
+console.log(`[Ossetian Market] starting version ${APP_VERSION}; ads, highlighting and feature-request admin flow enabled`);
 
 initDb()
   .then(async () => {

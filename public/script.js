@@ -1165,7 +1165,7 @@ function getProductCard(product, options = {}) {
     ? product.featuredColor
     : "gold";
   const featuredClass = product.isFeatured ? `is-featured featured-${featureColor}` : "";
-  const featuredBadge = product.isFeatured ? '<span class="featured-card-badge">★ Выделено</span>' : "";
+  const featuredBadge = product.isFeatured ? '<span class="featured-card-badge">★ Выделенное</span>' : "";
   const featureRequestBadge = product.featureRequestPending
     ? '<span class="feature-request-badge">Заявка на выделение отправлена</span>'
     : "";
@@ -1210,9 +1210,9 @@ function getProductCard(product, options = {}) {
 
   return `
     <div class="product-card ${options.ownerActions ? "owner-product-card" : ""} ${status !== "active" ? "is-inactive" : ""} ${featuredClass}" onclick="${cardAction}">
+      ${featuredBadge}
       <img src="${image}" alt="${name}" loading="${options.priority ? "eager" : "lazy"}" decoding="async" fetchpriority="${options.priority ? "high" : "low"}" onerror="handleImageError(this)">
       <div class="${options.ownerActions ? "product-card-info" : ""}">
-        ${featuredBadge}
         ${featureRequestBadge}
         ${priceDropMarkup}
         <h4>${name}</h4>
@@ -3459,6 +3459,11 @@ function renderAdminStats(stats) {
       <div><b>${Number(stats.pendingModeration) || 0}</b><small>Автоблокировки</small></div>
       <em>Нужна проверка</em>
     </div>
+    <div class="admin-stat-card admin-stat-highlight">
+      <span>★</span>
+      <div><b>${Number(stats.pendingFeatureRequests) || 0}</b><small>Заявки на выделение</small></div>
+      <em>Ожидают оплаты и решения</em>
+    </div>
     <div class="admin-stat-card">
       <span>📣</span>
       <div><b>${Number(stats.activeAds) || 0}</b><small>Реклама</small></div>
@@ -3470,6 +3475,13 @@ function renderAdminStats(stats) {
       <em>Расчёт по тарифам</em>
     </div>
   `;
+
+  const featureTab = document.querySelector('[data-admin-tab="featureRequests"]');
+  if (featureTab) {
+    const count = Number(stats.pendingFeatureRequests) || 0;
+    featureTab.dataset.count = String(count);
+    featureTab.classList.toggle("has-count", count > 0);
+  }
 }
 
 async function refreshAdminStats() {
@@ -3512,7 +3524,7 @@ function renderAdminProducts(products = []) {
               ${product.moderation_status === "blocked" ? '<span class="admin-badge danger">Автоблокировка</span>' : ""}
               ${product.previous_price ? '<span class="admin-badge price-drop">Цена снижена</span>' : ""}
               ${product.featured_paid && product.featured_until && new Date(product.featured_until).getTime() > Date.now() ? '<span class="admin-badge featured">★ Выделено</span>' : ""}
-              ${Number(product.pending_feature_requests) > 0 ? '<span class="admin-badge warning">★ Заявка на выделение</span>' : ""}
+              ${Number(product.pending_feature_requests) > 0 ? '<span class="admin-badge warning">★ Есть отдельная заявка</span>' : ""}
               ${product.status === "archived" ? '<span class="admin-badge">Архив</span>' : ""}
             </div>
             <p>${escapeHTML(product.owner_name || "Без имени")} · ${escapeHTML(product.category || "Без категории")}</p>
@@ -3537,15 +3549,119 @@ function renderAdminProducts(products = []) {
             >
               ${product.featured_paid && product.featured_until && new Date(product.featured_until).getTime() > Date.now()
                 ? "☆ Снять"
-                : Number(product.pending_feature_requests) > 0
-                  ? `✓ Подтвердить ${Number(state.config.featureHighlightDays) || 7} д.`
-                  : `★ Выделить ${Number(state.config.featureHighlightDays) || 7} д.`}
+                : `★ Выделить вручную`}
             </button>
           </div>
         </article>
       `).join("")}
     </div>
   `;
+}
+
+function getFeatureColorLabel(color) {
+  const labels = { gold: "Золотое", purple: "Фиолетовое", blue: "Синее", green: "Зелёное" };
+  return labels[color] || labels.gold;
+}
+
+function renderAdminFeatureRequests(requests = []) {
+  const root = document.getElementById("adminContent");
+  if (!root) return;
+
+  if (requests.length === 0) {
+    root.innerHTML = `
+      <div class="admin-state">
+        <span>★</span>
+        <b>Новых заявок нет</b>
+        <small>Когда пользователь запросит платное выделение, заявка появится здесь вместе с его Telegram ID и объявлением.</small>
+      </div>
+    `;
+    return;
+  }
+
+  root.innerHTML = `
+    <div class="admin-section-heading">
+      <div><b>Заявки на выделение</b><small>${requests.length} ожидают решения</small></div>
+    </div>
+    <div class="admin-feature-request-list">
+      ${requests.map(request => {
+        const username = request.ownerUsername ? `@${request.ownerUsername}` : "username не указан";
+        const updatedVersion = Math.max(1, new Date(request.productUpdatedAt || request.updatedAt || Date.now()).getTime() || Date.now());
+        const thumbnail = safeImageUrl(`/api/products/${encodeURIComponent(request.productId)}/thumbnail?v=${updatedVersion}`);
+        const canApprove = request.productStatus === "active" && !request.productHidden && request.productModerationStatus === "approved";
+        const avatar = request.ownerAvatar ? safeImageUrl(request.ownerAvatar) : "";
+        const price = Number(request.priceAmount) > 0
+          ? `${Number(request.priceAmount).toLocaleString("ru-RU")} ₽`
+          : "По договорённости";
+
+        return `
+          <article class="admin-feature-request-card">
+            <button type="button" class="admin-feature-product" onclick="openProduct('${escapeHTML(request.productId)}')" aria-label="Открыть объявление">
+              <img src="${escapeHTML(thumbnail)}" alt="${escapeHTML(request.productName)}" onerror="handleImageError(this)">
+              <span>
+                <b>${escapeHTML(request.productName)}</b>
+                <small>${escapeHTML(request.productPrice)} · ${escapeHTML(request.productCategory)}</small>
+                <code>ID объявления: ${escapeHTML(request.productId)}</code>
+              </span>
+            </button>
+
+            <div class="admin-feature-requester">
+              ${avatar
+                ? `<img class="admin-feature-requester-avatar" src="${escapeHTML(avatar)}" alt="" onerror="this.hidden=true; this.nextElementSibling.hidden=false">`
+                : ""}
+              <span class="admin-user-avatar" ${avatar ? "hidden" : ""}>${escapeHTML((request.ownerName?.[0] || "?").toUpperCase())}</span>
+              <div>
+                <b>${escapeHTML(request.ownerName || "Пользователь")}</b>
+                <small>${escapeHTML(username)}</small>
+                <code>Telegram ID: ${escapeHTML(request.ownerId)}</code>
+              </div>
+            </div>
+
+            <div class="admin-feature-request-meta">
+              <span><b>${escapeHTML(getFeatureColorLabel(request.color))}</b> выделение</span>
+              <span><b>${Number(request.days) || 7} дней</b></span>
+              <span><b>${escapeHTML(price)}</b></span>
+              <span>Отправлено ${escapeHTML(formatAdminDate(request.createdAt))}</span>
+            </div>
+
+            ${canApprove ? "" : '<div class="admin-feature-request-warning">Сейчас объявление скрыто, неактивно или заблокировано. Подтвердить выделение нельзя.</div>'}
+
+            <label class="admin-feature-note">
+              <span>Комментарий администратора</span>
+              <input id="featureRequestNote-${escapeHTML(request.id)}" maxlength="500" placeholder="Например: оплата подтверждена">
+            </label>
+
+            <div class="admin-feature-actions">
+              <button type="button" class="admin-action-button danger" onclick="reviewAdminFeatureRequest('${escapeHTML(request.id)}','reject',this)">Отклонить</button>
+              <button type="button" class="admin-action-button restore" onclick="reviewAdminFeatureRequest('${escapeHTML(request.id)}','approve',this)" ${canApprove ? "" : "disabled"}>Подтвердить и включить</button>
+            </div>
+          </article>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+async function reviewAdminFeatureRequest(id, decision, button) {
+  if (!id || !["approve", "reject"].includes(decision) || button?.disabled) return;
+  if (decision === "reject" && !window.confirm("Отклонить эту заявку на выделение?")) return;
+
+  const note = document.getElementById(`featureRequestNote-${id}`)?.value.trim() || "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = decision === "approve" ? "Включаем…" : "Отклоняем…";
+  }
+
+  try {
+    await apiRequest(`/api/admin/feature-requests/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ decision, adminNote: note })
+    });
+    await loadAdminFeatureRequests();
+  } catch (error) {
+    console.error("Feature request review error:", error);
+    alert(error.message || "Не удалось обработать заявку");
+    if (button) button.disabled = false;
+  }
 }
 
 function renderAdminUsers(users = []) {
@@ -3618,8 +3734,10 @@ function getAdminActionLabel(action) {
     ad_create: "Создал рекламную кампанию",
     ad_update: "Обновил рекламную кампанию",
     ad_delete: "Удалил рекламную кампанию",
-    feature_product: "Подтвердил платное выделение",
-    unfeature_product: "Снял платное выделение"
+    feature_product: "Включил выделение вручную",
+    unfeature_product: "Снял платное выделение",
+    approve_feature_request: "Подтвердил заявку на выделение",
+    reject_feature_request: "Отклонил заявку на выделение"
   };
 
   return labels[action] || action || "Неизвестное действие";
@@ -4214,6 +4332,26 @@ async function loadAdminPanel() {
   }
 }
 
+async function loadAdminFeatureRequests() {
+  const requestVersion = ++adminState.requestVersion;
+  setAdminActiveTab("featureRequests");
+  setAdminLoading("Загружаем заявки на выделение…");
+
+  try {
+    const [stats, data] = await Promise.all([
+      apiRequest("/api/admin/stats"),
+      apiRequest("/api/admin/feature-requests?status=pending")
+    ]);
+    if (requestVersion !== adminState.requestVersion) return;
+    renderAdminStats(stats);
+    renderAdminFeatureRequests(data.requests || []);
+  } catch (error) {
+    if (requestVersion !== adminState.requestVersion) return;
+    console.error("Admin feature requests error:", error);
+    setAdminError(error);
+  }
+}
+
 async function loadAdminReports() {
   const requestVersion = ++adminState.requestVersion;
   setAdminActiveTab("reports");
@@ -4500,6 +4638,7 @@ function reloadCurrentAdminTab() {
 
   const loaders = {
     products: loadAdminPanel,
+    featureRequests: loadAdminFeatureRequests,
     reports: loadAdminReports,
     moderation: loadAdminModeration,
     ads: loadAdminAds,
