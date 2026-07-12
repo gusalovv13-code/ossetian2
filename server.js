@@ -11,7 +11,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.12.2";
+const APP_VERSION = "1.12.3";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -99,6 +99,10 @@ const requireTelegramAuth = createTelegramAuthMiddleware({
 });
 
 app.disable("x-powered-by");
+app.use((req, res, next) => {
+  res.setHeader("X-Ossetian-Market-Version", APP_VERSION);
+  next();
+});
 app.use(compression({ threshold: 1024 }));
 app.use(express.json({ limit: "30mb" }));
 app.use(express.static(publicDir, {
@@ -1317,6 +1321,16 @@ async function initDb() {
 
   console.log("Database initialized");
 }
+
+app.get("/api/version", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({
+    ok: true,
+    version: APP_VERSION,
+    catalogOrderFix: true,
+    build: "deploy-proof"
+  });
+});
 
 app.get("/api/health", async (req, res) => {
   try {
@@ -3809,6 +3823,8 @@ async function runProductLifecycleMaintenance() {
     console.error("Product lifecycle maintenance error:", error);
   }
 }
+
+console.log(`[Ossetian Market] starting version ${APP_VERSION}; catalog ORDER BY fix enabled`);
 
 initDb()
   .then(async () => {
