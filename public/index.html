@@ -31,6 +31,8 @@
       <h1>Добро пожаловать!</h1>
       <p class="muted">Что вы хотите сделать?</p>
 
+      <div id="homeTopAds" class="catalog-top-ads home-top-ads" hidden></div>
+
       <div class="menu">
         <button onclick="showPage('catalog')" class="menu-card purple" type="button">
           <span>🔍</span>
@@ -65,8 +67,6 @@
           </div>
         </button>
       </div>
-
-      <div id="homeTopAds" class="catalog-top-ads home-top-ads" hidden></div>
     </section>
 
    <section id="catalog" class="page">
@@ -80,6 +80,7 @@
       autocomplete="off"
     />
   </form>
+  <div id="searchStatus" class="search-status" aria-live="polite"></div>
 
   <div id="catalogTopAds" class="catalog-top-ads" hidden></div>
 
@@ -530,16 +531,16 @@
   <div id="photoLightbox" class="photo-lightbox" hidden role="dialog" aria-modal="true" aria-label="Просмотр фотографии">
     <button class="lightbox-close" type="button" onclick="closePhotoLightbox()" aria-label="Закрыть">×</button>
     <button class="lightbox-arrow lightbox-prev" type="button" onclick="changeProductImage(-1)" aria-label="Предыдущее фото">‹</button>
-    <div class="lightbox-image-stage" id="lightboxImageStage">
-      <img id="lightboxImage" src="" alt="Увеличенное фото товара" />
+    <div id="lightboxViewport" class="lightbox-viewport">
+      <img id="lightboxImage" src="" alt="Увеличенное фото товара" draggable="false" />
     </div>
     <button class="lightbox-arrow lightbox-next" type="button" onclick="changeProductImage(1)" aria-label="Следующее фото">›</button>
-    <div class="lightbox-zoom-controls" aria-label="Масштаб фотографии">
-      <button type="button" onclick="zoomPhoto(-0.5)" aria-label="Уменьшить">−</button>
-      <button type="button" onclick="resetPhotoZoom()" aria-label="Сбросить масштаб">100%</button>
-      <button type="button" onclick="zoomPhoto(0.5)" aria-label="Увеличить">＋</button>
-    </div>
     <span id="lightboxCounter" class="lightbox-counter">1 / 1</span>
+    <div class="lightbox-zoom-controls" aria-label="Масштаб фотографии">
+      <button type="button" onclick="changeLightboxZoom(-0.5)" aria-label="Уменьшить">−</button>
+      <button id="lightboxZoomReset" type="button" onclick="resetLightboxZoom()" aria-label="Сбросить масштаб">100%</button>
+      <button type="button" onclick="changeLightboxZoom(0.5)" aria-label="Увеличить">＋</button>
+    </div>
   </div>
 
   <dialog id="reportDialog" class="report-dialog">

@@ -66,6 +66,11 @@ const AD_PLACEMENTS = new Set(["catalog_top", "catalog_feed", "product_detail"])
 const AD_STATUSES = new Set(["draft", "active", "paused", "ended"]);
 const AD_BILLING_MODELS = new Set(["flat", "cpm", "cpc"]);
 const MAX_STORED_IMAGE_BYTES = 6 * 1024 * 1024;
+const PRODUCT_ARCHIVE_DAYS = Math.max(1, Math.min(365, Number(process.env.PRODUCT_ARCHIVE_DAYS) || 15));
+const DELETED_PRODUCT_RETENTION_DAYS = Math.max(1, Math.min(3650, Number(process.env.DELETED_PRODUCT_RETENTION_DAYS) || 30));
+const FEATURE_HIGHLIGHT_PRICE_RUB = Math.max(0, Number(process.env.FEATURE_HIGHLIGHT_PRICE_RUB) || 199);
+const FEATURE_HIGHLIGHT_DAYS = Math.max(1, Math.min(90, Number(process.env.FEATURE_HIGHLIGHT_DAYS) || 7));
+const FEATURE_COLORS = new Set(["gold", "purple", "blue", "green"]);
 
 if (!BOT_TOKEN) {
   console.error("Ошибка: BOT_TOKEN не найден в переменных окружения");
@@ -167,13 +172,15 @@ function mapProduct(row) {
     hidden: Boolean(row.hidden),
     status: row.status || "active",
     archivedAt: row.archived_at ? new Date(row.archived_at).getTime() : null,
-    promotedUntil: row.promoted_until ? new Date(row.promoted_until).getTime() : null,
-    highlightColor: ["violet", "gold", "blue", "green"].includes(row.highlight_color) ? row.highlight_color : "violet",
-    promotionPaid: Boolean(row.promotion_paid),
-    isPromoted: Boolean(row.promoted_until && new Date(row.promoted_until).getTime() > Date.now()),
+    expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : null,
+    featuredUntil: row.featured_until ? new Date(row.featured_until).getTime() : null,
+    featuredColor: FEATURE_COLORS.has(row.featured_color) ? row.featured_color : "gold",
+    featuredPaid: Boolean(row.featured_paid),
+    featureRequestPending: Number(row.pending_feature_requests) > 0,
     createdAt: row.created_at ? new Date(row.created_at).getTime() : null,
     updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : null
   };
+  product.isFeatured = Boolean(product.featuredPaid && product.featuredUntil && product.featuredUntil > Date.now());
 
   const currentAmount = Number(product.priceAmount) || 0;
   const previousAmount = Number(product.previousPriceAmount) || 0;
@@ -199,6 +206,7 @@ const PRODUCT_SUMMARY_COLUMNS = `
   p.category,
   LEFT(p.description, 240) AS description,
   CASE
+    WHEN EXISTS (SELECT 1 FROM product_images pi WHERE pi.product_id = p.id) THEN TRUE
     WHEN NULLIF(p.thumbnail, '') IS NOT NULL THEN TRUE
     WHEN NULLIF(p.image, '') IS NOT NULL THEN TRUE
     WHEN jsonb_typeof(p.images) = 'array' THEN jsonb_array_length(p.images) > 0
@@ -211,13 +219,14 @@ const PRODUCT_SUMMARY_COLUMNS = `
   p.delivery,
   p.views,
   p.status,
-  p.archived_at,
-  p.promoted_until,
-  p.highlight_color,
-  p.promotion_paid,
   p.hidden,
   p.moderation_status,
   p.moderation_reason,
+  p.archived_at,
+  p.expires_at,
+  p.featured_until,
+  p.featured_color,
+  p.featured_paid,
   p.created_at,
   p.updated_at
 `;
@@ -245,28 +254,27 @@ const PRODUCT_PUBLIC_DETAIL_COLUMNS = `
   p.specifications,
   p.views,
   p.status,
-  p.archived_at,
-  p.promoted_until,
-  p.highlight_color,
-  p.promotion_paid,
   p.hidden,
   p.moderation_status,
   p.moderation_reason,
   p.moderation_matches,
   p.moderation_target_status,
   p.auto_hidden,
+  p.archived_at,
+  p.expires_at,
+  p.featured_until,
+  p.featured_color,
+  p.featured_paid,
   p.created_at,
   p.updated_at,
-  CASE
-    WHEN jsonb_typeof(p.images) = 'array' THEN
-      CASE
-        WHEN jsonb_array_length(p.images) > 0 THEN jsonb_array_length(p.images)
-        WHEN NULLIF(p.image, '') IS NOT NULL THEN 1
-        ELSE 0
-      END
-    WHEN NULLIF(p.image, '') IS NOT NULL THEN 1
-    ELSE 0
-  END AS image_count
+  GREATEST(
+    (SELECT COUNT(*)::int FROM product_images pi WHERE pi.product_id = p.id),
+    CASE
+      WHEN jsonb_typeof(p.images) = 'array' THEN jsonb_array_length(p.images)
+      ELSE 0
+    END,
+    CASE WHEN NULLIF(p.image, '') IS NOT NULL THEN 1 ELSE 0 END
+  ) AS image_count
 `;
 
 function buildProductMediaUrl(productId, kind, version = "") {
@@ -280,9 +288,9 @@ function getPrivateMediaExpiry() {
   return Math.ceil((Date.now() + twoHours) / 3_600_000) * 3_600_000;
 }
 
-function createPrivateMediaToken(productId, ownerId, expiresAt) {
+function createPrivateMediaToken(productId, ownerId, expiresAt, version = "") {
   return createHmac("sha256", BOT_TOKEN)
-    .update(`${productId}:${ownerId}:${expiresAt}`)
+    .update(`${productId}:${ownerId}:${expiresAt}:${version}`)
     .digest("base64url");
 }
 
@@ -290,16 +298,17 @@ function buildOwnProductThumbnailUrl(row) {
   if (!row.has_image) return "";
   const expiresAt = getPrivateMediaExpiry();
   const ownerId = String(row.owner_id || "");
-  const token = createPrivateMediaToken(row.id, ownerId, expiresAt);
+  const version = String(new Date(row.updated_at || row.created_at || Date.now()).getTime());
+  const token = createPrivateMediaToken(row.id, ownerId, expiresAt, version);
   return `/api/my-products/${encodeURIComponent(String(row.id || ""))}/thumbnail` +
-    `?owner=${encodeURIComponent(ownerId)}&expires=${expiresAt}&token=${encodeURIComponent(token)}`;
+    `?owner=${encodeURIComponent(ownerId)}&expires=${expiresAt}&v=${encodeURIComponent(version)}&token=${encodeURIComponent(token)}`;
 }
 
-function isValidPrivateMediaToken(productId, ownerId, expiresAt, token) {
+function isValidPrivateMediaToken(productId, ownerId, expiresAt, version, token) {
   if (!productId || !ownerId || !Number.isFinite(expiresAt) || expiresAt < Date.now()) return false;
   if (expiresAt > Date.now() + 3 * 60 * 60 * 1000) return false;
 
-  const expected = createPrivateMediaToken(productId, ownerId, expiresAt);
+  const expected = createPrivateMediaToken(productId, ownerId, expiresAt, version);
   const actualBuffer = Buffer.from(String(token || ""));
   const expectedBuffer = Buffer.from(expected);
   return actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer);
@@ -340,14 +349,16 @@ function mapProductSummary(row) {
     views: Number(row.views) || 0,
     favoriteCount: Number(row.favorite_count) || 0,
     status: row.status || "active",
-    archivedAt: row.archived_at ? new Date(row.archived_at).getTime() : null,
-    promotedUntil: row.promoted_until ? new Date(row.promoted_until).getTime() : null,
-    highlightColor: ["violet", "gold", "blue", "green"].includes(row.highlight_color) ? row.highlight_color : "violet",
-    promotionPaid: Boolean(row.promotion_paid),
-    isPromoted: Boolean(row.promoted_until && new Date(row.promoted_until).getTime() > Date.now()),
     hidden: Boolean(row.hidden),
     moderationStatus: MODERATION_STATUSES.has(row.moderation_status) ? row.moderation_status : "approved",
     moderationReason: row.moderation_reason || "",
+    archivedAt: row.archived_at ? new Date(row.archived_at).getTime() : null,
+    expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : null,
+    featuredUntil: row.featured_until ? new Date(row.featured_until).getTime() : null,
+    featuredColor: FEATURE_COLORS.has(row.featured_color) ? row.featured_color : "gold",
+    featuredPaid: Boolean(row.featured_paid),
+    featureRequestPending: Number(row.pending_feature_requests) > 0,
+    isFeatured: Boolean(row.featured_paid && row.featured_until && new Date(row.featured_until).getTime() > Date.now()),
     createdAt: row.created_at ? new Date(row.created_at).getTime() : null,
     updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : null,
     isSummary: true
@@ -808,30 +819,6 @@ async function resolveTelegramAvatarUrl(user) {
   return `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
 }
 
-let lastArchiveSweepAt = 0;
-
-async function archiveExpiredProducts(force = false) {
-  const now = Date.now();
-  if (!force && now - lastArchiveSweepAt < 5 * 60 * 1000) return 0;
-  lastArchiveSweepAt = now;
-
-  const result = await pool.query(`
-    UPDATE products
-    SET status = 'archived',
-        archived_at = NOW(),
-        updated_at = NOW()
-    WHERE COALESCE(status, 'active') = 'active'
-      AND COALESCE(updated_at, created_at) < NOW() - INTERVAL '15 days'
-      AND (promoted_until IS NULL OR promoted_until <= NOW())
-    RETURNING id;
-  `);
-
-  if (result.rowCount > 0) {
-    console.log(`Archived expired products: ${result.rowCount}`);
-  }
-  return result.rowCount;
-}
-
 async function initDb() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS products (
@@ -973,6 +960,27 @@ async function initDb() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS product_feature_requests (
+      id TEXT PRIMARY KEY,
+      product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL,
+      color TEXT DEFAULT 'gold',
+      days INTEGER DEFAULT 7,
+      price_amount NUMERIC(12,2) DEFAULT 0,
+      status TEXT DEFAULT 'pending',
+      approved_by TEXT DEFAULT '',
+      approved_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_product_feature_requests_pending
+    ON product_feature_requests (product_id, owner_id)
+    WHERE status = 'pending';
+  `);
+
+  await pool.query(`
     ALTER TABLE products
     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
   `);
@@ -1017,9 +1025,17 @@ async function initDb() {
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS auto_hidden BOOLEAN DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS moderation_target_status TEXT DEFAULT 'active';`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;`);
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS promoted_until TIMESTAMPTZ;`);
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS highlight_color TEXT DEFAULT 'violet';`);
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS promotion_paid BOOLEAN DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_until TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_color TEXT DEFAULT 'gold';`);
+  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_paid BOOLEAN DEFAULT FALSE;`);
+  await pool.query(`
+    UPDATE products
+    SET published_at = COALESCE(published_at, created_at, NOW()),
+        expires_at = COALESCE(expires_at, COALESCE(published_at, created_at, NOW()) + ($1::int * INTERVAL '1 day'))
+    WHERE COALESCE(status, 'active') = 'active';
+  `, [PRODUCT_ARCHIVE_DAYS]);
 
   await pool.query(`
     UPDATE products
@@ -1261,17 +1277,15 @@ async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_product_images_product_position
     ON product_images (product_id, position);
   `);
-
   await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_products_expiration
-    ON products (status, updated_at)
+    CREATE INDEX IF NOT EXISTS idx_products_expiry
+    ON products (expires_at)
     WHERE status = 'active';
   `);
-
   await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_products_promotion
-    ON products (promoted_until DESC, created_at DESC)
-    WHERE status = 'active';
+    CREATE INDEX IF NOT EXISTS idx_products_featured
+    ON products (featured_until DESC)
+    WHERE featured_paid = TRUE;
   `);
 
   console.log("Database initialized");
@@ -1300,7 +1314,10 @@ app.get("/api/config", (req, res) => {
   res.json({
     ok: true,
     version: APP_VERSION,
-    supportUsername: SUPPORT_USERNAME
+    supportUsername: SUPPORT_USERNAME,
+    productArchiveDays: PRODUCT_ARCHIVE_DAYS,
+    featureHighlightPriceRub: FEATURE_HIGHLIGHT_PRICE_RUB,
+    featureHighlightDays: FEATURE_HIGHLIGHT_DAYS
   });
 });
 
@@ -1517,11 +1534,11 @@ app.get("/api/users/:id/products", async (req, res) => {
   }
 });
 
-function sendProductMedia(res, source, cacheSeconds = 900, cacheScope = "public") {
+function sendProductMedia(res, source, cacheSeconds = 86_400, cacheScope = "public") {
   const value = String(source || "").trim();
 
   if (/^https:\/\/[^\s"'<>]+$/i.test(value)) {
-    res.setHeader("Cache-Control", `${cacheScope}, max-age=${cacheSeconds}, must-revalidate`);
+    res.setHeader("Cache-Control", `${cacheScope}, max-age=${cacheSeconds}, stale-while-revalidate=604800`);
     return res.redirect(302, value);
   }
 
@@ -1535,7 +1552,7 @@ function sendProductMedia(res, source, cacheSeconds = 900, cacheScope = "public"
 
     res.setHeader("Content-Type", `image/${mimeSubtype}`);
     res.setHeader("Content-Length", String(buffer.length));
-    res.setHeader("Cache-Control", `${cacheScope}, max-age=${cacheSeconds}, must-revalidate`);
+    res.setHeader("Cache-Control", `${cacheScope}, max-age=${cacheSeconds}, stale-while-revalidate=604800`);
     res.setHeader("X-Content-Type-Options", "nosniff");
     return res.send(buffer);
   } catch (error) {
@@ -1549,25 +1566,28 @@ app.get("/api/my-products/:id/thumbnail", async (req, res) => {
     const productId = normalizeText(req.params.id, 64);
     const ownerId = normalizeText(req.query.owner, 64);
     const expiresAt = Number(req.query.expires);
+    const version = normalizeText(req.query.v, 32);
     const token = String(req.query.token || "");
 
-    if (!isValidPrivateMediaToken(productId, ownerId, expiresAt, token)) {
+    if (!isValidPrivateMediaToken(productId, ownerId, expiresAt, version, token)) {
       return res.status(403).end();
     }
 
     const result = await pool.query(
       `
         SELECT COALESCE(
-          NULLIF(thumbnail, ''),
-          NULLIF(image, ''),
+          (SELECT NULLIF(pi.preview_url, '') FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.position ASC LIMIT 1),
+          NULLIF(p.thumbnail, ''),
+          (SELECT NULLIF(pi.url, '') FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.position ASC LIMIT 1),
+          NULLIF(p.image, ''),
           CASE
-            WHEN jsonb_typeof(images) = 'array' THEN images ->> 0
+            WHEN jsonb_typeof(p.images) = 'array' THEN p.images ->> 0
             ELSE NULL
           END
         ) AS source
-        FROM products
-        WHERE id = $1
-          AND owner_id = $2
+        FROM products p
+        WHERE p.id = $1
+          AND p.owner_id = $2
           AND COALESCE(status, 'active') <> 'deleted'
         LIMIT 1;
       `,
@@ -1590,15 +1610,17 @@ app.get("/api/products/:id/thumbnail", async (req, res) => {
     const result = await pool.query(
       `
         SELECT COALESCE(
-          NULLIF(thumbnail, ''),
-          NULLIF(image, ''),
+          (SELECT NULLIF(pi.preview_url, '') FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.position ASC LIMIT 1),
+          NULLIF(p.thumbnail, ''),
+          (SELECT NULLIF(pi.url, '') FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.position ASC LIMIT 1),
+          NULLIF(p.image, ''),
           CASE
-            WHEN jsonb_typeof(images) = 'array' THEN images ->> 0
+            WHEN jsonb_typeof(p.images) = 'array' THEN p.images ->> 0
             ELSE NULL
           END
         ) AS source
-        FROM products
-        WHERE id = $1
+        FROM products p
+        WHERE p.id = $1
           AND COALESCE(status, 'active') = 'active'
           AND COALESCE(hidden, FALSE) = FALSE
           AND COALESCE(moderation_status, 'approved') = 'approved'
@@ -1625,14 +1647,21 @@ app.get("/api/products/:id/media/:index", async (req, res) => {
 
     const result = await pool.query(
       `
-        SELECT CASE
-          WHEN jsonb_typeof(images) = 'array' THEN
-            COALESCE(images ->> $2, CASE WHEN $2 = 0 THEN NULLIF(image, '') END)
-          WHEN $2 = 0 THEN NULLIF(image, '')
-          ELSE NULL
-        END AS source
-        FROM products
-        WHERE id = $1
+        SELECT COALESCE(
+          (SELECT NULLIF(pi.url, '')
+           FROM product_images pi
+           WHERE pi.product_id = p.id
+           ORDER BY pi.position ASC, pi.created_at ASC
+           OFFSET $2 LIMIT 1),
+          CASE
+            WHEN jsonb_typeof(p.images) = 'array' THEN
+              COALESCE(p.images ->> $2, CASE WHEN $2 = 0 THEN NULLIF(p.image, '') END)
+            WHEN $2 = 0 THEN NULLIF(p.image, '')
+            ELSE NULL
+          END
+        ) AS source
+        FROM products p
+        WHERE p.id = $1
           AND COALESCE(status, 'active') = 'active'
           AND COALESCE(hidden, FALSE) = FALSE
           AND COALESCE(moderation_status, 'approved') = 'approved'
@@ -1654,14 +1683,7 @@ app.get("/api/products", async (req, res) => {
     const page = normalizePositiveInteger(req.query.page, 1, 100000);
     const limit = normalizePositiveInteger(req.query.limit, 12, 30);
     const offset = (page - 1) * limit;
-    await archiveExpiredProducts();
-
-    const search = normalizeText(req.query.q, 100).replace(/\s+/g, " ").trim();
-    const searchTerms = search
-      .split(" ")
-      .map(term => term.trim())
-      .filter(term => term.length >= 2)
-      .slice(0, 6);
+    const search = normalizeText(req.query.q, 100);
     const requestedCategory = normalizeText(req.query.category, 60);
     const category = PRODUCT_CATEGORIES.has(requestedCategory) ? requestedCategory : "";
 
@@ -1672,16 +1694,36 @@ app.get("/api/products", async (req, res) => {
     ];
     const values = [PUBLIC_PRODUCT_STATUS];
 
+    const searchTerms = search
+      ? [...new Set(search.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean))].slice(0, 6)
+      : [];
+
     for (const term of searchTerms) {
       values.push(`%${term}%`);
+      const parameter = `$${values.length}`;
       conditions.push(`(
-        p.name ILIKE $${values.length}
-        OR p.description ILIKE $${values.length}
-        OR p.category ILIKE $${values.length}
-        OR p.location ILIKE $${values.length}
-        OR p.district ILIKE $${values.length}
-        OR p.owner_name ILIKE $${values.length}
+        LOWER(COALESCE(p.name, '')) LIKE ${parameter}
+        OR LOWER(COALESCE(p.description, '')) LIKE ${parameter}
+        OR LOWER(COALESCE(p.category, '')) LIKE ${parameter}
+        OR LOWER(COALESCE(p.location, '')) LIKE ${parameter}
+        OR LOWER(COALESCE(p.district, '')) LIKE ${parameter}
+        OR LOWER(COALESCE(p.owner_name, '')) LIKE ${parameter}
+        OR LOWER(COALESCE(p.price, '')) LIKE ${parameter}
+        OR LOWER(COALESCE(p.specifications::text, '')) LIKE ${parameter}
       )`);
+    }
+
+    let relevanceSql = "0";
+    if (search) {
+      values.push(search.toLowerCase());
+      const fullSearchParameter = `$${values.length}`;
+      relevanceSql = `CASE
+        WHEN LOWER(COALESCE(p.name, '')) = ${fullSearchParameter} THEN 4
+        WHEN LOWER(COALESCE(p.name, '')) LIKE '%' || ${fullSearchParameter} || '%' THEN 3
+        WHEN LOWER(COALESCE(p.category, '')) LIKE '%' || ${fullSearchParameter} || '%' THEN 2
+        WHEN LOWER(COALESCE(p.description, '')) LIKE '%' || ${fullSearchParameter} || '%' THEN 1
+        ELSE 0
+      END`;
     }
 
     if (category) {
@@ -1697,8 +1739,9 @@ app.get("/api/products", async (req, res) => {
         FROM products p
         WHERE ${whereSql}
         ORDER BY
-          CASE WHEN p.promoted_until > NOW() THEN 0 ELSE 1 END,
-          p.promoted_until DESC NULLS LAST,
+          CASE WHEN p.featured_paid = TRUE AND p.featured_until > NOW() THEN 1 ELSE 0 END DESC,
+          ${relevanceSql} DESC,
+          p.featured_until DESC NULLS LAST,
           p.created_at DESC
         LIMIT $${values.length + 1}
         OFFSET $${values.length + 2};
@@ -1727,10 +1770,11 @@ app.get("/api/products", async (req, res) => {
 
 app.get("/api/my-products", requireTelegramAuth, syncTelegramUser, async (req, res) => {
   try {
-    await archiveExpiredProducts();
     const result = await pool.query(
       `
-        SELECT ${PRODUCT_SUMMARY_COLUMNS}
+        SELECT ${PRODUCT_SUMMARY_COLUMNS},
+          (SELECT COUNT(*)::int FROM product_feature_requests pfr
+           WHERE pfr.product_id = p.id AND pfr.owner_id = p.owner_id AND pfr.status = 'pending') AS pending_feature_requests
         FROM products p
         WHERE p.owner_id = $1 AND COALESCE(p.status, 'active') <> 'deleted'
         ORDER BY p.created_at DESC
@@ -1751,10 +1795,18 @@ app.get("/api/my-products/:id/details", requireTelegramAuth, syncTelegramUser, a
     const productId = normalizeText(req.params.id, 64);
     const result = await pool.query(
       `
-        SELECT *
-        FROM products
-        WHERE id = $1
-          AND owner_id = $2
+        SELECT p.*,
+          COALESCE(
+            (SELECT jsonb_agg(pi.url ORDER BY pi.position ASC, pi.created_at ASC)
+             FROM product_images pi WHERE pi.product_id = p.id),
+            p.images,
+            '[]'::jsonb
+          ) AS images,
+          (SELECT COUNT(*)::int FROM product_feature_requests pfr
+           WHERE pfr.product_id = p.id AND pfr.owner_id = p.owner_id AND pfr.status = 'pending') AS pending_feature_requests
+        FROM products p
+        WHERE p.id = $1
+          AND p.owner_id = $2
           AND COALESCE(status, 'active') <> 'deleted';
       `,
       [productId, req.telegramUser.id]
@@ -1804,9 +1856,6 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
     const fallbackImage = normalizeProductImage(image);
     if (cleanImages.length === 0 && fallbackImage) cleanImages.push(fallbackImage);
     const cleanThumbnail = normalizeProductImage(thumbnail) || cleanImages[0] || "";
-    if (requestedStatus === "active" && cleanImages.length === 0) {
-      return res.status(400).json({ ok: false, error: "Добавьте хотя бы одно фото объявления" });
-    }
 
     const moderation = await evaluateProductModeration({
       name: cleanName,
@@ -1827,11 +1876,13 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
           category, description, image, images, location, phone, allow_messages,
           condition, negotiable, delivery, district, specifications, views, status,
           hidden, auto_hidden, moderation_status, moderation_reason, moderation_matches,
-          moderation_target_status
+          moderation_target_status, published_at, expires_at
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13,
-          $14, $15, $16, $17, $18, $19::jsonb, 0, $20, $21, $22, $23, $24, $25::jsonb, $26
+          $14, $15, $16, $17, $18, $19::jsonb, 0, $20, $21, $22, $23, $24, $25::jsonb, $26,
+          CASE WHEN $20 = 'active' THEN NOW() ELSE NULL END,
+          CASE WHEN $20 = 'active' THEN NOW() + ($27::int * INTERVAL '1 day') ELSE NULL END
         )
         RETURNING *;
       `,
@@ -1844,7 +1895,8 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
         JSON.stringify(cleanSpecifications), finalStatus, moderation.blocked,
         moderation.blocked, moderation.blocked ? "blocked" : "approved",
         moderation.reason, JSON.stringify(moderation.matches),
-        requestedStatus === "draft" ? "draft" : "active"
+        requestedStatus === "draft" ? "draft" : "active",
+        PRODUCT_ARCHIVE_DAYS
       ]
     );
 
@@ -1916,6 +1968,7 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     const cleanImages = (Array.isArray(images) ? images : [])
       .map(normalizeProductImage).filter(Boolean).slice(0, 5);
     const fallbackImage = normalizeProductImage(image);
+    if (cleanImages.length === 0 && fallbackImage) cleanImages.push(fallbackImage);
     const requestedThumbnail = normalizeProductImage(thumbnail);
 
     await client.query("BEGIN");
@@ -1929,15 +1982,9 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     }
 
     const existing = existingResult.rows[0];
-    const existingImages = normalizeImages(existing).map(normalizeProductImage).filter(Boolean).slice(0, 5);
-    if (cleanImages.length === 0 && fallbackImage) cleanImages.push(fallbackImage);
-    if (cleanImages.length === 0 && existingImages.length > 0) cleanImages.push(...existingImages);
-    if (requestedStatus === "active" && cleanImages.length === 0) {
-      await client.query("ROLLBACK");
-      return res.status(400).json({ ok: false, error: "Добавьте хотя бы одно фото объявления" });
-    }
-    const firstImageChanged = cleanImages[0] && cleanImages[0] !== existingImages[0];
-    const cleanThumbnail = requestedThumbnail || (firstImageChanged ? cleanImages[0] : existing.thumbnail) || cleanImages[0] || "";
+    const existingImages = normalizeImages(existing);
+    const mainImageChanged = String(cleanImages[0] || "") !== String(existingImages[0] || existing.image || "");
+    const cleanThumbnail = requestedThumbnail || (!mainImageChanged ? existing.thumbnail : "") || cleanImages[0] || "";
     const oldPriceAmount = Number(existing.price_amount) || parsePriceAmount(existing.price);
     const priceChanged = oldPriceAmount > 0 && oldPriceAmount !== cleanPriceAmount;
     const priceDropped = priceChanged && cleanPriceAmount < oldPriceAmount;
@@ -1972,6 +2019,9 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
             END,
             auto_hidden = $24,
             thumbnail = $26,
+            published_at = CASE WHEN $18 = 'active' AND COALESCE(status, '') <> 'active' THEN NOW() ELSE published_at END,
+            expires_at = CASE WHEN $18 = 'active' AND COALESCE(status, '') <> 'active' THEN NOW() + ($27::int * INTERVAL '1 day') ELSE expires_at END,
+            archived_at = CASE WHEN $18 = 'active' THEN NULL ELSE archived_at END,
             updated_at = NOW()
         WHERE id = $1 AND owner_id = $2
         RETURNING *;
@@ -1984,7 +2034,7 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
         JSON.stringify(cleanSpecifications), finalStatus, priceDropped, oldPriceAmount,
         moderation.blocked ? "blocked" : "approved", moderation.reason,
         JSON.stringify(moderation.matches), moderation.blocked,
-        requestedStatus, cleanThumbnail
+        requestedStatus, cleanThumbnail, PRODUCT_ARCHIVE_DAYS
       ]
     );
 
@@ -2174,7 +2224,9 @@ app.patch("/api/products/:id/status", requireTelegramAuth, syncTelegramUser, asy
       `
         UPDATE products
         SET status = $3,
-            archived_at = CASE WHEN $3 = 'archived' THEN NOW() ELSE NULL END,
+            published_at = CASE WHEN $3 = 'active' THEN NOW() ELSE published_at END,
+            expires_at = CASE WHEN $3 = 'active' THEN NOW() + ($4::int * INTERVAL '1 day') ELSE expires_at END,
+            archived_at = CASE WHEN $3 = 'archived' THEN NOW() WHEN $3 = 'active' THEN NULL ELSE archived_at END,
             updated_at = NOW()
         WHERE id = $1
           AND owner_id = $2
@@ -2182,7 +2234,7 @@ app.patch("/api/products/:id/status", requireTelegramAuth, syncTelegramUser, asy
           AND ($3 <> 'active' OR COALESCE(moderation_status, 'approved') = 'approved')
         RETURNING *;
       `,
-      [productId, req.telegramUser.id, status]
+      [productId, req.telegramUser.id, status, PRODUCT_ARCHIVE_DAYS]
     );
 
     if (result.rows.length === 0) {
@@ -2204,6 +2256,93 @@ app.patch("/api/products/:id/status", requireTelegramAuth, syncTelegramUser, asy
       ok: false,
       error: "Не удалось изменить статус объявления"
     });
+  }
+});
+
+app.post("/api/products/:id/feature-request", requireTelegramAuth, syncTelegramUser, async (req, res) => {
+  try {
+    const productId = normalizeText(req.params.id, 64);
+    const color = FEATURE_COLORS.has(req.body?.color) ? req.body.color : "gold";
+    const days = FEATURE_HIGHLIGHT_DAYS;
+
+    if (!productId) {
+      return res.status(400).json({ ok: false, error: "Некорректный ID объявления" });
+    }
+
+    const productResult = await pool.query(
+      `
+        SELECT id, name
+        FROM products
+        WHERE id = $1
+          AND owner_id = $2
+          AND status = 'active'
+          AND COALESCE(hidden, FALSE) = FALSE
+          AND COALESCE(moderation_status, 'approved') = 'approved'
+        LIMIT 1;
+      `,
+      [productId, req.telegramUser.id]
+    );
+
+    if (productResult.rows.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        error: "Для выделения объявление должно быть активным и доступным покупателям"
+      });
+    }
+
+    let requestResult = await pool.query(
+      `
+        UPDATE product_feature_requests
+        SET color = $3,
+            days = $4,
+            price_amount = $5,
+            updated_at = NOW()
+        WHERE product_id = $1
+          AND owner_id = $2
+          AND status = 'pending'
+        RETURNING *;
+      `,
+      [productId, req.telegramUser.id, color, days, FEATURE_HIGHLIGHT_PRICE_RUB]
+    );
+
+    if (requestResult.rows.length === 0) {
+      requestResult = await pool.query(
+        `
+          INSERT INTO product_feature_requests (
+            id, product_id, owner_id, color, days, price_amount, status
+          ) VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+          ON CONFLICT DO NOTHING
+          RETURNING *;
+        `,
+        [randomUUID(), productId, req.telegramUser.id, color, days, FEATURE_HIGHLIGHT_PRICE_RUB]
+      );
+
+      if (requestResult.rows.length === 0) {
+        requestResult = await pool.query(
+          `SELECT * FROM product_feature_requests WHERE product_id = $1 AND owner_id = $2 AND status = 'pending' LIMIT 1`,
+          [productId, req.telegramUser.id]
+        );
+      }
+    }
+
+    if (requestResult.rows.length === 0) {
+      return res.status(409).json({ ok: false, error: "Заявка уже обрабатывается. Обновите страницу." });
+    }
+
+    res.status(201).json({
+      ok: true,
+      request: {
+        id: requestResult.rows[0].id,
+        productId,
+        color,
+        days,
+        priceAmount: Number(requestResult.rows[0].price_amount) || 0,
+        status: requestResult.rows[0].status
+      }
+    });
+  } catch (error) {
+    console.error("Feature request error:", error);
+    res.status(500).json({ ok: false, error: "Не удалось создать заявку на выделение" });
   }
 });
 
@@ -2668,13 +2807,16 @@ app.get(
         moderation_reason,
         previous_price,
         price_dropped_at,
-        promoted_until,
-        highlight_color,
-        promotion_paid,
-        (SELECT COUNT(*)::int FROM reports r WHERE r.product_id = products.id AND r.status = 'pending') AS report_count
+        archived_at,
+        expires_at,
+        featured_until,
+        featured_color,
+        featured_paid,
+        (SELECT COUNT(*)::int FROM reports r WHERE r.product_id = products.id AND r.status = 'pending') AS report_count,
+        (SELECT COUNT(*)::int FROM product_feature_requests pfr WHERE pfr.product_id = products.id AND pfr.status = 'pending') AS pending_feature_requests
       FROM products
       WHERE COALESCE(status, 'active') <> 'deleted'
-      ORDER BY created_at DESC
+      ORDER BY pending_feature_requests DESC, created_at DESC
       LIMIT 100;
     `);
 
@@ -2682,47 +2824,6 @@ app.get(
       ok: true,
       products: result.rows
     });
-  })
-);
-
-app.patch(
-  "/api/admin/products/:id/promotion",
-  requireTelegramAuth,
-  syncTelegramUser,
-  requireAdmin,
-  adminRoute(async (req, res) => {
-    const productId = normalizeText(req.params.id, 64);
-    const enabled = normalizeBoolean(req.body?.enabled);
-    const durationDays = Math.max(1, Math.min(30, Number(req.body?.durationDays) || 7));
-    const requestedColor = normalizeText(req.body?.color, 20).toLowerCase();
-    const color = ["violet", "gold", "blue", "green"].includes(requestedColor) ? requestedColor : "violet";
-
-    const result = await pool.query(
-      `
-        UPDATE products
-        SET promoted_until = CASE WHEN $2 THEN NOW() + ($3::text || ' days')::interval ELSE NULL END,
-            highlight_color = $4,
-            promotion_paid = $2,
-            updated_at = NOW()
-        WHERE id = $1
-          AND COALESCE(status, 'active') <> 'deleted'
-        RETURNING id, name, promoted_until, highlight_color, promotion_paid;
-      `,
-      [productId, enabled, durationDays, color]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ ok: false, error: "Объявление не найдено" });
-    }
-
-    await addAdminLog(
-      req.telegramUser.id,
-      enabled ? "promote_product" : "unpromote_product",
-      productId,
-      `${result.rows[0].name}; ${enabled ? `${durationDays} дней, ${color}` : "выделение снято"}`
-    );
-
-    res.json({ ok: true, product: result.rows[0] });
   })
 );
 
@@ -2767,6 +2868,63 @@ app.patch(
       ok: true,
       product
     });
+  })
+);
+
+app.patch(
+  "/api/admin/products/:id/feature",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const productId = normalizeText(req.params.id, 64);
+    const enabled = normalizeBoolean(req.body?.enabled);
+    const days = Math.max(1, Math.min(90, Number(req.body?.days) || FEATURE_HIGHLIGHT_DAYS));
+    const color = FEATURE_COLORS.has(req.body?.color) ? req.body.color : "gold";
+    const featuredUntil = enabled ? new Date(Date.now() + days * 86_400_000) : null;
+
+    const result = await pool.query(
+      `
+        UPDATE products
+        SET featured_paid = $2,
+            featured_color = $3,
+            featured_until = $4,
+            updated_at = NOW()
+        WHERE id = $1
+          AND COALESCE(status, 'active') <> 'deleted'
+          AND ($2 = FALSE OR status = 'active')
+        RETURNING id, name, featured_paid, featured_color, featured_until;
+      `,
+      [productId, enabled, color, featuredUntil]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ ok: false, error: "Объявление не найдено" });
+    }
+
+    if (enabled) {
+      await pool.query(
+        `
+          UPDATE product_feature_requests
+          SET status = 'approved',
+              approved_by = $2,
+              approved_at = NOW(),
+              updated_at = NOW()
+          WHERE product_id = $1
+            AND status = 'pending';
+        `,
+        [productId, req.telegramUser.id]
+      );
+    }
+
+    await addAdminLog(
+      req.telegramUser.id,
+      enabled ? "feature_product" : "unfeature_product",
+      productId,
+      `${result.rows[0].name}; ${enabled ? `${days} дн., ${color}` : "выделение снято"}`
+    );
+
+    res.json({ ok: true, product: result.rows[0] });
   })
 );
 
@@ -3566,12 +3724,46 @@ app.use((error, req, res, next) => {
   return next(error);
 });
 
+async function runProductLifecycleMaintenance() {
+  try {
+    const archived = await pool.query(
+      `
+        UPDATE products
+        SET status = 'archived',
+            archived_at = NOW(),
+            featured_paid = FALSE,
+            featured_until = NULL,
+            updated_at = NOW()
+        WHERE status = 'active'
+          AND COALESCE(expires_at, created_at + ($1::int * INTERVAL '1 day')) <= NOW()
+        RETURNING id;
+      `,
+      [PRODUCT_ARCHIVE_DAYS]
+    );
+
+    const purged = await pool.query(
+      `
+        DELETE FROM products
+        WHERE status = 'deleted'
+          AND updated_at <= NOW() - ($1::int * INTERVAL '1 day')
+        RETURNING id;
+      `,
+      [DELETED_PRODUCT_RETENTION_DAYS]
+    );
+
+    if (archived.rowCount || purged.rowCount) {
+      console.log(`Lifecycle maintenance: archived=${archived.rowCount}, purged=${purged.rowCount}`);
+    }
+  } catch (error) {
+    console.error("Product lifecycle maintenance error:", error);
+  }
+}
+
 initDb()
   .then(async () => {
-    await archiveExpiredProducts(true);
-    setInterval(() => {
-      archiveExpiredProducts(true).catch(error => console.error("Archive sweep error:", error));
-    }, 60 * 60 * 1000).unref?.();
+    await runProductLifecycleMaintenance();
+    const lifecycleTimer = setInterval(runProductLifecycleMaintenance, 60 * 60 * 1000);
+    lifecycleTimer.unref?.();
 
     app.listen(PORT, () => {
       console.log(`Server started on port ${PORT}`);

@@ -25,15 +25,11 @@ function safeImageUrl(value) {
     return url;
   }
 
-  if (/^\/api\/my-products\/[a-z0-9%._~-]+\/thumbnail\?owner=[a-z0-9%._~-]+&expires=\d+&token=[a-z0-9%._~-]+$/i.test(url)) {
+  if (/^\/api\/my-products\/[a-z0-9%._~-]+\/thumbnail\?owner=[a-z0-9%._~-]+&expires=\d+&v=\d+&token=[a-z0-9%._~-]+$/i.test(url)) {
     return url;
   }
 
   if (/^\/api\/ads\/[a-z0-9%._~-]+\/image(?:\?v=\d+)?$/i.test(url)) {
-    return url;
-  }
-
-  if (/^\/placeholder\.svg(?:\?v=[a-z0-9._-]+)?$/i.test(url)) {
     return url;
   }
 
@@ -71,7 +67,8 @@ function getSellerStatus(lastSeen) {
   return { icon: "🕘", label: getTimeAgo(Number(lastSeen)) };
 }
 
-const DEFAULT_IMAGE = "/placeholder.svg?v=1.12.0";
+const DEFAULT_IMAGE =
+  "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=500";
 
 const MAX_PHOTOS = 5;
 const MAX_PRICE = 100000000;
@@ -80,13 +77,12 @@ const MAX_AD_IMAGE_DATA_LENGTH = 8_000_000;
 const CATALOG_PAGE_SIZE = 12;
 const DATA_CACHE_TTL_MS = 30_000;
 const PRODUCT_DETAILS_CACHE_TTL_MS = 60_000;
-const ADS_CACHE_KEY = "alania-market-ads-v1";
-const ADS_CACHE_TTL_MS = 5 * 60_000;
 
 const tg = window.Telegram?.WebApp || null;
 let telegramAvatarObjectUrl = null;
 let productSearchTimer = null;
 let productsRequestSequence = 0;
+const featureRequestInFlight = new Set();
 let fallbackAdClientKey = `client-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
 
 function readBrowserStorage(storageName, key) {
@@ -109,10 +105,12 @@ function writeBrowserStorage(storageName, key, value) {
 }
 let productsAbortController = null;
 let productOpenSequence = 0;
-let stableImageSequence = 0;
-let lightboxScale = 1;
-let lightboxTranslateX = 0;
-let lightboxTranslateY = 0;
+let galleryImageSequence = 0;
+let lightboxZoom = 1;
+let lightboxPanX = 0;
+let lightboxPanY = 0;
+let lightboxTouchDistance = 0;
+let lightboxTouchScale = 1;
 
 function getTelegramAuthHeaders() {
   const initData = tg?.initData?.trim();
@@ -154,7 +152,10 @@ const state = {
   editingProductId: null,
   config: {
     version: "",
-    supportUsername: ""
+    supportUsername: "",
+    productArchiveDays: 15,
+    featureHighlightPriceRub: 199,
+    featureHighlightDays: 7
   }
 };
 
@@ -233,6 +234,9 @@ async function loadConfig() {
     const data = await apiRequest("/api/config");
     state.config.version = data.version || "";
     state.config.supportUsername = data.supportUsername || "";
+    state.config.productArchiveDays = Number(data.productArchiveDays) || 15;
+    state.config.featureHighlightPriceRub = Number(data.featureHighlightPriceRub) || 0;
+    state.config.featureHighlightDays = Number(data.featureHighlightDays) || 7;
   } catch (error) {
     console.error("Не удалось загрузить конфигурацию:", error);
   }
@@ -245,35 +249,15 @@ function getAdClientKey() {
   return fallbackAdClientKey;
 }
 
-function restoreCachedAds() {
-  try {
-    const cached = JSON.parse(readBrowserStorage("sessionStorage", ADS_CACHE_KEY) || "null");
-    if (!cached || !Array.isArray(cached.ads) || Date.now() - Number(cached.savedAt || 0) > ADS_CACHE_TTL_MS) return false;
-    state.ads = cached.ads;
-    renderCatalogTopAds();
-    renderProductDetailAds();
-    return true;
-  } catch (error) {
-    return false;
-  }
-}
-
-function cacheAds(ads) {
-  writeBrowserStorage("sessionStorage", ADS_CACHE_KEY, JSON.stringify({ ads, savedAt: Date.now() }));
-}
-
 async function loadAds() {
   try {
     const data = await apiRequest(`/api/ads?_=${Date.now()}`, { cache: "no-store" });
     state.ads = data.ads || [];
-    cacheAds(state.ads);
     renderCatalogTopAds();
     renderProductDetailAds();
   } catch (error) {
     console.error("Не удалось загрузить рекламу:", error);
-    if (state.ads.length === 0) {
-      restoreCachedAds();
-    }
+    state.ads = [];
   }
 }
 
@@ -364,6 +348,32 @@ function renderProductDetailAds() {
   root.innerHTML = ads.map(ad => renderAdCard(ad, "detail")).join("");
 }
 
+function updateSearchStatus() {
+  const root = document.getElementById("searchStatus");
+  if (!root) return;
+
+  if (state.productsLoading && state.search.trim()) {
+    root.textContent = "Ищем объявления…";
+    root.className = "search-status is-loading";
+    return;
+  }
+
+  if (state.productsLoadError) {
+    root.textContent = state.productsLoadError;
+    root.className = "search-status is-error";
+    return;
+  }
+
+  if (state.search.trim() && !state.productsLoading) {
+    root.textContent = `Найдено: ${state.products.length}`;
+    root.className = "search-status";
+    return;
+  }
+
+  root.textContent = "";
+  root.className = "search-status";
+}
+
 function getProductsCacheKey() {
   return `${state.search.trim().toLowerCase()}|${state.category}`;
 }
@@ -389,6 +399,7 @@ async function loadProducts({ force = false, append = false } = {}) {
   productsAbortController = new AbortController();
   state.productsLoading = true;
   state.productsLoadError = "";
+  updateSearchStatus();
 
   if (!append && !sameQuery) {
     state.products = [];
@@ -437,6 +448,7 @@ async function loadProducts({ force = false, append = false } = {}) {
   } finally {
     if (requestSequence === productsRequestSequence) {
       state.productsLoading = false;
+      updateSearchStatus();
       renderProducts();
     }
   }
@@ -1004,15 +1016,18 @@ function renderProducts() {
 
   if (!productList || state.page !== "catalog") return;
 
+  updateSearchStatus();
   const products = getFiltered();
 
   if (state.productsLoading && products.length === 0) {
+    delete productList.dataset.renderSignature;
     productList.innerHTML = getCatalogSkeletonMarkup();
     if (loadMoreButton) loadMoreButton.hidden = true;
     return;
   }
 
   if (state.productsLoadError && products.length === 0) {
+    delete productList.dataset.renderSignature;
     productList.innerHTML = `
       <div class="empty-state">
         <h3>Не удалось загрузить объявления</h3>
@@ -1025,6 +1040,7 @@ function renderProducts() {
   }
 
   if (products.length === 0) {
+    delete productList.dataset.renderSignature;
     productList.innerHTML = `
       <div class="empty-state">
         <h3>Объявлений пока нет</h3>
@@ -1061,7 +1077,23 @@ function renderProducts() {
     }
   });
 
-  productList.innerHTML = markup.join("");
+  const html = markup.join("");
+  const renderSignature = [
+    state.productsCacheKey,
+    ...products.map(product => [
+      product.id,
+      product.updatedAt || 0,
+      state.favorites.includes(product.id) ? 1 : 0,
+      product.isFeatured ? product.featuredUntil || 1 : 0,
+      product.status
+    ].join(":")),
+    ...feedAds.map(ad => `${ad.id}:${ad.updatedAt || 0}`)
+  ].join("|");
+
+  if (productList.dataset.renderSignature !== renderSignature) {
+    productList.innerHTML = html;
+    productList.dataset.renderSignature = renderSignature;
+  }
 
   if (loadMoreButton) {
     const hasMore = typeof state.catalogPagination.hasMore === "boolean"
@@ -1099,8 +1131,14 @@ function getProductCard(product, options = {}) {
     ? `<span class="price-drop-card-badge">Цена снизилась${product.priceDropPercent ? ` −${Number(product.priceDropPercent)}%` : ""}</span>`
     : "";
   const status = product.status || "active";
-  const promotedClass = product.isPromoted ? ` is-promoted highlight-${escapeHTML(product.highlightColor || "violet")}` : "";
-  const promotedMarkup = product.isPromoted ? '<span class="promoted-card-badge">Выделено</span>' : "";
+  const featureColor = ["gold", "purple", "blue", "green"].includes(product.featuredColor)
+    ? product.featuredColor
+    : "gold";
+  const featuredClass = product.isFeatured ? `is-featured featured-${featureColor}` : "";
+  const featuredBadge = product.isFeatured ? '<span class="featured-card-badge">★ Выделено</span>' : "";
+  const featureRequestBadge = product.featureRequestPending
+    ? '<span class="feature-request-badge">Заявка на выделение отправлена</span>'
+    : "";
 
   let actions = `
     <button
@@ -1112,6 +1150,12 @@ function getProductCard(product, options = {}) {
   `;
 
   if (options.ownerActions) {
+    const canRequestFeature = status === "active" && !product.hidden && product.moderationStatus !== "blocked";
+    const featureActionTitle = product.featureRequestPending
+      ? "Заявка ожидает подтверждения"
+      : canRequestFeature
+        ? "Платно выделить объявление"
+        : "Сначала опубликуйте объявление";
     const statusAction = product.moderationStatus === "blocked"
       ? `<button type="button" class="card-action status" title="Исправьте объявление перед публикацией" disabled>🛡</button>`
       : status === "active"
@@ -1122,16 +1166,22 @@ function getProductCard(product, options = {}) {
       <div class="product-card-actions">
         <button type="button" class="card-action edit" title="Редактировать объявление" onclick="event.stopPropagation(); editAd('${productId}')">✎</button>
         ${statusAction}
+        <button type="button" class="card-action feature" title="${featureActionTitle}" onclick="event.stopPropagation(); requestProductHighlight('${productId}')" ${product.featureRequestPending || !canRequestFeature ? "disabled" : ""}>★</button>
         <button type="button" class="card-action delete" title="Удалить объявление" onclick="event.stopPropagation(); deleteAd('${productId}')">🗑</button>
       </div>
     `;
   }
 
+  const cardAction = options.ownerActions && (status !== "active" || product.hidden || product.moderationStatus === "blocked")
+    ? `editAd('${productId}')`
+    : `openProduct('${productId}')`;
+
   return `
-    <div class="product-card ${status !== "active" ? "is-inactive" : ""}${promotedClass}" onclick="openProduct('${productId}')">
-      <img src="${image}" alt="${name}" loading="${options.priority ? "eager" : "lazy"}" decoding="async" fetchpriority="${options.priority ? "high" : "low"}" onload="this.classList.add('is-loaded')" onerror="handleImageError(this)">
+    <div class="product-card ${status !== "active" ? "is-inactive" : ""} ${featuredClass}" onclick="${cardAction}">
+      <img src="${image}" alt="${name}" loading="${options.priority ? "eager" : "lazy"}" decoding="async" fetchpriority="${options.priority ? "high" : "low"}" onerror="handleImageError(this)">
       <div>
-        ${promotedMarkup}
+        ${featuredBadge}
+        ${featureRequestBadge}
         ${priceDropMarkup}
         <h4>${name}</h4>
         <div class="card-price-row"><b>${price}</b>${product.priceDropped && previousPrice ? `<s>${previousPrice}</s>` : ""}</div>
@@ -1177,7 +1227,7 @@ function renderMyAds() {
       active: ["Нет активных объявлений", "Опубликуйте товар, и он появится здесь."],
       sold: ["Нет проданных товаров", "Отмеченные проданными объявления появятся здесь."],
       draft: ["Нет черновиков", "Сохраните объявление как черновик перед публикацией."],
-      archived: ["Архив пуст", "Объявления старше 15 дней автоматически перемещаются сюда."]
+      archived: ["Архив пуст", `Объявления автоматически перемещаются сюда через ${Number(state.config.productArchiveDays) || 15} дней.`]
     };
     const [title, text] = emptyCopy[state.myAdsTab] || emptyCopy.active;
 
@@ -1344,55 +1394,27 @@ function cacheProduct(product) {
   }
 }
 
-function setStableImage(imageEl, source, onReady = null) {
+function swapImageAfterLoad(imageEl, source, sequence) {
   if (!imageEl) return;
-  const safeSource = safeImageUrl(source);
-  const sequence = String(++stableImageSequence);
-  imageEl.dataset.loadSequence = sequence;
-  imageEl.classList.add("image-pending");
+  const currentSource = imageEl.getAttribute("src") || "";
+  if (currentSource === source && imageEl.complete && imageEl.naturalWidth > 0) return;
 
+  imageEl.classList.add("is-loading");
   const preloader = new Image();
-  preloader.onload = async () => {
-    if (imageEl.dataset.loadSequence !== sequence) return;
+  preloader.decoding = "async";
+  preloader.onload = () => {
+    if (sequence !== galleryImageSequence) return;
     imageEl.dataset.fallbackApplied = "0";
-    imageEl.src = safeSource;
-    try { await imageEl.decode?.(); } catch (error) {}
-    if (imageEl.dataset.loadSequence !== sequence) return;
-    imageEl.classList.remove("image-pending");
-    onReady?.();
+    imageEl.src = source;
+    imageEl.classList.remove("is-loading");
   };
   preloader.onerror = () => {
-    if (imageEl.dataset.loadSequence !== sequence) return;
+    if (sequence !== galleryImageSequence) return;
+    imageEl.dataset.fallbackApplied = "1";
     imageEl.src = DEFAULT_IMAGE;
-    imageEl.classList.remove("image-pending");
-    onReady?.();
+    imageEl.classList.remove("is-loading");
   };
-  preloader.src = safeSource;
-}
-
-function applyPhotoZoom() {
-  const image = document.getElementById("lightboxImage");
-  const resetButton = document.querySelector(".lightbox-zoom-controls button:nth-child(2)");
-  if (!image) return;
-  image.style.transform = `translate3d(${lightboxTranslateX}px, ${lightboxTranslateY}px, 0) scale(${lightboxScale})`;
-  image.classList.toggle("is-zoomed", lightboxScale > 1);
-  if (resetButton) resetButton.textContent = `${Math.round(lightboxScale * 100)}%`;
-}
-
-function zoomPhoto(delta) {
-  lightboxScale = Math.max(1, Math.min(4, Math.round((lightboxScale + Number(delta || 0)) * 10) / 10));
-  if (lightboxScale === 1) {
-    lightboxTranslateX = 0;
-    lightboxTranslateY = 0;
-  }
-  applyPhotoZoom();
-}
-
-function resetPhotoZoom() {
-  lightboxScale = 1;
-  lightboxTranslateX = 0;
-  lightboxTranslateY = 0;
-  applyPhotoZoom();
+  preloader.src = source;
 }
 
 function showProductImage(index) {
@@ -1404,7 +1426,7 @@ function showProductImage(index) {
 
   const normalizedIndex = ((Number(index) || 0) + images.length) % images.length;
   state.currentProductImageIndex = normalizedIndex;
-
+  const sequence = ++galleryImageSequence;
   const source = safeImageUrl(images[normalizedIndex]);
   const imageEl = document.getElementById("productImage");
   const counter = document.getElementById("productImageCounter");
@@ -1413,14 +1435,8 @@ function showProductImage(index) {
   const previousButton = document.getElementById("productPrevImage");
   const nextButton = document.getElementById("productNextImage");
 
-  if (imageEl) {
-    imageEl.onerror = () => handleImageError(imageEl);
-    setStableImage(imageEl, source, () => document.getElementById("productGallery")?.classList.remove("is-loading"));
-  }
-  if (lightboxImage) {
-    lightboxImage.onerror = () => handleImageError(lightboxImage);
-    setStableImage(lightboxImage, source);
-  }
+  swapImageAfterLoad(imageEl, source, sequence);
+  swapImageAfterLoad(lightboxImage, source, sequence);
   if (counter) counter.textContent = `${normalizedIndex + 1} / ${images.length}`;
   if (lightboxCounter) lightboxCounter.textContent = `${normalizedIndex + 1} / ${images.length}`;
   if (previousButton) previousButton.hidden = images.length <= 1;
@@ -1431,8 +1447,36 @@ function showProductImage(index) {
   });
 }
 
+function applyLightboxTransform() {
+  const image = document.getElementById("lightboxImage");
+  const resetButton = document.getElementById("lightboxZoomReset");
+  if (!image) return;
+  image.style.transform = `translate3d(${lightboxPanX}px, ${lightboxPanY}px, 0) scale(${lightboxZoom})`;
+  image.classList.toggle("is-zoomed", lightboxZoom > 1.01);
+  if (resetButton) resetButton.textContent = `${Math.round(lightboxZoom * 100)}%`;
+}
+
+function setLightboxZoom(value) {
+  lightboxZoom = Math.max(1, Math.min(4, Number(value) || 1));
+  if (lightboxZoom === 1) {
+    lightboxPanX = 0;
+    lightboxPanY = 0;
+  }
+  applyLightboxTransform();
+}
+
+function changeLightboxZoom(delta) {
+  setLightboxZoom(lightboxZoom + Number(delta || 0));
+}
+
+function resetLightboxZoom() {
+  lightboxPanX = 0;
+  lightboxPanY = 0;
+  setLightboxZoom(1);
+}
+
 function changeProductImage(delta) {
-  if (lightboxScale > 1) resetPhotoZoom();
+  resetLightboxZoom();
   showProductImage(state.currentProductImageIndex + Number(delta || 0));
 }
 
@@ -1440,17 +1484,25 @@ function openPhotoLightbox() {
   const lightbox = document.getElementById("photoLightbox");
   if (!lightbox || !state.openedProductId) return;
 
-  resetPhotoZoom();
-  showProductImage(state.currentProductImageIndex);
+  resetLightboxZoom();
   lightbox.hidden = false;
+  showProductImage(state.currentProductImageIndex);
   document.body.classList.add("lightbox-open");
 }
 
 function closePhotoLightbox() {
   const lightbox = document.getElementById("photoLightbox");
   if (lightbox) lightbox.hidden = true;
-  resetPhotoZoom();
+  resetLightboxZoom();
   document.body.classList.remove("lightbox-open");
+}
+
+function getTouchDistance(touches) {
+  if (!touches || touches.length < 2) return 0;
+  return Math.hypot(
+    touches[0].clientX - touches[1].clientX,
+    touches[0].clientY - touches[1].clientY
+  );
 }
 
 function initProductGalleryGestures() {
@@ -1462,17 +1514,33 @@ function initProductGalleryGestures() {
     let startY = 0;
 
     element.addEventListener("touchstart", event => {
+      if (element.id === "photoLightbox" && event.touches?.length === 2) {
+        lightboxTouchDistance = getTouchDistance(event.touches);
+        lightboxTouchScale = lightboxZoom;
+        return;
+      }
       const touch = event.touches?.[0];
       if (!touch) return;
       startX = touch.clientX;
       startY = touch.clientY;
     }, { passive: true });
 
+    element.addEventListener("touchmove", event => {
+      if (element.id !== "photoLightbox" || event.touches?.length !== 2) return;
+      const distance = getTouchDistance(event.touches);
+      if (!lightboxTouchDistance || !distance) return;
+      event.preventDefault();
+      setLightboxZoom(lightboxTouchScale * (distance / lightboxTouchDistance));
+    }, { passive: false });
+
     element.addEventListener("touchend", event => {
+      if (element.id === "photoLightbox" && (lightboxTouchDistance || lightboxZoom > 1.01)) {
+        lightboxTouchDistance = 0;
+        return;
+      }
       const touch = event.changedTouches?.[0];
       if (!touch) return;
 
-      if (element.id === "photoLightbox" && lightboxScale > 1) return;
       const deltaX = touch.clientX - startX;
       const deltaY = Math.abs(touch.clientY - startY);
       if (Math.abs(deltaX) < 45 || deltaY > 70) return;
@@ -1494,66 +1562,16 @@ function initProductGalleryGestures() {
     changeProductImage(1);
   });
 
-  const stage = document.getElementById("lightboxImageStage");
-  if (stage && stage.dataset.zoomReady !== "1") {
-    stage.dataset.zoomReady = "1";
-    let pinchStartDistance = 0;
-    let pinchStartScale = 1;
-    let panStartX = 0;
-    let panStartY = 0;
-    let panOriginX = 0;
-    let panOriginY = 0;
-    let lastTapAt = 0;
+  const lightboxImage = document.getElementById("lightboxImage");
+  lightboxImage?.addEventListener("dblclick", event => {
+    event.preventDefault();
+    setLightboxZoom(lightboxZoom > 1.01 ? 1 : 2.5);
+  });
 
-    const touchDistance = touches => Math.hypot(
-      touches[0].clientX - touches[1].clientX,
-      touches[0].clientY - touches[1].clientY
-    );
-
-    stage.addEventListener("touchstart", event => {
-      if (event.touches.length === 2) {
-        pinchStartDistance = touchDistance(event.touches);
-        pinchStartScale = lightboxScale;
-        event.preventDefault();
-      } else if (event.touches.length === 1 && lightboxScale > 1) {
-        panStartX = event.touches[0].clientX;
-        panStartY = event.touches[0].clientY;
-        panOriginX = lightboxTranslateX;
-        panOriginY = lightboxTranslateY;
-      }
-    }, { passive: false });
-
-    stage.addEventListener("touchmove", event => {
-      if (event.touches.length === 2 && pinchStartDistance > 0) {
-        lightboxScale = Math.max(1, Math.min(4, pinchStartScale * touchDistance(event.touches) / pinchStartDistance));
-        applyPhotoZoom();
-        event.preventDefault();
-      } else if (event.touches.length === 1 && lightboxScale > 1) {
-        lightboxTranslateX = panOriginX + event.touches[0].clientX - panStartX;
-        lightboxTranslateY = panOriginY + event.touches[0].clientY - panStartY;
-        applyPhotoZoom();
-        event.preventDefault();
-      }
-    }, { passive: false });
-
-    stage.addEventListener("touchend", event => {
-      pinchStartDistance = 0;
-      if (event.changedTouches.length === 1) {
-        const now = Date.now();
-        if (now - lastTapAt < 280) {
-          lightboxScale > 1 ? resetPhotoZoom() : zoomPhoto(1);
-          lastTapAt = 0;
-        } else {
-          lastTapAt = now;
-        }
-      }
-    }, { passive: true });
-
-    stage.addEventListener("dblclick", event => {
-      event.preventDefault();
-      lightboxScale > 1 ? resetPhotoZoom() : zoomPhoto(1);
-    });
-  }
+  document.getElementById("lightboxViewport")?.addEventListener("wheel", event => {
+    event.preventDefault();
+    changeLightboxZoom(event.deltaY < 0 ? 0.5 : -0.5);
+  }, { passive: false });
 }
 
 function getProductLink(productId = state.openedProductId) {
@@ -1697,7 +1715,9 @@ function renderProductDetails(product) {
       product.negotiable ? "Возможен торг" : "Цена без торга",
       product.delivery ? "Есть доставка" : "Самовывоз",
       product.district ? `Район: ${product.district}` : "",
-      product.priceDropped ? `Цена снижена${product.priceDropPercent ? ` на ${Number(product.priceDropPercent)}%` : ""}` : ""
+      product.priceDropped ? `Цена снижена${product.priceDropPercent ? ` на ${Number(product.priceDropPercent)}%` : ""}` : "",
+      product.isFeatured ? "Платное выделение" : "",
+      product.expiresAt ? `Активно до ${formatProductDate(product.expiresAt)}` : ""
     ].filter(Boolean);
 
     productBadges.innerHTML = badges
@@ -1812,10 +1832,6 @@ async function openProduct(id) {
   const openSequence = ++productOpenSequence;
   state.openedProductId = id;
   state.currentProductImageIndex = 0;
-  const gallery = document.getElementById("productGallery");
-  const productImage = document.getElementById("productImage");
-  gallery?.classList.add("is-loading");
-  productImage?.classList.add("image-pending");
   showPage("product");
 
   let product = findProductById(id);
@@ -2216,16 +2232,12 @@ async function publishAd(status = "active") {
     }
 
     const images = draftAd.images.slice(0, MAX_PHOTOS);
-    if (targetStatus === "active" && images.length === 0) {
-      alert("Добавьте хотя бы одно фото объявления");
-      return;
-    }
-    const mainImage = images[0] || "";
-    if (mainImage && (draftAd.thumbnailSource !== mainImage || !draftAd.thumbnail)) {
+    const mainImage = images[0] || DEFAULT_IMAGE;
+    if (draftAd.thumbnailSource !== mainImage || !draftAd.thumbnail) {
       draftAd.thumbnail = await createThumbnailFromImage(mainImage);
       draftAd.thumbnailSource = mainImage;
     }
-    const thumbnail = mainImage ? (draftAd.thumbnail || mainImage) : "";
+    const thumbnail = draftAd.thumbnail || mainImage;
 
     const editingId = state.editingProductId;
     const endpoint = editingId
@@ -2254,6 +2266,7 @@ async function publishAd(status = "active") {
     });
 
     const savedProduct = data.product;
+    delete state.productDetailsCache[savedProduct.id];
     const ownIndex = state.myProducts.findIndex(product => product.id === savedProduct.id);
 
     if (ownIndex >= 0) {
@@ -2370,14 +2383,16 @@ async function editAd(id) {
     return;
   }
 
-  try {
-    const data = await apiRequest(`/api/my-products/${encodeURIComponent(id)}/details`);
-    product = data.product;
-    cacheProduct(product);
-  } catch (error) {
-    console.error("Не удалось загрузить объявление для редактирования:", error);
-    alert(error.message || "Не удалось открыть объявление");
-    return;
+  if (product.isSummary || !Array.isArray(product.images) || typeof product.desc === "undefined") {
+    try {
+      const data = await apiRequest(`/api/my-products/${encodeURIComponent(id)}/details`);
+      product = data.product;
+      cacheProduct(product);
+    } catch (error) {
+      console.error("Не удалось загрузить объявление для редактирования:", error);
+      alert(error.message || "Не удалось открыть объявление");
+      return;
+    }
   }
 
   state.editingProductId = id;
@@ -2428,6 +2443,60 @@ async function editAd(id) {
   if (saveDraftBtn) saveDraftBtn.innerText = "Сохранить как черновик";
 }
 
+function openSupportMessage(message = "") {
+  const username = String(state.config.supportUsername || "").replace(/^@/, "");
+  if (!username) {
+    alert("Контакт поддержки пока не настроен. Добавьте SUPPORT_USERNAME в переменные окружения сервера.");
+    return;
+  }
+
+  const url = `https://t.me/${encodeURIComponent(username)}${message ? `?text=${encodeURIComponent(message)}` : ""}`;
+  if (tg?.openTelegramLink) tg.openTelegramLink(url);
+  else window.open(url, "_blank", "noopener,noreferrer");
+}
+
+async function requestProductHighlight(productId) {
+  const product = state.myProducts.find(item => item.id === productId);
+  if (!product || product.featureRequestPending || featureRequestInFlight.has(productId)) return;
+  if (product.status !== "active" || product.hidden || product.moderationStatus === "blocked") {
+    alert("Сначала опубликуйте объявление и убедитесь, что оно доступно покупателям.");
+    return;
+  }
+
+  const price = Number(state.config.featureHighlightPriceRub) || 0;
+  const days = Number(state.config.featureHighlightDays) || 7;
+  const priceText = price > 0 ? `${price.toLocaleString("ru-RU")} ₽` : "по согласованию";
+  const confirmed = window.confirm(
+    `Отправить заявку на цветовое выделение объявления на ${days} дней? Стоимость: ${priceText}.`
+  );
+  if (!confirmed) return;
+
+  featureRequestInFlight.add(productId);
+  try {
+    await apiRequest(`/api/products/${encodeURIComponent(productId)}/feature-request`, {
+      method: "POST",
+      body: JSON.stringify({ color: "gold" })
+    });
+
+    product.featureRequestPending = true;
+    const cached = state.productDetailsCache[productId];
+    if (cached) cached.featureRequestPending = true;
+    renderMyAds();
+
+    const username = String(state.config.supportUsername || "").replace(/^@/, "");
+    if (username) {
+      openSupportMessage(`Здравствуйте! Я отправил заявку на выделение объявления «${product.name || product.id}» на ${days} дней за ${priceText}. ID: ${product.id}`);
+    } else {
+      alert("Заявка создана. Администратор увидит её в панели управления.");
+    }
+  } catch (error) {
+    console.error("Feature request error:", error);
+    alert(error.message || "Не удалось отправить заявку на выделение");
+  } finally {
+    featureRequestInFlight.delete(productId);
+  }
+}
+
 function setMyAdsTab(status) {
   if (!["active", "sold", "draft", "archived"].includes(status)) return;
   state.myAdsTab = status;
@@ -2447,6 +2516,7 @@ async function changeAdStatus(id, status) {
     });
 
     const updated = data.product;
+    delete state.productDetailsCache[id];
     const ownIndex = state.myProducts.findIndex(product => product.id === id);
 
     if (ownIndex >= 0) {
@@ -2518,13 +2588,14 @@ function initEvents() {
 
   searchInput?.addEventListener("input", event => {
     state.search = event.target.value;
-    state.catalogPagination = { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE };
-    renderProducts();
+    state.productsLoadError = "";
+    state.catalogPagination = { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE, hasMore: true };
+    updateSearchStatus();
 
     clearTimeout(productSearchTimer);
     productSearchTimer = setTimeout(() => {
       loadProducts({ force: true });
-    }, 250);
+    }, 280);
   });
 
   searchInput?.addEventListener("keydown", hideKeyboardOnEnter);
@@ -2535,8 +2606,8 @@ function initEvents() {
 
   searchForm?.addEventListener("submit", event => {
     event.preventDefault();
-    clearTimeout(productSearchTimer);
     hideKeyboard();
+    clearTimeout(productSearchTimer);
     loadProducts({ force: true });
   });
 
@@ -3026,10 +3097,8 @@ async function initApp() {
   initSwipeBack();
   initKeyboardAutoHide();
   initEvents();
-  restoreCachedAds();
   const adsPromise = loadAds();
   const configPromise = loadConfig();
-
   await initTelegramUser();
   updateAdminMenu();
 
@@ -3174,20 +3243,7 @@ async function openSellerProfile(userId) {
 }
 
 function openSupport() {
-  const username = String(state.config.supportUsername || "").replace(/^@/, "");
-
-  if (!username) {
-    alert("Контакт поддержки пока не настроен. Добавьте SUPPORT_USERNAME в переменные окружения сервера.");
-    return;
-  }
-
-  const url = `https://t.me/${encodeURIComponent(username)}`;
-
-  if (tg?.openTelegramLink) {
-    tg.openTelegramLink(url);
-  } else {
-    window.open(url, "_blank", "noopener,noreferrer");
-  }
+  openSupportMessage();
 }
 
 // ===== THEME =====
@@ -3202,7 +3258,7 @@ function applyTheme(enabled, persist = true) {
   const toggle = document.getElementById("darkModeToggle");
   if (toggle) toggle.checked = enabled;
 
-  const background = enabled ? "#0f1117" : "#f5f6fb";
+  const background = enabled ? "#000000" : "#f5f6fb";
   document.documentElement.style.background = background;
   document.body.style.background = background;
 
@@ -3395,7 +3451,9 @@ function renderAdminProducts(products = []) {
                 : ""}
               ${product.moderation_status === "blocked" ? '<span class="admin-badge danger">Автоблокировка</span>' : ""}
               ${product.previous_price ? '<span class="admin-badge price-drop">Цена снижена</span>' : ""}
-              ${product.promoted_until && new Date(product.promoted_until).getTime() > Date.now() ? '<span class="admin-badge promotion">Платное выделение</span>' : ""}
+              ${product.featured_paid && product.featured_until && new Date(product.featured_until).getTime() > Date.now() ? '<span class="admin-badge featured">★ Выделено</span>' : ""}
+              ${Number(product.pending_feature_requests) > 0 ? '<span class="admin-badge warning">★ Заявка на выделение</span>' : ""}
+              ${product.status === "archived" ? '<span class="admin-badge">Архив</span>' : ""}
             </div>
             <p>${escapeHTML(product.owner_name || "Без имени")} · ${escapeHTML(product.category || "Без категории")}</p>
             <div class="admin-record-meta">
@@ -3406,18 +3464,22 @@ function renderAdminProducts(products = []) {
           </div>
           <div class="admin-record-actions">
             <button
-              class="admin-action-button promotion"
-              type="button"
-              onclick="toggleProductPromotion('${escapeHTML(product.id)}', ${product.promoted_until && new Date(product.promoted_until).getTime() > Date.now() ? "false" : "true"}, this)"
-            >
-              ${product.promoted_until && new Date(product.promoted_until).getTime() > Date.now() ? "Снять выделение" : "Выделить 7 дней"}
-            </button>
-            <button
               class="admin-action-button ${product.hidden ? "restore" : "danger"}"
               type="button"
               onclick="hideAdminProduct('${escapeHTML(product.id)}', this)"
             >
               ${product.hidden ? "👁 Показать" : "🙈 Скрыть"}
+            </button>
+            <button
+              class="admin-action-button ${product.featured_paid && product.featured_until && new Date(product.featured_until).getTime() > Date.now() ? "danger" : "restore"}"
+              type="button"
+              onclick="toggleAdminProductFeature('${escapeHTML(product.id)}', ${product.featured_paid && product.featured_until && new Date(product.featured_until).getTime() > Date.now() ? "false" : "true"}, this)"
+            >
+              ${product.featured_paid && product.featured_until && new Date(product.featured_until).getTime() > Date.now()
+                ? "☆ Снять"
+                : Number(product.pending_feature_requests) > 0
+                  ? `✓ Подтвердить ${Number(state.config.featureHighlightDays) || 7} д.`
+                  : `★ Выделить ${Number(state.config.featureHighlightDays) || 7} д.`}
             </button>
           </div>
         </article>
@@ -3495,7 +3557,9 @@ function getAdminActionLabel(action) {
     moderation_settings_update: "Обновил автомодерацию",
     ad_create: "Создал рекламную кампанию",
     ad_update: "Обновил рекламную кампанию",
-    ad_delete: "Удалил рекламную кампанию"
+    ad_delete: "Удалил рекламную кампанию",
+    feature_product: "Подтвердил платное выделение",
+    unfeature_product: "Снял платное выделение"
   };
 
   return labels[action] || action || "Неизвестное действие";
@@ -4197,23 +4261,17 @@ async function loadAdminGrowth() {
   }
 }
 
-async function toggleProductPromotion(id, enabled, button) {
-  if (!id || button?.disabled) return;
-  if (button) {
-    button.disabled = true;
-    button.textContent = "Сохраняем…";
-  }
-
+async function toggleAdminProductFeature(id, enabled, button) {
+  if (button) button.disabled = true;
   try {
-    await apiRequest(`/api/admin/products/${encodeURIComponent(id)}/promotion`, {
+    await apiRequest(`/api/admin/products/${encodeURIComponent(id)}/feature`, {
       method: "PATCH",
-      body: JSON.stringify({ enabled, durationDays: 7, color: "violet" })
+      body: JSON.stringify({ enabled, days: Number(state.config.featureHighlightDays) || 7, color: "gold" })
     });
-    state.productsLoadedAt = 0;
     await loadAdminPanel();
   } catch (error) {
-    console.error("Product promotion error:", error);
-    alert(error.message || "Не удалось изменить выделение объявления");
+    console.error("Admin feature product error:", error);
+    alert(error.message || "Не удалось изменить выделение");
     if (button) button.disabled = false;
   }
 }
