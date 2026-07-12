@@ -1157,17 +1157,19 @@ function getProductCard(product, options = {}) {
         ? "Платно выделить объявление"
         : "Сначала опубликуйте объявление";
     const statusAction = product.moderationStatus === "blocked"
-      ? `<button type="button" class="card-action status" title="Исправьте объявление перед публикацией" disabled>🛡</button>`
+      ? `<button type="button" class="card-action status" aria-label="Требует исправления" title="Исправьте объявление перед публикацией" disabled><span class="card-action-icon" aria-hidden="true">🛡</span><span>Требует исправления</span></button>`
       : status === "active"
-        ? `<button type="button" class="card-action status" title="Отметить проданным" onclick="event.stopPropagation(); changeAdStatus('${productId}', 'sold')">✓</button>`
-        : `<button type="button" class="card-action status" title="Опубликовать снова" onclick="event.stopPropagation(); changeAdStatus('${productId}', 'active')">↻</button>`;
+        ? `<button type="button" class="card-action status" aria-label="Отметить проданным" title="Отметить проданным" onclick="event.stopPropagation(); changeAdStatus('${productId}', 'sold')"><span class="card-action-icon" aria-hidden="true">✓</span><span>Продано</span></button>`
+        : `<button type="button" class="card-action status" aria-label="Опубликовать снова" title="Опубликовать снова" onclick="event.stopPropagation(); changeAdStatus('${productId}', 'active')"><span class="card-action-icon" aria-hidden="true">↻</span><span>Опубликовать</span></button>`;
+
+    const featureActionLabel = product.featureRequestPending ? "Заявка отправлена" : "Выделить цветом";
 
     actions = `
       <div class="product-card-actions">
-        <button type="button" class="card-action edit" title="Редактировать объявление" onclick="event.stopPropagation(); editAd('${productId}')">✎</button>
+        <button type="button" class="card-action edit" aria-label="Редактировать объявление" title="Редактировать объявление" onclick="event.stopPropagation(); editAd('${productId}')"><span class="card-action-icon" aria-hidden="true">✎</span><span>Редактировать</span></button>
         ${statusAction}
-        <button type="button" class="card-action feature" title="${featureActionTitle}" onclick="event.stopPropagation(); requestProductHighlight('${productId}')" ${product.featureRequestPending || !canRequestFeature ? "disabled" : ""}>★</button>
-        <button type="button" class="card-action delete" title="Удалить объявление" onclick="event.stopPropagation(); deleteAd('${productId}')">🗑</button>
+        <button type="button" class="card-action feature" aria-label="${featureActionLabel}" title="${featureActionTitle}" onclick="event.stopPropagation(); requestProductHighlight('${productId}')" ${product.featureRequestPending || !canRequestFeature ? "disabled" : ""}><span class="card-action-icon" aria-hidden="true">★</span><span>${featureActionLabel}</span></button>
+        <button type="button" class="card-action delete" aria-label="Удалить объявление" title="Удалить объявление" onclick="event.stopPropagation(); deleteAd('${productId}')"><span class="card-action-icon" aria-hidden="true">🗑</span><span>Удалить</span></button>
       </div>
     `;
   }
@@ -1177,9 +1179,9 @@ function getProductCard(product, options = {}) {
     : `openProduct('${productId}')`;
 
   return `
-    <div class="product-card ${status !== "active" ? "is-inactive" : ""} ${featuredClass}" onclick="${cardAction}">
+    <div class="product-card ${options.ownerActions ? "owner-product-card" : ""} ${status !== "active" ? "is-inactive" : ""} ${featuredClass}" onclick="${cardAction}">
       <img src="${image}" alt="${name}" loading="${options.priority ? "eager" : "lazy"}" decoding="async" fetchpriority="${options.priority ? "high" : "low"}" onerror="handleImageError(this)">
-      <div>
+      <div class="${options.ownerActions ? "product-card-info" : ""}">
         ${featuredBadge}
         ${featureRequestBadge}
         ${priceDropMarkup}
@@ -2674,26 +2676,37 @@ function initEvents() {
     });
   }
 
-  document.querySelectorAll(".categories button").forEach(button => {
-  button.addEventListener("click", event => {
-    event.preventDefault();
-    event.stopPropagation();
+  const categoriesRoot = document.querySelector(".categories");
 
-    document.querySelectorAll(".categories button").forEach(item => {
-      item.classList.remove("active");
+  categoriesRoot?.addEventListener("click", event => {
+    const button = event.target.closest("button[data-category]");
+    if (!button || !categoriesRoot.contains(button)) return;
+
+    event.preventDefault();
+
+    categoriesRoot.querySelectorAll("button[data-category]").forEach(item => {
+      const selected = item === button;
+      item.classList.toggle("active", selected);
+      item.setAttribute("aria-pressed", selected ? "true" : "false");
     });
 
-    button.classList.add("active");
-
-    state.category = button.dataset.category || button.innerText.trim();
+    state.category = button.dataset.category || "Все";
     state.page = "catalog";
+    state.productsCacheKey = "";
     state.productsLoadedAt = 0;
-    state.catalogPagination = { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE };
+    state.productsLoadError = "";
+    state.catalogPagination = {
+      page: 0,
+      pages: 1,
+      total: 0,
+      limit: CATALOG_PAGE_SIZE,
+      hasMore: true
+    };
 
+    button.scrollIntoView?.({ behavior: "smooth", block: "nearest", inline: "center" });
     renderProducts();
     loadProducts({ force: true });
   });
-});
 
   const adPriceInput = document.getElementById("adPrice");
 

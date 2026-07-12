@@ -11,7 +11,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.12.0";
+const APP_VERSION = "1.12.1";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -1713,7 +1713,7 @@ app.get("/api/products", async (req, res) => {
       )`);
     }
 
-    let relevanceSql = "0";
+    let relevanceSql = "";
     if (search) {
       values.push(search.toLowerCase());
       const fullSearchParameter = `$${values.length}`;
@@ -1732,6 +1732,12 @@ app.get("/api/products", async (req, res) => {
     }
 
     const whereSql = conditions.join(" AND ");
+    const orderBySql = [
+      "CASE WHEN p.featured_paid = TRUE AND p.featured_until > NOW() THEN 1 ELSE 0 END DESC",
+      ...(relevanceSql ? [`${relevanceSql} DESC`] : []),
+      "p.featured_until DESC NULLS LAST",
+      "p.created_at DESC"
+    ].join(",\n          ");
     const queryValues = [...values, limit + 1, offset];
     const result = await pool.query(
       `
@@ -1739,10 +1745,7 @@ app.get("/api/products", async (req, res) => {
         FROM products p
         WHERE ${whereSql}
         ORDER BY
-          CASE WHEN p.featured_paid = TRUE AND p.featured_until > NOW() THEN 1 ELSE 0 END DESC,
-          ${relevanceSql} DESC,
-          p.featured_until DESC NULLS LAST,
-          p.created_at DESC
+          ${orderBySql}
         LIMIT $${values.length + 1}
         OFFSET $${values.length + 2};
       `,

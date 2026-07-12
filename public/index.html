@@ -12,7 +12,7 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=1.12.0" />
+  <link rel="stylesheet" href="style.css?v=1.12.1" />
 </head>
 
 <body>
@@ -84,15 +84,15 @@
 
   <div id="catalogTopAds" class="catalog-top-ads" hidden></div>
 
-  <div class="categories">
-    <button class="active" type="button" data-category="Все">Все</button>
-    <button type="button" data-category="Электроника">📱 Электроника</button>
-    <button type="button" data-category="Авто">🚗 Авто</button>
-    <button type="button" data-category="Одежда">👕 Одежда</button>
-    <button type="button" data-category="Дом">🏠 Дом</button>
-    <button type="button" data-category="Инструменты">🔧 Инструменты</button>
-    <button type="button" data-category="Сад и огород">🌱 Сад и огород</button>
-    <button type="button" data-category="Животные">🐄 Животные</button>
+  <div class="categories" role="group" aria-label="Категории объявлений">
+    <button class="active" type="button" data-category="Все" aria-pressed="true">Все</button>
+    <button type="button" data-category="Электроника" aria-pressed="false">📱 Электроника</button>
+    <button type="button" data-category="Авто" aria-pressed="false">🚗 Авто</button>
+    <button type="button" data-category="Одежда" aria-pressed="false">👕 Одежда</button>
+    <button type="button" data-category="Дом" aria-pressed="false">🏠 Дом</button>
+    <button type="button" data-category="Инструменты" aria-pressed="false">🔧 Инструменты</button>
+    <button type="button" data-category="Сад и огород" aria-pressed="false">🌱 Сад и огород</button>
+    <button type="button" data-category="Животные" aria-pressed="false">🐄 Животные</button>
   </div>
 
   <div id="productList" class="product-list"></div>
@@ -579,6 +579,6 @@
 
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">‹</div>
 
-  <script src="script.js?v=1.12.0"></script>
+  <script src="script.js?v=1.12.1"></script>
 </body>
 </html>
