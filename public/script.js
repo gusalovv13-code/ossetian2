@@ -13,6 +13,10 @@ function escapeHTML(value = "") {
 function safeImageUrl(value) {
   const url = String(value || "").trim();
 
+  if (url === DEFAULT_IMAGE) {
+    return url;
+  }
+
   if (/^data:image\/(jpeg|jpg|png|webp);base64,/i.test(url)) {
     return url;
   }
@@ -36,8 +40,27 @@ function safeImageUrl(value) {
   return DEFAULT_IMAGE;
 }
 
+function addImageRetryParam(source) {
+  const value = String(source || "").trim();
+  if (!/^\/api\/(?:products|my-products)\//i.test(value)) return value;
+  const separator = value.includes("?") ? "&" : "?";
+  return `${value}${separator}retry=${Date.now()}`;
+}
+
 function handleImageError(image) {
-  if (!image || image.dataset.fallbackApplied === "1") return;
+  if (!image) return;
+
+  const originalSource = image.dataset.originalSrc || image.getAttribute("src") || "";
+  const retryCount = Number(image.dataset.retryCount || 0);
+
+  if (retryCount < 1 && /^\/api\/(?:products|my-products)\//i.test(originalSource)) {
+    image.dataset.originalSrc = originalSource;
+    image.dataset.retryCount = "1";
+    image.src = addImageRetryParam(originalSource);
+    return;
+  }
+
+  if (image.dataset.fallbackApplied === "1") return;
   image.dataset.fallbackApplied = "1";
   image.src = DEFAULT_IMAGE;
 }
@@ -67,8 +90,15 @@ function getSellerStatus(lastSeen) {
   return { icon: "🕘", label: getTimeAgo(Number(lastSeen)) };
 }
 
-const DEFAULT_IMAGE =
-  "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=500";
+const DEFAULT_IMAGE = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
+  <svg xmlns="http://www.w3.org/2000/svg" width="960" height="720" viewBox="0 0 960 720">
+    <rect width="960" height="720" fill="#1f2024"/>
+    <rect x="330" y="220" width="300" height="220" rx="28" fill="#2b2d33" stroke="#565962" stroke-width="8"/>
+    <circle cx="420" cy="305" r="35" fill="#6c63ff"/>
+    <path d="M355 405l92-90 70 65 55-48 58 73H355z" fill="#777b86"/>
+    <text x="480" y="525" fill="#c8cad1" font-family="Arial, sans-serif" font-size="34" text-anchor="middle">Фото недоступно</text>
+  </svg>
+`)}`;
 
 const MAX_PHOTOS = 5;
 const MAX_PRICE = 100000000;
@@ -1404,18 +1434,32 @@ function swapImageAfterLoad(imageEl, source, sequence) {
   imageEl.classList.add("is-loading");
   const preloader = new Image();
   preloader.decoding = "async";
+  let retried = false;
+
   preloader.onload = () => {
     if (sequence !== galleryImageSequence) return;
     imageEl.dataset.fallbackApplied = "0";
-    imageEl.src = source;
+    imageEl.dataset.retryCount = retried ? "1" : "0";
+    imageEl.dataset.originalSrc = source;
+    imageEl.src = preloader.src;
     imageEl.classList.remove("is-loading");
   };
+
   preloader.onerror = () => {
     if (sequence !== galleryImageSequence) return;
+
+    if (!retried && /^\/api\/(?:products|my-products)\//i.test(source)) {
+      retried = true;
+      preloader.src = addImageRetryParam(source);
+      return;
+    }
+
     imageEl.dataset.fallbackApplied = "1";
+    imageEl.dataset.originalSrc = source;
     imageEl.src = DEFAULT_IMAGE;
     imageEl.classList.remove("is-loading");
   };
+
   preloader.src = source;
 }
 
@@ -1692,7 +1736,10 @@ function renderProductDetails(product) {
         class="${index === 0 ? "active" : ""}"
         onclick="showProductImage(${index})"
         alt="Фото ${index + 1}"
-        loading="lazy"
+        loading="${index === 0 ? "eager" : "lazy"}"
+        decoding="async"
+        data-original-src="${escapeHTML(safeImageUrl(src))}"
+        onerror="handleImageError(this)"
       >
     `).join("");
     thumbs.hidden = images.length <= 1;

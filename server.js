@@ -11,7 +11,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.12.1";
+const APP_VERSION = "1.12.2";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -605,6 +605,15 @@ function normalizeProductImage(value) {
   return parseStoredDataImage(image) ? image : "";
 }
 
+function pickValidProductImage(...candidates) {
+  for (const candidate of candidates.flat(Infinity)) {
+    const normalized = normalizeProductImage(candidate);
+    if (normalized) return normalized;
+  }
+
+  return "";
+}
+
 function formatStoredPrice(value) {
   const raw = String(value ?? "").trim();
   const digits = raw.replace(/[\s\u00a0₽]/g, "");
@@ -957,6 +966,24 @@ async function initDb() {
       position INTEGER DEFAULT 0,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
+  `);
+
+  // Existing installations may already have product_images from an older release.
+  // CREATE TABLE IF NOT EXISTS does not add new columns to such a table, so every
+  // media route must be backed by explicit idempotent migrations.
+  await pool.query(`
+    ALTER TABLE product_images
+    ADD COLUMN IF NOT EXISTS preview_url TEXT DEFAULT '';
+  `);
+
+  await pool.query(`
+    ALTER TABLE product_images
+    ADD COLUMN IF NOT EXISTS position INTEGER DEFAULT 0;
+  `);
+
+  await pool.query(`
+    ALTER TABLE product_images
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
   `);
 
   await pool.query(`
@@ -1535,30 +1562,23 @@ app.get("/api/users/:id/products", async (req, res) => {
 });
 
 function sendProductMedia(res, source, cacheSeconds = 86_400, cacheScope = "public") {
-  const value = String(source || "").trim();
+  const value = normalizeProductImage(source);
+  if (!value) return res.status(404).end();
 
   if (/^https:\/\/[^\s"'<>]+$/i.test(value)) {
     res.setHeader("Cache-Control", `${cacheScope}, max-age=${cacheSeconds}, stale-while-revalidate=604800`);
     return res.redirect(302, value);
   }
 
-  const match = value.match(/^data:image\/(jpeg|jpg|png|webp);base64,([a-z0-9+/=\s]+)$/i);
-  if (!match) return res.status(404).end();
+  const parsed = parseStoredDataImage(value);
+  if (!parsed) return res.status(404).end();
 
-  try {
-    const mimeSubtype = match[1].toLowerCase() === "jpg" ? "jpeg" : match[1].toLowerCase();
-    const buffer = Buffer.from(match[2].replace(/\s+/g, ""), "base64");
-    if (!buffer.length) return res.status(404).end();
-
-    res.setHeader("Content-Type", `image/${mimeSubtype}`);
-    res.setHeader("Content-Length", String(buffer.length));
-    res.setHeader("Cache-Control", `${cacheScope}, max-age=${cacheSeconds}, stale-while-revalidate=604800`);
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    return res.send(buffer);
-  } catch (error) {
-    console.error("Product media decode error:", error);
-    return res.status(500).end();
-  }
+  res.setHeader("Content-Type", parsed.contentType);
+  res.setHeader("Content-Length", String(parsed.buffer.length));
+  res.setHeader("Cache-Control", `${cacheScope}, max-age=${cacheSeconds}, stale-while-revalidate=604800`);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Content-Disposition", "inline");
+  return res.send(parsed.buffer);
 }
 
 app.get("/api/my-products/:id/thumbnail", async (req, res) => {
@@ -1575,16 +1595,15 @@ app.get("/api/my-products/:id/thumbnail", async (req, res) => {
 
     const result = await pool.query(
       `
-        SELECT COALESCE(
-          (SELECT NULLIF(pi.preview_url, '') FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.position ASC LIMIT 1),
-          NULLIF(p.thumbnail, ''),
-          (SELECT NULLIF(pi.url, '') FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.position ASC LIMIT 1),
-          NULLIF(p.image, ''),
+        SELECT
+          (SELECT NULLIF(pi.preview_url, '') FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.position ASC, pi.created_at ASC LIMIT 1) AS preview_source,
+          NULLIF(p.thumbnail, '') AS thumbnail_source,
+          (SELECT NULLIF(pi.url, '') FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.position ASC, pi.created_at ASC LIMIT 1) AS table_source,
+          NULLIF(p.image, '') AS primary_source,
           CASE
             WHEN jsonb_typeof(p.images) = 'array' THEN p.images ->> 0
             ELSE NULL
-          END
-        ) AS source
+          END AS legacy_source
         FROM products p
         WHERE p.id = $1
           AND p.owner_id = $2
@@ -1595,7 +1614,15 @@ app.get("/api/my-products/:id/thumbnail", async (req, res) => {
     );
 
     if (result.rows.length === 0) return res.status(404).end();
-    return sendProductMedia(res, result.rows[0].source, 3_600, "private");
+    const row = result.rows[0];
+    const source = pickValidProductImage(
+      row.preview_source,
+      row.thumbnail_source,
+      row.table_source,
+      row.primary_source,
+      row.legacy_source
+    );
+    return sendProductMedia(res, source, 3_600, "private");
   } catch (error) {
     console.error("Own product thumbnail error:", error);
     return res.status(500).end();
@@ -1609,16 +1636,15 @@ app.get("/api/products/:id/thumbnail", async (req, res) => {
 
     const result = await pool.query(
       `
-        SELECT COALESCE(
-          (SELECT NULLIF(pi.preview_url, '') FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.position ASC LIMIT 1),
-          NULLIF(p.thumbnail, ''),
-          (SELECT NULLIF(pi.url, '') FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.position ASC LIMIT 1),
-          NULLIF(p.image, ''),
+        SELECT
+          (SELECT NULLIF(pi.preview_url, '') FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.position ASC, pi.created_at ASC LIMIT 1) AS preview_source,
+          NULLIF(p.thumbnail, '') AS thumbnail_source,
+          (SELECT NULLIF(pi.url, '') FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.position ASC, pi.created_at ASC LIMIT 1) AS table_source,
+          NULLIF(p.image, '') AS primary_source,
           CASE
             WHEN jsonb_typeof(p.images) = 'array' THEN p.images ->> 0
             ELSE NULL
-          END
-        ) AS source
+          END AS legacy_source
         FROM products p
         WHERE p.id = $1
           AND COALESCE(status, 'active') = 'active'
@@ -1630,7 +1656,15 @@ app.get("/api/products/:id/thumbnail", async (req, res) => {
     );
 
     if (result.rows.length === 0) return res.status(404).end();
-    return sendProductMedia(res, result.rows[0].source);
+    const row = result.rows[0];
+    const source = pickValidProductImage(
+      row.preview_source,
+      row.thumbnail_source,
+      row.table_source,
+      row.primary_source,
+      row.legacy_source
+    );
+    return sendProductMedia(res, source);
   } catch (error) {
     console.error("Product thumbnail error:", error);
     return res.status(500).end();
@@ -1647,19 +1681,25 @@ app.get("/api/products/:id/media/:index", async (req, res) => {
 
     const result = await pool.query(
       `
-        SELECT COALESCE(
+        SELECT
           (SELECT NULLIF(pi.url, '')
            FROM product_images pi
            WHERE pi.product_id = p.id
            ORDER BY pi.position ASC, pi.created_at ASC
-           OFFSET $2 LIMIT 1),
+           OFFSET ($2::int) LIMIT 1) AS table_source,
           CASE
-            WHEN jsonb_typeof(p.images) = 'array' THEN
-              COALESCE(p.images ->> $2, CASE WHEN $2 = 0 THEN NULLIF(p.image, '') END)
-            WHEN $2 = 0 THEN NULLIF(p.image, '')
+            WHEN jsonb_typeof(p.images) = 'array' THEN p.images ->> ($2::int)
             ELSE NULL
-          END
-        ) AS source
+          END AS legacy_source,
+          CASE WHEN $2::int = 0 THEN NULLIF(p.image, '') ELSE NULL END AS primary_source,
+          CASE WHEN $2::int = 0 THEN NULLIF(p.thumbnail, '') ELSE NULL END AS thumbnail_source,
+          CASE WHEN $2::int = 0 THEN
+            (SELECT NULLIF(pi.preview_url, '')
+             FROM product_images pi
+             WHERE pi.product_id = p.id
+             ORDER BY pi.position ASC, pi.created_at ASC
+             LIMIT 1)
+          ELSE NULL END AS preview_source
         FROM products p
         WHERE p.id = $1
           AND COALESCE(status, 'active') = 'active'
@@ -1671,7 +1711,15 @@ app.get("/api/products/:id/media/:index", async (req, res) => {
     );
 
     if (result.rows.length === 0) return res.status(404).end();
-    return sendProductMedia(res, result.rows[0].source);
+    const row = result.rows[0];
+    const source = pickValidProductImage(
+      row.table_source,
+      row.legacy_source,
+      row.primary_source,
+      row.thumbnail_source,
+      row.preview_source
+    );
+    return sendProductMedia(res, source);
   } catch (error) {
     console.error("Product media error:", error);
     return res.status(500).end();

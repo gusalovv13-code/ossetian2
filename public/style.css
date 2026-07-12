@@ -4029,3 +4029,13 @@ body.dark-mode #myAdsList .owner-product-card .card-action.delete {
     font-size: 11px;
   }
 }
+
+
+/* ===== v1.12.2: reliable product photo delivery ===== */
+#productThumbs img {
+  background: #202126;
+}
+#productImage.is-loading,
+#lightboxImage.is-loading {
+  opacity: 0.72;
+}
