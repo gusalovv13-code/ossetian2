@@ -96,7 +96,7 @@ const DEFAULT_IMAGE = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
     <rect x="330" y="220" width="300" height="220" rx="28" fill="#2b2d33" stroke="#565962" stroke-width="8"/>
     <circle cx="420" cy="305" r="35" fill="#6c63ff"/>
     <path d="M355 405l92-90 70 65 55-48 58 73H355z" fill="#777b86"/>
-    <text x="480" y="525" fill="#c8cad1" font-family="Arial, sans-serif" font-size="34" text-anchor="middle">Фото недоступно</text>
+    <text x="480" y="525" fill="#c8cad1" font-family="Segoe UI, Arial, sans-serif" font-size="34" text-anchor="middle">Фото недоступно</text>
   </svg>
 `)}`;
 
@@ -105,6 +105,7 @@ const MAX_PRICE = 100000000;
 const MAX_AD_IMAGE_FILE_BYTES = 15 * 1024 * 1024;
 const MAX_AD_IMAGE_DATA_LENGTH = 8_000_000;
 const CATALOG_PAGE_SIZE = 12;
+const FEATURE_REQUEST_COLORS = new Set(["purple", "green", "gold"]);
 const DATA_CACHE_TTL_MS = 30_000;
 const PRODUCT_DETAILS_CACHE_TTL_MS = 60_000;
 
@@ -113,6 +114,7 @@ let telegramAvatarObjectUrl = null;
 let productSearchTimer = null;
 let productsRequestSequence = 0;
 const featureRequestInFlight = new Set();
+let highlightRequestProductId = "";
 let fallbackAdClientKey = `client-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
 
 function readBrowserStorage(storageName, key) {
@@ -1161,9 +1163,9 @@ function getProductCard(product, options = {}) {
     ? `<span class="price-drop-card-badge">Цена снизилась${product.priceDropPercent ? ` −${Number(product.priceDropPercent)}%` : ""}</span>`
     : "";
   const status = product.status || "active";
-  const featureColor = ["gold", "purple", "blue", "green"].includes(product.featuredColor)
+  const featureColor = FEATURE_REQUEST_COLORS.has(product.featuredColor)
     ? product.featuredColor
-    : "gold";
+    : "purple";
   const featuredClass = product.isFeatured ? `is-featured featured-${featureColor}` : "";
   const featuredBadge = product.isFeatured ? '<span class="featured-card-badge">★ Выделенное</span>' : "";
   const featureRequestBadge = product.featureRequestPending
@@ -2504,7 +2506,7 @@ function openSupportMessage(message = "") {
   else window.open(url, "_blank", "noopener,noreferrer");
 }
 
-async function requestProductHighlight(productId) {
+function requestProductHighlight(productId) {
   const product = state.myProducts.find(item => item.id === productId);
   if (!product || product.featureRequestPending || featureRequestInFlight.has(productId)) return;
   if (product.status !== "active" || product.hidden || product.moderationStatus === "blocked") {
@@ -2512,37 +2514,81 @@ async function requestProductHighlight(productId) {
     return;
   }
 
+  highlightRequestProductId = productId;
+  const dialog = document.getElementById("highlightDialog");
+  const productName = document.getElementById("highlightProductName");
+  const summary = document.getElementById("highlightRequestSummary");
+  const purpleOption = dialog?.querySelector('input[name="highlightColor"][value="purple"]');
   const price = Number(state.config.featureHighlightPriceRub) || 0;
   const days = Number(state.config.featureHighlightDays) || 7;
   const priceText = price > 0 ? `${price.toLocaleString("ru-RU")} ₽` : "по согласованию";
-  const confirmed = window.confirm(
-    `Отправить заявку на цветовое выделение объявления на ${days} дней? Стоимость: ${priceText}.`
-  );
-  if (!confirmed) return;
+
+  if (productName) productName.textContent = product.name || "Объявление";
+  if (summary) {
+    summary.innerHTML = `<span>Срок</span><b>${days} дней</b><span>Стоимость</span><b>${escapeHTML(priceText)}</b>`;
+  }
+  if (purpleOption) purpleOption.checked = true;
+
+  if (dialog?.showModal) dialog.showModal();
+  else dialog?.setAttribute("open", "");
+}
+
+function closeHighlightDialog() {
+  const dialog = document.getElementById("highlightDialog");
+  if (dialog?.close) dialog.close();
+  else dialog?.removeAttribute("open");
+  highlightRequestProductId = "";
+}
+
+async function submitProductHighlightRequest(event) {
+  event.preventDefault();
+
+  const productId = highlightRequestProductId;
+  const product = state.myProducts.find(item => item.id === productId);
+  if (!product || product.featureRequestPending || featureRequestInFlight.has(productId)) {
+    closeHighlightDialog();
+    return;
+  }
+
+  const form = event.currentTarget;
+  const selectedColor = String(new FormData(form).get("highlightColor") || "purple");
+  const color = FEATURE_REQUEST_COLORS.has(selectedColor) ? selectedColor : "purple";
+  const submitButton = document.getElementById("submitHighlightRequestBtn");
+  const days = Number(state.config.featureHighlightDays) || 7;
 
   featureRequestInFlight.add(productId);
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.textContent = "Отправляем…";
+  }
+
   try {
     await apiRequest(`/api/products/${encodeURIComponent(productId)}/feature-request`, {
       method: "POST",
-      body: JSON.stringify({ color: "gold" })
+      body: JSON.stringify({ color })
     });
 
     product.featureRequestPending = true;
+    product.featureRequestColor = color;
     const cached = state.productDetailsCache[productId];
-    if (cached) cached.featureRequestPending = true;
-    renderMyAds();
-
-    const username = String(state.config.supportUsername || "").replace(/^@/, "");
-    if (username) {
-      openSupportMessage(`Здравствуйте! Я отправил заявку на выделение объявления «${product.name || product.id}» на ${days} дней за ${priceText}. ID: ${product.id}`);
-    } else {
-      alert("Заявка создана. Администратор увидит её в панели управления.");
+    if (cached) {
+      cached.featureRequestPending = true;
+      cached.featureRequestColor = color;
     }
+
+    const colorLabel = getFeatureColorLabel(color).toLowerCase();
+    closeHighlightDialog();
+    renderMyAds();
+    alert(`Заявка на ${colorLabel} выделение отправлена. Администратор напишет вам в Telegram для оплаты.`);
   } catch (error) {
     console.error("Feature request error:", error);
     alert(error.message || "Не удалось отправить заявку на выделение");
   } finally {
     featureRequestInFlight.delete(productId);
+    if (submitButton) {
+      submitButton.disabled = false;
+      submitButton.textContent = "Отправить заявку";
+    }
   }
 }
 
@@ -3350,7 +3396,8 @@ const adminState = {
   activeTab: "products",
   lastNonSearchTab: "products",
   searchTimer: null,
-  requestVersion: 0
+  requestVersion: 0,
+  featureRequests: []
 };
 
 function updateAdminMenu() {
@@ -3559,11 +3606,12 @@ function renderAdminProducts(products = []) {
 }
 
 function getFeatureColorLabel(color) {
-  const labels = { gold: "Золотое", purple: "Фиолетовое", blue: "Синее", green: "Зелёное" };
-  return labels[color] || labels.gold;
+  const labels = { purple: "Фиолетовое", green: "Зелёное", gold: "Золотое" };
+  return labels[color] || labels.purple;
 }
 
 function renderAdminFeatureRequests(requests = []) {
+  adminState.featureRequests = Array.isArray(requests) ? requests : [];
   const root = document.getElementById("adminContent");
   if (!root) return;
 
@@ -3592,6 +3640,7 @@ function renderAdminFeatureRequests(requests = []) {
         const price = Number(request.priceAmount) > 0
           ? `${Number(request.priceAmount).toLocaleString("ru-RU")} ₽`
           : "По договорённости";
+        const colorKey = FEATURE_REQUEST_COLORS.has(request.color) ? request.color : "purple";
 
         return `
           <article class="admin-feature-request-card">
@@ -3617,7 +3666,7 @@ function renderAdminFeatureRequests(requests = []) {
             </div>
 
             <div class="admin-feature-request-meta">
-              <span><b>${escapeHTML(getFeatureColorLabel(request.color))}</b> выделение</span>
+              <span class="admin-feature-color color-${escapeHTML(colorKey)}"><i aria-hidden="true"></i><b>${escapeHTML(getFeatureColorLabel(colorKey))}</b> выделение</span>
               <span><b>${Number(request.days) || 7} дней</b></span>
               <span><b>${escapeHTML(price)}</b></span>
               <span>Отправлено ${escapeHTML(formatAdminDate(request.createdAt))}</span>
@@ -3631,6 +3680,7 @@ function renderAdminFeatureRequests(requests = []) {
             </label>
 
             <div class="admin-feature-actions">
+              <button type="button" class="admin-action-button message" onclick="openAdminFeatureRequestChat('${escapeHTML(request.id)}')">✉ Написать в Telegram</button>
               <button type="button" class="admin-action-button danger" onclick="reviewAdminFeatureRequest('${escapeHTML(request.id)}','reject',this)">Отклонить</button>
               <button type="button" class="admin-action-button restore" onclick="reviewAdminFeatureRequest('${escapeHTML(request.id)}','approve',this)" ${canApprove ? "" : "disabled"}>Подтвердить и включить</button>
             </div>
@@ -3639,6 +3689,45 @@ function renderAdminFeatureRequests(requests = []) {
       }).join("")}
     </div>
   `;
+}
+
+async function openAdminFeatureRequestChat(requestId) {
+  const request = adminState.featureRequests.find(item => String(item.id) === String(requestId));
+  if (!request) {
+    alert("Заявка не найдена. Обновите раздел выделения.");
+    return;
+  }
+
+  const username = String(request.ownerUsername || "").replace(/^@/, "").trim();
+  const ownerId = String(request.ownerId || "").trim();
+  const firstName = String(request.ownerName || "").trim().split(/\s+/)[0] || "Здравствуйте";
+  const color = getFeatureColorLabel(request.color).toLowerCase();
+  const days = Math.max(1, Number(request.days) || 7);
+  const price = Number(request.priceAmount) > 0
+    ? `${Number(request.priceAmount).toLocaleString("ru-RU")} ₽`
+    : "по договорённости";
+  const message = `${firstName}, здравствуйте! Вы отправили заявку на ${color} выделение объявления «${request.productName || request.productId}» на ${days} дней. Стоимость — ${price}. После оплаты напишите сюда, и я включу выделение.`;
+
+  if (username) {
+    const url = `https://t.me/${encodeURIComponent(username)}?text=${encodeURIComponent(message)}`;
+    if (tg?.openTelegramLink) tg.openTelegramLink(url);
+    else window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+
+  if (!ownerId) {
+    alert("У пользователя нет Telegram username и ID, открыть чат невозможно.");
+    return;
+  }
+
+  try {
+    await copyText(message);
+    alert("У пользователя не указан username. Текст сообщения скопирован; сейчас откроется профиль по Telegram ID.");
+  } catch (error) {
+    console.error("Copy payment message error:", error);
+  }
+
+  window.location.href = `tg://user?id=${encodeURIComponent(ownerId)}`;
 }
 
 async function reviewAdminFeatureRequest(id, decision, button) {
@@ -4464,7 +4553,7 @@ async function toggleAdminProductFeature(id, enabled, button) {
   try {
     await apiRequest(`/api/admin/products/${encodeURIComponent(id)}/feature`, {
       method: "PATCH",
-      body: JSON.stringify({ enabled, days: Number(state.config.featureHighlightDays) || 7, color: "gold" })
+      body: JSON.stringify({ enabled, days: Number(state.config.featureHighlightDays) || 7, color: "purple" })
     });
     await loadAdminPanel();
   } catch (error) {

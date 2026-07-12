@@ -15,8 +15,8 @@ test("featured listings keep chronological catalog order", () => {
   assert.match(catalog, /p\.created_at DESC/);
 });
 
-test("feed advertising spans the full two-column catalog", () => {
-  assert.match(css, /\.advertising-feed\s*\{[\s\S]*?grid-column:\s*1\s*\/\s*-1/);
+test("feed advertising occupies one catalog cell", () => {
+  assert.match(css, /\.product-list\s*>\s*\.advertising-feed\s*\{[\s\S]*?grid-column:\s*auto/);
 });
 
 test("admin has a dedicated feature request workflow with requester identity", () => {

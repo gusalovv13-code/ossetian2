@@ -12,7 +12,7 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=1.12.4" />
+  <link rel="stylesheet" href="style.css?v=1.12.5" />
 </head>
 
 <body>
@@ -544,6 +544,45 @@
     </div>
   </div>
 
+  <dialog id="highlightDialog" class="highlight-dialog">
+    <form onsubmit="submitProductHighlightRequest(event)">
+      <div class="dialog-heading">
+        <div>
+          <small>Платное выделение</small>
+          <h3>Выберите цвет объявления</h3>
+        </div>
+        <button type="button" class="dialog-close" onclick="closeHighlightDialog()" aria-label="Закрыть">×</button>
+      </div>
+
+      <p id="highlightProductName" class="highlight-product-name"></p>
+
+      <div class="highlight-color-options" role="radiogroup" aria-label="Цвет выделения">
+        <label class="highlight-color-option color-purple">
+          <input type="radio" name="highlightColor" value="purple" checked>
+          <span class="highlight-color-swatch" aria-hidden="true"></span>
+          <span><b>Фиолетовый</b><small>Основной цвет приложения</small></span>
+        </label>
+        <label class="highlight-color-option color-green">
+          <input type="radio" name="highlightColor" value="green">
+          <span class="highlight-color-swatch" aria-hidden="true"></span>
+          <span><b>Зелёный</b><small>Яркое и спокойное выделение</small></span>
+        </label>
+        <label class="highlight-color-option color-gold">
+          <input type="radio" name="highlightColor" value="gold">
+          <span class="highlight-color-swatch" aria-hidden="true"></span>
+          <span><b>Золотой</b><small>Премиальное выделение</small></span>
+        </label>
+      </div>
+
+      <div id="highlightRequestSummary" class="highlight-request-summary"></div>
+
+      <div class="dialog-actions">
+        <button type="button" class="outline" onclick="closeHighlightDialog()">Отмена</button>
+        <button id="submitHighlightRequestBtn" type="submit" class="primary">Отправить заявку</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="reportDialog" class="report-dialog">
     <form method="dialog" onsubmit="submitProductReport(event)">
       <div class="dialog-heading">
@@ -580,6 +619,6 @@
 
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">‹</div>
 
-  <script src="script.js?v=1.12.4"></script>
+  <script src="script.js?v=1.12.5"></script>
 </body>
 </html>

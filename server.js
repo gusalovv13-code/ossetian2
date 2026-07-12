@@ -11,7 +11,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.12.4";
+const APP_VERSION = "1.12.5";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -70,7 +70,7 @@ const PRODUCT_ARCHIVE_DAYS = Math.max(1, Math.min(365, Number(process.env.PRODUC
 const DELETED_PRODUCT_RETENTION_DAYS = Math.max(1, Math.min(3650, Number(process.env.DELETED_PRODUCT_RETENTION_DAYS) || 30));
 const FEATURE_HIGHLIGHT_PRICE_RUB = Math.max(0, Number(process.env.FEATURE_HIGHLIGHT_PRICE_RUB) || 199);
 const FEATURE_HIGHLIGHT_DAYS = Math.max(1, Math.min(90, Number(process.env.FEATURE_HIGHLIGHT_DAYS) || 7));
-const FEATURE_COLORS = new Set(["gold", "purple", "blue", "green"]);
+const FEATURE_COLORS = new Set(["purple", "green", "gold"]);
 
 if (!BOT_TOKEN) {
   console.error("Ошибка: BOT_TOKEN не найден в переменных окружения");
@@ -178,7 +178,7 @@ function mapProduct(row) {
     archivedAt: row.archived_at ? new Date(row.archived_at).getTime() : null,
     expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : null,
     featuredUntil: row.featured_until ? new Date(row.featured_until).getTime() : null,
-    featuredColor: FEATURE_COLORS.has(row.featured_color) ? row.featured_color : "gold",
+    featuredColor: FEATURE_COLORS.has(row.featured_color) ? row.featured_color : "purple",
     featuredPaid: Boolean(row.featured_paid),
     featureRequestPending: Number(row.pending_feature_requests) > 0,
     createdAt: row.created_at ? new Date(row.created_at).getTime() : null,
@@ -359,7 +359,7 @@ function mapProductSummary(row) {
     archivedAt: row.archived_at ? new Date(row.archived_at).getTime() : null,
     expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : null,
     featuredUntil: row.featured_until ? new Date(row.featured_until).getTime() : null,
-    featuredColor: FEATURE_COLORS.has(row.featured_color) ? row.featured_color : "gold",
+    featuredColor: FEATURE_COLORS.has(row.featured_color) ? row.featured_color : "purple",
     featuredPaid: Boolean(row.featured_paid),
     featureRequestPending: Number(row.pending_feature_requests) > 0,
     isFeatured: Boolean(row.featured_paid && row.featured_until && new Date(row.featured_until).getTime() > Date.now()),
@@ -995,7 +995,7 @@ async function initDb() {
       id TEXT PRIMARY KEY,
       product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
       owner_id TEXT NOT NULL,
-      color TEXT DEFAULT 'gold',
+      color TEXT DEFAULT 'purple',
       days INTEGER DEFAULT 7,
       price_amount NUMERIC(12,2) DEFAULT 0,
       status TEXT DEFAULT 'pending',
@@ -1023,6 +1023,9 @@ async function initDb() {
     ALTER TABLE product_feature_requests
     ADD COLUMN IF NOT EXISTS admin_note TEXT DEFAULT '';
   `);
+  await pool.query(`ALTER TABLE product_feature_requests ALTER COLUMN color SET DEFAULT 'purple';`);
+  await pool.query(`UPDATE product_feature_requests SET color = 'purple' WHERE COALESCE(color, '') NOT IN ('purple', 'green', 'gold');`);
+
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_product_feature_requests_status_created
     ON product_feature_requests (status, created_at DESC);
@@ -1076,8 +1079,10 @@ async function initDb() {
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_until TIMESTAMPTZ;`);
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_color TEXT DEFAULT 'gold';`);
+  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_color TEXT DEFAULT 'purple';`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_paid BOOLEAN DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE products ALTER COLUMN featured_color SET DEFAULT 'purple';`);
+  await pool.query(`UPDATE products SET featured_color = 'purple' WHERE COALESCE(featured_color, '') NOT IN ('purple', 'green', 'gold');`);
   await pool.query(`
     UPDATE products
     SET published_at = COALESCE(published_at, created_at, NOW()),
@@ -1345,7 +1350,7 @@ app.get("/api/version", (req, res) => {
     ok: true,
     version: APP_VERSION,
     catalogOrderFix: true,
-    build: "ads-highlight-admin-requests"
+    build: "feature-color-chat-fonts"
   });
 });
 
@@ -2343,12 +2348,21 @@ app.patch("/api/products/:id/status", requireTelegramAuth, syncTelegramUser, asy
 app.post("/api/products/:id/feature-request", requireTelegramAuth, syncTelegramUser, async (req, res) => {
   try {
     const productId = normalizeText(req.params.id, 64);
-    const color = FEATURE_COLORS.has(req.body?.color) ? req.body.color : "gold";
+    const requestedColor = normalizeText(req.body?.color, 20).toLowerCase();
     const days = FEATURE_HIGHLIGHT_DAYS;
 
     if (!productId) {
       return res.status(400).json({ ok: false, error: "Некорректный ID объявления" });
     }
+
+    if (!FEATURE_COLORS.has(requestedColor)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Выберите фиолетовый, зелёный или золотой цвет выделения"
+      });
+    }
+
+    const color = requestedColor;
 
     const productResult = await pool.query(
       `
@@ -2934,7 +2948,7 @@ app.get(
         ownerName: [row.user_first_name, row.user_last_name].filter(Boolean).join(" ") || row.owner_name || "Пользователь",
         ownerUsername: row.user_username || row.owner_username || "",
         ownerAvatar: row.user_avatar || "",
-        color: FEATURE_COLORS.has(row.color) ? row.color : "gold",
+        color: FEATURE_COLORS.has(row.color) ? row.color : "purple",
         days: Math.max(1, Number(row.days) || FEATURE_HIGHLIGHT_DAYS),
         priceAmount: Number(row.price_amount) || 0,
         status: row.status,
@@ -3015,7 +3029,7 @@ app.patch(
 
       if (decision === "approve") {
         const days = Math.max(1, Math.min(90, Number(featureRequest.days) || FEATURE_HIGHLIGHT_DAYS));
-        const color = FEATURE_COLORS.has(featureRequest.color) ? featureRequest.color : "gold";
+        const color = FEATURE_COLORS.has(featureRequest.color) ? featureRequest.color : "purple";
         const featuredUntil = new Date(Date.now() + days * 86_400_000);
 
         await client.query(
@@ -3174,7 +3188,7 @@ app.patch(
     const productId = normalizeText(req.params.id, 64);
     const enabled = normalizeBoolean(req.body?.enabled);
     const days = Math.max(1, Math.min(90, Number(req.body?.days) || FEATURE_HIGHLIGHT_DAYS));
-    const color = FEATURE_COLORS.has(req.body?.color) ? req.body.color : "gold";
+    const color = FEATURE_COLORS.has(req.body?.color) ? req.body.color : "purple";
     const featuredUntil = enabled ? new Date(Date.now() + days * 86_400_000) : null;
 
     const result = await pool.query(
@@ -3960,7 +3974,7 @@ app.get("/call", (req, res) => {
 <title>Позвонить</title>
 <style>
 body {
-  font-family: Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   text-align:center;
   padding-top:80px;
 }
