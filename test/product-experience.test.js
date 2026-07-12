@@ -19,9 +19,9 @@ const packageSource = JSON.parse(
   await readFile(new URL("../package.json", import.meta.url), "utf8")
 );
 
-test("версия проекта обновлена до 1.11.6", () => {
-  assert.equal(packageSource.version, "1.11.6");
-  assert.match(serverSource, /const APP_VERSION = "1\.11\.6"/);
+test("версия проекта обновлена до 1.12.0", () => {
+  assert.equal(packageSource.version, "1.12.0");
+  assert.match(serverSource, /const APP_VERSION = "1\.12\.0"/);
 });
 
 test("карточка товара получает похожие объявления, товары продавца и счётчик избранного", () => {

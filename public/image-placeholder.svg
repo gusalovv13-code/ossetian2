@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600" role="img" aria-label="Фото недоступно">
+  <rect width="800" height="600" fill="#eef1f6"/>
+  <rect x="238" y="150" width="324" height="260" rx="34" fill="#d9deea"/>
+  <circle cx="330" cy="238" r="38" fill="#f7f8fc"/>
+  <path d="M270 370l105-105 70 70 50-50 67 85H270z" fill="#f7f8fc"/>
+  <text x="400" y="480" text-anchor="middle" font-family="Arial, sans-serif" font-size="34" font-weight="700" fill="#7b8496">Фото недоступно</text>
+</svg>

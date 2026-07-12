@@ -12,7 +12,7 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=1.11.6" />
+  <link rel="stylesheet" href="style.css?v=1.12.0" />
 </head>
 
 <body>
@@ -70,16 +70,20 @@
     </section>
 
    <section id="catalog" class="page">
-  <form id="searchForm" class="search-form" action="javascript:void(0);">
+  <form id="searchForm" class="search-form" action="javascript:void(0);" role="search">
+    <span class="search-icon" aria-hidden="true">⌕</span>
     <input
       id="searchInput"
       class="search"
       type="search"
-      placeholder="Поиск товаров..."
-      enterkeyhint="done"
+      placeholder="Товар, категория, город..."
+      enterkeyhint="search"
       autocomplete="off"
+      aria-label="Поиск объявлений"
     />
+    <button id="clearSearchBtn" class="search-clear" type="button" aria-label="Очистить поиск" hidden>×</button>
   </form>
+  <div id="searchSummary" class="search-summary" aria-live="polite"></div>
 
   <div id="catalogTopAds" class="catalog-top-ads" hidden></div>
 
@@ -349,6 +353,7 @@
         <button class="active" data-status="active" onclick="setMyAdsTab('active')" type="button">Активные</button>
         <button data-status="sold" onclick="setMyAdsTab('sold')" type="button">Проданные</button>
         <button data-status="draft" onclick="setMyAdsTab('draft')" type="button">Черновики</button>
+        <button data-status="archived" onclick="setMyAdsTab('archived')" type="button">Архив</button>
       </div>
 
       <div id="myAdsList" class="product-list"></div>
@@ -395,8 +400,31 @@
     </section>
 
     <section id="chats" class="page">
-      <h2>Чаты</h2>
-      <p class="muted">Позже подключим Telegram-чаты.</p>
+      <div class="section-heading-row">
+        <div>
+          <h2>Сообщения</h2>
+          <p class="muted">Переписка по объявлениям внутри приложения.</p>
+        </div>
+        <button class="icon-button" type="button" onclick="loadChats({ force: true })" aria-label="Обновить чаты">↻</button>
+      </div>
+      <div id="chatList" class="chat-list"></div>
+    </section>
+
+    <section id="chat" class="page chat-page">
+      <div class="chat-product-bar">
+        <img id="chatProductImage" src="/image-placeholder.svg" alt="Фото объявления">
+        <div>
+          <small>Объявление</small>
+          <b id="chatProductName">Чат</b>
+          <span id="chatCounterpartName"></span>
+        </div>
+        <button id="openChatProductBtn" class="icon-button" type="button" aria-label="Открыть объявление">›</button>
+      </div>
+      <div id="chatMessages" class="chat-messages" aria-live="polite"></div>
+      <form id="chatComposer" class="chat-composer" onsubmit="sendChatMessage(event)">
+        <textarea id="chatMessageInput" maxlength="2000" rows="1" placeholder="Напишите сообщение..." aria-label="Сообщение"></textarea>
+        <button id="sendChatMessageBtn" type="submit" class="primary" aria-label="Отправить сообщение">➤</button>
+      </form>
     </section>
 
     <section id="profile" class="page">
@@ -466,8 +494,8 @@
         ＋
       </button>
 
-      <button onclick="showPage('chats')" type="button">
-        💬
+      <button onclick="showPage('chats')" type="button" class="nav-chat-button">
+        <span class="nav-icon-wrap">💬<b id="chatUnreadBadge" class="nav-badge" hidden>0</b></span>
         <small>Чаты</small>
       </button>
 
@@ -529,10 +557,43 @@
   <div id="photoLightbox" class="photo-lightbox" hidden role="dialog" aria-modal="true" aria-label="Просмотр фотографии">
     <button class="lightbox-close" type="button" onclick="closePhotoLightbox()" aria-label="Закрыть">×</button>
     <button class="lightbox-arrow lightbox-prev" type="button" onclick="changeProductImage(-1)" aria-label="Предыдущее фото">‹</button>
-    <img id="lightboxImage" src="" alt="Увеличенное фото товара" />
+    <div id="lightboxViewport" class="lightbox-viewport">
+      <img id="lightboxImage" src="" alt="Увеличенное фото товара" draggable="false" />
+    </div>
     <button class="lightbox-arrow lightbox-next" type="button" onclick="changeProductImage(1)" aria-label="Следующее фото">›</button>
+    <div class="lightbox-toolbar" aria-label="Масштаб фотографии">
+      <button type="button" onclick="changeLightboxZoom(-0.5)" aria-label="Уменьшить">−</button>
+      <button id="lightboxZoomLabel" type="button" onclick="resetLightboxZoom()" aria-label="Сбросить масштаб">100%</button>
+      <button type="button" onclick="changeLightboxZoom(0.5)" aria-label="Увеличить">＋</button>
+    </div>
     <span id="lightboxCounter" class="lightbox-counter">1 / 1</span>
   </div>
+
+  <dialog id="highlightDialog" class="report-dialog highlight-dialog">
+    <form method="dialog" onsubmit="submitHighlightRequest(event)">
+      <div class="dialog-heading">
+        <div>
+          <small>Продвижение</small>
+          <h3>Выделить объявление</h3>
+        </div>
+        <button type="button" class="dialog-close" onclick="closeHighlightDialog()" aria-label="Закрыть">×</button>
+      </div>
+      <p class="muted">После оплаты администратор подтвердит заявку, и карточка будет выделена цветом.</p>
+      <input id="highlightProductId" type="hidden">
+      <label for="highlightColor">Цвет</label>
+      <select id="highlightColor" required>
+        <option value="violet">Фиолетовый</option>
+        <option value="gold">Золотой</option>
+        <option value="green">Зелёный</option>
+      </select>
+      <label for="highlightPlan">Срок и стоимость</label>
+      <select id="highlightPlan" required></select>
+      <div class="dialog-actions">
+        <button type="button" class="outline" onclick="closeHighlightDialog()">Отмена</button>
+        <button id="submitHighlightBtn" type="submit" class="primary">Отправить заявку</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="reportDialog" class="report-dialog">
     <form method="dialog" onsubmit="submitProductReport(event)">
@@ -570,6 +631,6 @@
 
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">‹</div>
 
-  <script src="script.js?v=1.11.6"></script>
+  <script src="script.js?v=1.12.0"></script>
 </body>
 </html>
