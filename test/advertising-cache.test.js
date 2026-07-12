@@ -7,8 +7,8 @@ const clientSource = await readFile(new URL("../public/script.js", import.meta.u
 const htmlSource = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 
 test("клиентские файлы рекламы имеют актуальную версию кеша", () => {
-  assert.match(htmlSource, /style\.css\?v=1\.11\.5/);
-  assert.match(htmlSource, /script\.js\?v=1\.11\.5/);
+  assert.match(htmlSource, /style\.css\?v=1\.11\.6/);
+  assert.match(htmlSource, /script\.js\?v=1\.11\.6/);
   assert.doesNotMatch(htmlSource, /\?v=1120/);
 });
 

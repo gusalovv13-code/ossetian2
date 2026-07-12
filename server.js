@@ -11,7 +11,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.11.5";
+const APP_VERSION = "1.11.6";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -65,6 +65,7 @@ const MODERATION_MATCH_TYPES = new Set(["word", "phrase", "domain"]);
 const AD_PLACEMENTS = new Set(["catalog_top", "catalog_feed", "product_detail"]);
 const AD_STATUSES = new Set(["draft", "active", "paused", "ended"]);
 const AD_BILLING_MODELS = new Set(["flat", "cpm", "cpc"]);
+const MAX_STORED_IMAGE_BYTES = 6 * 1024 * 1024;
 
 if (!BOT_TOKEN) {
   console.error("Ошибка: BOT_TOKEN не найден в переменных окружения");
@@ -400,6 +401,21 @@ function mapAdCampaign(row) {
   };
 }
 
+function buildAdImageUrl(row) {
+  const version = row.updated_at || row.created_at;
+  const timestamp = version ? new Date(version).getTime() : 0;
+  const base = `/api/ads/${encodeURIComponent(String(row.id || ""))}/image`;
+  return timestamp > 0 ? `${base}?v=${timestamp}` : base;
+}
+
+function mapPublicAdCampaign(row) {
+  const ad = mapAdCampaign(row);
+  if (/^data:image\/(jpeg|jpg|png|webp);base64,/i.test(String(row.image_url || ""))) {
+    ad.imageUrl = buildAdImageUrl(row);
+  }
+  return ad;
+}
+
 function getTelegramDisplayName(user) {
   return `${user.firstName || ""} ${user.lastName || ""}`.trim();
 }
@@ -505,24 +521,59 @@ function normalizePositiveInteger(value, fallback, maximum) {
   return Math.min(number, maximum);
 }
 
+function hasValidImageSignature(buffer, subtype) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 4) return false;
+  const type = String(subtype || "").toLowerCase();
+
+  if (type === "jpg" || type === "jpeg") {
+    return buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  }
+
+  if (type === "png") {
+    return buffer.length >= 8 && buffer.subarray(0, 8).equals(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    );
+  }
+
+  if (type === "webp") {
+    return buffer.length >= 12 &&
+      buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+      buffer.subarray(8, 12).toString("ascii") === "WEBP";
+  }
+
+  return false;
+}
+
+function parseStoredDataImage(value) {
+  const image = String(value ?? "").trim();
+  if (!image || image.length > 8_500_000) return null;
+
+  const match = image.match(/^data:image\/(jpeg|jpg|png|webp);base64,([a-z0-9+/]+={0,2})$/i);
+  if (!match) return null;
+
+  const subtype = match[1].toLowerCase();
+  const payload = match[2];
+  if (payload.length % 4 === 1) return null;
+
+  const buffer = Buffer.from(payload, "base64");
+  if (!buffer.length || buffer.length > MAX_STORED_IMAGE_BYTES) return null;
+  if (!hasValidImageSignature(buffer, subtype)) return null;
+
+  return {
+    buffer,
+    contentType: subtype === "jpg" ? "image/jpeg" : `image/${subtype}`
+  };
+}
+
 function normalizeProductImage(value) {
   const image = String(value ?? "").trim();
-
   if (!image) return "";
 
-  const isDataImage = /^data:image\/(jpeg|jpg|png|webp);base64,[a-z0-9+/=\s]+$/i.test(image);
-  const isHttpsImage = /^https:\/\/[^\s"'<>]+$/i.test(image);
-
-  if (!isDataImage && !isHttpsImage) {
-    return "";
+  if (/^https:\/\/[^\s"'<>]+$/i.test(image)) {
+    return image;
   }
 
-  // Ограничиваем одно изображение примерно шестью мегабайтами в base64.
-  if (image.length > 8_500_000) {
-    return "";
-  }
-
-  return image;
+  return parseStoredDataImage(image) ? image : "";
 }
 
 function formatStoredPrice(value) {
@@ -2272,10 +2323,46 @@ app.get("/api/ads", async (req, res) => {
       values
     );
 
-    res.json({ ok: true, ads: result.rows.map(mapAdCampaign) });
+    res.json({ ok: true, ads: result.rows.map(mapPublicAdCampaign) });
   } catch (error) {
     console.error("Get ads error:", error);
     res.status(500).json({ ok: false, error: "Не удалось загрузить рекламу" });
+  }
+});
+
+app.get("/api/ads/:id/image", async (req, res) => {
+  try {
+    const adId = normalizeText(req.params.id, 64);
+    const result = await pool.query(
+      `
+        SELECT id, image_url, updated_at, created_at
+        FROM advertising_campaigns
+        WHERE id = $1
+          AND LOWER(TRIM(COALESCE(status, ''))) = 'active'
+          AND (starts_at IS NULL OR starts_at <= NOW())
+          AND (ends_at IS NULL OR ends_at >= NOW())
+        LIMIT 1;
+      `,
+      [adId]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).end();
+    }
+
+    const parsed = parseStoredDataImage(result.rows[0].image_url);
+    if (!parsed) {
+      return res.status(404).end();
+    }
+
+    res.set("Content-Type", parsed.contentType);
+    res.set("Content-Length", String(parsed.buffer.length));
+    res.set("Cache-Control", "public, max-age=86400, immutable");
+    res.set("X-Content-Type-Options", "nosniff");
+    return res.send(parsed.buffer);
+  } catch (error) {
+    console.error("Get ad image error:", error);
+    return res.status(500).end();
   }
 });
 
@@ -2944,7 +3031,8 @@ app.post(
   adminRoute(async (req, res) => {
     const title = normalizeText(req.body?.title, 120);
     const description = normalizeText(req.body?.description, 1000);
-    const imageUrl = normalizeProductImage(req.body?.imageUrl);
+    const rawImageUrl = String(req.body?.imageUrl ?? "").trim();
+    const imageUrl = normalizeProductImage(rawImageUrl);
     const targetUrl = normalizeAdTargetUrl(req.body?.targetUrl);
     const linkedProductId = normalizeText(req.body?.linkedProductId, 64);
     const buttonText = normalizeText(req.body?.buttonText, 40) || "Подробнее";
@@ -2961,6 +3049,9 @@ app.post(
 
     if (!title || (!targetUrl && !linkedProductId)) {
       return res.status(400).json({ ok: false, error: "Укажите название и ссылку либо ID товара" });
+    }
+    if (rawImageUrl && !imageUrl) {
+      return res.status(400).json({ ok: false, error: "Фото рекламы повреждено, имеет неподдерживаемый формат или слишком большой размер" });
     }
     if (startsAt && endsAt && new Date(startsAt) >= new Date(endsAt)) {
       return res.status(400).json({ ok: false, error: "Дата окончания должна быть позже даты начала" });
@@ -3001,6 +3092,8 @@ app.patch(
   adminRoute(async (req, res) => {
     const adId = normalizeText(req.params.id, 64);
     const title = normalizeText(req.body?.title, 120);
+    const rawImageUrl = String(req.body?.imageUrl ?? "").trim();
+    const imageUrl = normalizeProductImage(rawImageUrl);
     const targetUrl = normalizeAdTargetUrl(req.body?.targetUrl);
     const linkedProductId = normalizeText(req.body?.linkedProductId, 64);
     const placement = AD_PLACEMENTS.has(req.body?.placement) ? req.body.placement : "catalog_feed";
@@ -3012,6 +3105,9 @@ app.patch(
     const isPaid = normalizeBoolean(req.body?.isPaid);
     if (!adId || !title || (!targetUrl && !linkedProductId)) {
       return res.status(400).json({ ok: false, error: "Проверьте основные поля кампании" });
+    }
+    if (rawImageUrl && !imageUrl) {
+      return res.status(400).json({ ok: false, error: "Фото рекламы повреждено, имеет неподдерживаемый формат или слишком большой размер" });
     }
     if (startsAt && endsAt && new Date(startsAt) >= new Date(endsAt)) {
       return res.status(400).json({ ok: false, error: "Дата окончания должна быть позже даты начала" });
@@ -3034,7 +3130,7 @@ app.patch(
             billing_model=$15, rate_amount=$16, is_paid=$17, updated_at=NOW()
         WHERE id=$1 RETURNING *;
       `,
-      [adId, title, normalizeText(req.body?.description,1000), normalizeProductImage(req.body?.imageUrl),
+      [adId, title, normalizeText(req.body?.description,1000), imageUrl,
        targetUrl, linkedProductId, normalizeText(req.body?.buttonText,40) || "Подробнее",
        placement, status, startsAt, endsAt,
        Math.max(-100,Math.min(100,Number(req.body?.priority)||0)),
@@ -3319,6 +3415,26 @@ app.get("*", (req, res) => {
   res.set("Pragma", "no-cache");
   res.set("Expires", "0");
   res.sendFile(path.join(publicDir, "index.html"));
+});
+
+app.use((error, req, res, next) => {
+  if (error?.type === "entity.too.large") {
+    return res.status(413).json({
+      ok: false,
+      error: "Загружаемые данные слишком большие. Уменьшите размер фотографии и повторите попытку"
+    });
+  }
+
+  if (error?.type === "entity.parse.failed") {
+    return res.status(400).json({ ok: false, error: "Сервер получил некорректные данные" });
+  }
+
+  if (String(req.path || "").startsWith("/api/")) {
+    console.error("Unhandled API error:", error);
+    return res.status(500).json({ ok: false, error: "Внутренняя ошибка сервера" });
+  }
+
+  return next(error);
 });
 
 initDb()

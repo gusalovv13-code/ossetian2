@@ -3358,3 +3358,118 @@ button,
 .home-top-ads {
   margin-top: 14px;
 }
+
+/* v1.11.6: загрузка фото рекламной кампании с телефона */
+.ad-image-field {
+  display: grid;
+  gap: 7px;
+}
+
+.ad-image-field-title {
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.ad-image-upload-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid #d7dbe3;
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.ad-image-preview {
+  min-height: 126px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 4px;
+  overflow: hidden;
+  border: 1px dashed #c7cdda;
+  border-radius: 12px;
+  background: #fff;
+  color: #64748b;
+  text-align: center;
+}
+
+.ad-image-preview b {
+  color: #334155;
+  font-size: 13px;
+}
+
+.ad-image-preview small,
+.ad-image-help {
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.ad-image-preview.has-image {
+  display: block;
+  border-style: solid;
+}
+
+.ad-image-preview img {
+  display: block;
+  width: 100%;
+  height: 180px;
+  object-fit: cover;
+}
+
+.ad-image-placeholder-icon {
+  font-size: 28px;
+}
+
+.ad-image-actions {
+  display: grid;
+  gap: 8px;
+  min-width: 142px;
+}
+
+.ad-image-actions button {
+  width: 100%;
+}
+
+.ad-image-actions button[hidden] {
+  display: none !important;
+}
+
+body.dark-mode .ad-image-upload-box {
+  background: #121620;
+  border-color: #343b4c;
+}
+
+body.dark-mode .ad-image-preview {
+  background: #191d27;
+  border-color: #465064;
+  color: #aeb5c2;
+}
+
+body.dark-mode .ad-image-preview b,
+body.dark-mode .ad-image-help {
+  color: #d6d9e0;
+}
+
+@media (max-width: 640px) {
+  .ad-image-upload-box {
+    grid-template-columns: 1fr;
+  }
+
+  .ad-image-actions {
+    grid-template-columns: 1fr 1fr;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 390px) {
+  .ad-image-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .ad-image-preview img {
+    height: 150px;
+  }
+}

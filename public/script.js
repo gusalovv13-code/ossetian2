@@ -29,6 +29,10 @@ function safeImageUrl(value) {
     return url;
   }
 
+  if (/^\/api\/ads\/[a-z0-9%._~-]+\/image(?:\?v=\d+)?$/i.test(url)) {
+    return url;
+  }
+
   return DEFAULT_IMAGE;
 }
 
@@ -68,6 +72,8 @@ const DEFAULT_IMAGE =
 
 const MAX_PHOTOS = 5;
 const MAX_PRICE = 100000000;
+const MAX_AD_IMAGE_FILE_BYTES = 15 * 1024 * 1024;
+const MAX_AD_IMAGE_DATA_LENGTH = 8_000_000;
 const CATALOG_PAGE_SIZE = 12;
 const DATA_CACHE_TTL_MS = 30_000;
 const PRODUCT_DETAILS_CACHE_TTL_MS = 60_000;
@@ -76,6 +82,26 @@ const tg = window.Telegram?.WebApp || null;
 let telegramAvatarObjectUrl = null;
 let productSearchTimer = null;
 let productsRequestSequence = 0;
+let fallbackAdClientKey = `client-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+
+function readBrowserStorage(storageName, key) {
+  try {
+    return window[storageName]?.getItem(key) || "";
+  } catch (error) {
+    console.warn(`Хранилище ${storageName} недоступно:`, error);
+    return "";
+  }
+}
+
+function writeBrowserStorage(storageName, key, value) {
+  try {
+    window[storageName]?.setItem(key, String(value));
+    return true;
+  } catch (error) {
+    console.warn(`Не удалось записать в ${storageName}:`, error);
+    return false;
+  }
+}
 let productsAbortController = null;
 let productOpenSequence = 0;
 
@@ -204,12 +230,10 @@ async function loadConfig() {
 }
 
 function getAdClientKey() {
-  let key = localStorage.getItem("adClientKey");
-  if (!key) {
-    key = `client-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
-    localStorage.setItem("adClientKey", key);
-  }
-  return key;
+  const storedKey = readBrowserStorage("localStorage", "adClientKey");
+  if (storedKey) return storedKey;
+  writeBrowserStorage("localStorage", "adClientKey", fallbackAdClientKey);
+  return fallbackAdClientKey;
 }
 
 async function loadAds() {
@@ -227,14 +251,14 @@ async function loadAds() {
 async function trackAdEvent(adId, eventType) {
   if (!adId) return;
   const sessionKey = `ad-${eventType}-${adId}`;
-  if (eventType === "impression" && sessionStorage.getItem(sessionKey)) return;
+  if (eventType === "impression" && readBrowserStorage("sessionStorage", sessionKey)) return;
 
   try {
     await apiRequest(`/api/ads/${encodeURIComponent(adId)}/${eventType}`, {
       method: "POST",
       body: JSON.stringify({ clientKey: getAdClientKey() })
     });
-    if (eventType === "impression") sessionStorage.setItem(sessionKey, "1");
+    if (eventType === "impression") writeBrowserStorage("sessionStorage", sessionKey, "1");
   } catch (error) {
     console.error(`Ad ${eventType} tracking error:`, error);
   }
@@ -255,7 +279,7 @@ function renderAdCard(ad, variant = "feed") {
 
   return `
     <article class="advertising-card advertising-${escapeHTML(variant)}" onclick="openAdCampaign('${adId}')">
-      ${image ? `<img src="${escapeHTML(image)}" alt="${escapeHTML(ad.title || "Реклама")}" loading="lazy">` : '<div class="advertising-placeholder">📣</div>'}
+      ${image ? `<img src="${escapeHTML(image)}" alt="${escapeHTML(ad.title || "Реклама")}" loading="lazy" onerror="handleImageError(this)">` : '<div class="advertising-placeholder">📣</div>'}
       <div class="advertising-content">
         <span class="advertising-label">Реклама</span>
         <h4>${escapeHTML(ad.title || "Рекламное предложение")}</h4>
@@ -846,27 +870,37 @@ function compressImage(file, maxDimension = 900, quality = 0.72) {
       const img = new Image();
 
       img.onload = () => {
-        const canvas = document.createElement("canvas");
+        try {
+          const canvas = document.createElement("canvas");
 
-        const scale = Math.min(
-          1,
-          maxDimension / Math.max(img.width, 1),
-          maxDimension / Math.max(img.height, 1)
-        );
-        const width = Math.max(1, Math.round(img.width * scale));
-        const height = Math.max(1, Math.round(img.height * scale));
+          const scale = Math.min(
+            1,
+            maxDimension / Math.max(img.width, 1),
+            maxDimension / Math.max(img.height, 1)
+          );
+          const width = Math.max(1, Math.round(img.width * scale));
+          const height = Math.max(1, Math.round(img.height * scale));
 
-        canvas.width = width;
-        canvas.height = height;
+          canvas.width = width;
+          canvas.height = height;
 
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0, width, height);
+          const ctx = canvas.getContext("2d");
+          if (!ctx) throw new Error("Браузер не поддерживает обработку изображений");
+          ctx.drawImage(img, 0, 0, width, height);
 
-        const webpImage = canvas.toDataURL("image/webp", quality);
-        const compressedImage = webpImage.startsWith("data:image/webp")
-          ? webpImage
-          : canvas.toDataURL("image/jpeg", quality);
-        resolve(compressedImage);
+          const webpImage = canvas.toDataURL("image/webp", quality);
+          const compressedImage = webpImage.startsWith("data:image/webp")
+            ? webpImage
+            : canvas.toDataURL("image/jpeg", quality);
+
+          if (!/^data:image\/(jpeg|jpg|webp);base64,/i.test(compressedImage)) {
+            throw new Error("Не удалось сжать изображение");
+          }
+
+          resolve(compressedImage);
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error("Не удалось обработать изображение"));
+        }
       };
 
       img.onerror = () => {
@@ -3015,7 +3049,7 @@ function applyTheme(enabled, persist = true) {
   document.body.classList.toggle("dark-mode", enabled);
 
   if (persist) {
-    localStorage.setItem("darkMode", enabled ? "1" : "0");
+    writeBrowserStorage("localStorage", "darkMode", enabled ? "1" : "0");
   }
 
   const toggle = document.getElementById("darkModeToggle");
@@ -3039,7 +3073,7 @@ function toggleDarkMode(enabled) {
   applyTheme(Boolean(enabled), true);
 }
 
-applyTheme(localStorage.getItem("darkMode") === "1", false);
+applyTheme(readBrowserStorage("localStorage", "darkMode") === "1", false);
 
 initApp().catch(error => {
   console.error("Ошибка запуска приложения:", error);
@@ -3553,8 +3587,104 @@ function getAdDeliveryNote(ad) {
   return "Кампания готова к показу.";
 }
 
+let adminAdImageData = "";
+let adminAdImageBusy = false;
+let adminAdImageRequestId = 0;
+
+function setAdImageBusy(isBusy) {
+  adminAdImageBusy = Boolean(isBusy);
+  const chooseButton = document.getElementById("adCampaignImageChoose");
+  const saveButton = document.getElementById("saveAdCampaignButton");
+  if (chooseButton) {
+    chooseButton.disabled = adminAdImageBusy;
+    chooseButton.textContent = adminAdImageBusy ? "Обрабатываем фото…" : "📷 Выбрать фото";
+  }
+  if (saveButton) saveButton.disabled = adminAdImageBusy;
+}
+
+function renderAdCampaignImagePreview() {
+  const preview = document.getElementById("adCampaignImagePreview");
+  const removeButton = document.getElementById("adCampaignImageRemove");
+  if (!preview) return;
+
+  if (!adminAdImageData) {
+    preview.innerHTML = `<span class="ad-image-placeholder-icon">🖼️</span><b>Фото не выбрано</b><small>На телефоне откроется камера или галерея</small>`;
+    preview.classList.remove("has-image");
+    if (removeButton) removeButton.hidden = true;
+    return;
+  }
+
+  preview.innerHTML = `<img src="${escapeHTML(safeImageUrl(adminAdImageData))}" alt="Предпросмотр рекламы" onerror="handleImageError(this)">`;
+  preview.classList.add("has-image");
+  if (removeButton) removeButton.hidden = false;
+}
+
+async function compressAdCampaignImage(file) {
+  const attempts = [
+    [1600, 0.82],
+    [1300, 0.76],
+    [1100, 0.69],
+    [900, 0.62]
+  ];
+
+  for (const [maxDimension, quality] of attempts) {
+    const compressed = await compressImage(file, maxDimension, quality);
+    if (compressed.length <= MAX_AD_IMAGE_DATA_LENGTH) return compressed;
+  }
+
+  throw new Error("Фото остаётся слишком большим даже после сжатия");
+}
+
+async function handleAdCampaignImageChange(event) {
+  const input = event?.target;
+  const file = input?.files?.[0];
+  if (!file) return;
+
+  const looksLikeImage = String(file.type || "").startsWith("image/") ||
+    /\.(jpe?g|png|webp|heic|heif)$/i.test(String(file.name || ""));
+  if (!looksLikeImage) {
+    alert("Выберите файл изображения");
+    input.value = "";
+    return;
+  }
+
+  if (file.size > MAX_AD_IMAGE_FILE_BYTES) {
+    alert("Фото больше 15 МБ. Выберите файл меньшего размера");
+    input.value = "";
+    return;
+  }
+
+  const requestId = ++adminAdImageRequestId;
+  setAdImageBusy(true);
+  try {
+    const compressed = await compressAdCampaignImage(file);
+    if (requestId !== adminAdImageRequestId) return;
+    adminAdImageData = compressed;
+    renderAdCampaignImagePreview();
+  } catch (error) {
+    if (requestId !== adminAdImageRequestId) return;
+    console.error("Не удалось обработать фото рекламы:", error);
+    alert("Не удалось обработать фото. Используйте JPEG, PNG или WEBP");
+  } finally {
+    if (input) input.value = "";
+    if (requestId === adminAdImageRequestId) setAdImageBusy(false);
+  }
+}
+
+function removeAdCampaignImage() {
+  adminAdImageRequestId += 1;
+  adminAdImageData = "";
+  setAdImageBusy(false);
+  const input = document.getElementById("adCampaignImageFile");
+  if (input) input.value = "";
+  renderAdCampaignImagePreview();
+}
+
 function renderAdminAds(ads = []) {
   adminAdsCache = ads;
+  adminAdImageRequestId += 1;
+  adminAdImageData = "";
+  adminAdImageBusy = false;
   const root = document.getElementById("adminContent");
   if (!root) return;
   root.innerHTML = `
@@ -3565,7 +3695,20 @@ function renderAdminAds(ads = []) {
         <label>Название<input id="adCampaignTitle" maxlength="120" placeholder="Например: Доставка мебели"></label>
         <label>Кнопка<input id="adCampaignButton" maxlength="40" value="Подробнее"></label>
         <label class="wide">Описание<textarea id="adCampaignDescription" maxlength="1000" placeholder="Короткий рекламный текст"></textarea></label>
-        <label class="wide">URL изображения<input id="adCampaignImage" placeholder="https://..."></label>
+        <div class="wide ad-image-field">
+          <span class="ad-image-field-title">Фото рекламы</span>
+          <input id="adCampaignImageFile" type="file" accept="image/*" hidden onchange="handleAdCampaignImageChange(event)">
+          <div class="ad-image-upload-box">
+            <div id="adCampaignImagePreview" class="ad-image-preview" aria-live="polite">
+              <span class="ad-image-placeholder-icon">🖼️</span><b>Фото не выбрано</b><small>На телефоне откроется камера или галерея</small>
+            </div>
+            <div class="ad-image-actions">
+              <button id="adCampaignImageChoose" type="button" class="admin-action-button restore" onclick="document.getElementById('adCampaignImageFile')?.click()">📷 Выбрать фото</button>
+              <button id="adCampaignImageRemove" type="button" class="admin-action-button danger" onclick="removeAdCampaignImage()" hidden>Удалить фото</button>
+            </div>
+          </div>
+          <small class="ad-image-help">JPEG, PNG или WEBP. Фото автоматически сжимается перед отправкой.</small>
+        </div>
         <label class="wide">Внешняя ссылка<input id="adCampaignTarget" placeholder="https://..."></label>
         <label>ID объявления<input id="adCampaignProduct" maxlength="64" placeholder="Вместо внешней ссылки"></label>
         <label>Размещение<select id="adCampaignPlacement"><option value="catalog_top">Главная + верх каталога</option><option value="catalog_feed">В ленте товаров</option><option value="product_detail">В карточке товара</option></select></label>
@@ -3579,13 +3722,13 @@ function renderAdminAds(ads = []) {
         <label>Тариф, ₽<input id="adCampaignRate" type="number" min="0" step="0.01" value="0"></label>
         <label class="ad-paid-label"><input id="adCampaignPaid" type="checkbox"> Кампания оплачена</label>
       </div>
-      <div class="admin-report-actions"><button type="button" class="admin-action-button restore" onclick="clearAdCampaignForm()">Очистить</button><button type="button" class="admin-action-button" onclick="saveAdCampaign(this)">Сохранить кампанию</button></div>
+      <div class="admin-report-actions"><button type="button" class="admin-action-button restore" onclick="clearAdCampaignForm()">Очистить</button><button id="saveAdCampaignButton" type="button" class="admin-action-button" onclick="saveAdCampaign(this)">Сохранить кампанию</button></div>
     </section>
     <div class="admin-section-heading"><div><b>Рекламные кампании</b><small>${ads.length} записей</small></div></div>
     <div class="admin-list">
       ${ads.length ? ads.map(ad => `
         <article class="admin-record ad-admin-record">
-          ${ad.imageUrl ? `<img class="admin-record-image" src="${escapeHTML(safeImageUrl(ad.imageUrl))}" alt="">` : '<div class="admin-record-image advertising-placeholder">📣</div>'}
+          ${ad.imageUrl ? `<img class="admin-record-image" src="${escapeHTML(safeImageUrl(ad.imageUrl))}" alt="" onerror="handleImageError(this)">` : '<div class="admin-record-image advertising-placeholder">📣</div>'}
           <div class="admin-record-main">
             <div class="admin-record-title-row"><b>${escapeHTML(ad.title)}</b><span class="admin-badge ${ad.status === "active" ? "success" : "warning"}">${escapeHTML(ad.status)}</span></div>
             <p>${escapeHTML(ad.description || "Без описания")}</p>
@@ -3610,7 +3753,7 @@ function getAdCampaignFormData() {
   return {
     title: document.getElementById("adCampaignTitle")?.value.trim() || "",
     description: document.getElementById("adCampaignDescription")?.value.trim() || "",
-    imageUrl: document.getElementById("adCampaignImage")?.value.trim() || "",
+    imageUrl: adminAdImageData,
     targetUrl: document.getElementById("adCampaignTarget")?.value.trim() || "",
     linkedProductId: document.getElementById("adCampaignProduct")?.value.trim() || "",
     buttonText: document.getElementById("adCampaignButton")?.value.trim() || "Подробнее",
@@ -3628,6 +3771,7 @@ function getAdCampaignFormData() {
 }
 
 async function saveAdCampaign(button) {
+  if (adminAdImageBusy) return alert("Фото ещё обрабатывается");
   const id = document.getElementById("adCampaignId")?.value || "";
   const data = getAdCampaignFormData();
   if (!data.title || (!data.targetUrl && !data.linkedProductId)) return alert("Укажите название и ссылку либо ID объявления");
@@ -3644,7 +3788,10 @@ function editAdCampaignById(id) {
   document.getElementById("adCampaignId").value = ad.id || "";
   document.getElementById("adCampaignTitle").value = ad.title || "";
   document.getElementById("adCampaignDescription").value = ad.description || "";
-  document.getElementById("adCampaignImage").value = ad.imageUrl || "";
+  adminAdImageRequestId += 1;
+  adminAdImageData = ad.imageUrl || "";
+  setAdImageBusy(false);
+  renderAdCampaignImagePreview();
   document.getElementById("adCampaignTarget").value = ad.targetUrl || "";
   document.getElementById("adCampaignProduct").value = ad.linkedProductId || "";
   document.getElementById("adCampaignButton").value = ad.buttonText || "Подробнее";
@@ -3662,7 +3809,13 @@ function editAdCampaignById(id) {
 }
 
 function clearAdCampaignForm() {
-  ["adCampaignId","adCampaignTitle","adCampaignDescription","adCampaignImage","adCampaignTarget","adCampaignProduct","adCampaignStart","adCampaignEnd"].forEach(id => { const el=document.getElementById(id); if(el) el.value=""; });
+  ["adCampaignId","adCampaignTitle","adCampaignDescription","adCampaignTarget","adCampaignProduct","adCampaignStart","adCampaignEnd"].forEach(id => { const el=document.getElementById(id); if(el) el.value=""; });
+  adminAdImageRequestId += 1;
+  adminAdImageData = "";
+  setAdImageBusy(false);
+  const imageInput = document.getElementById("adCampaignImageFile");
+  if (imageInput) imageInput.value = "";
+  renderAdCampaignImagePreview();
   const button=document.getElementById("adCampaignButton"); if(button) button.value="Подробнее";
   const placement=document.getElementById("adCampaignPlacement"); if(placement) placement.value="catalog_feed";
   const status=document.getElementById("adCampaignStatus"); if(status) status.value="draft";
