@@ -5,9 +5,9 @@ import fs from "node:fs";
 const serverSource = fs.readFileSync(new URL("../server.js", import.meta.url), "utf8");
 const packageJson = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
-test("версия обновлена до 1.13.7", () => {
-  assert.equal(packageJson.version, "1.13.7");
-  assert.match(serverSource, /const APP_VERSION = "1\.13\.7"/);
+test("версия обновлена до 1.13.8", () => {
+  assert.equal(packageJson.version, "1.13.8");
+  assert.match(serverSource, /const APP_VERSION = "1\.13\.8"/);
 });
 
 test("инициализация PostgreSQL повторяется после временного ECONNRESET", () => {

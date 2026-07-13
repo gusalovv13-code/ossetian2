@@ -1,21 +1,13 @@
-ЗАГРУЗИТЕ ЭТИ ФАЙЛЫ В КОРЕНЬ РЕПОЗИТОРИЯ GitHub:
+OSSETIAN MARKET v1.13.8 — КАК ЗАГРУЗИТЬ
 
-- server.js
-- package.json
-- package-lock.json
+1. Распакуйте архив.
+2. Загрузите содержимое папки в корень ветки main репозитория GitHub.
+3. Не загружайте сам ZIP как единственный файл.
+4. На Render выполните Manual Deploy -> Clear build cache & deploy.
+5. В новом логе должны появиться строки:
+   ossetian-market@1.13.8 start
+   Server started on 0.0.0.0:...
 
-Важно:
-1. Откройте https://github.com/gusalovv13-code/ossetian2
-2. Перейдите в корень ветки main.
-3. Нажмите Add file -> Upload files.
-4. Перетащите ТРИ ФАЙЛА из этой папки, а не сам ZIP.
-5. GitHub должен показать, что server.js, package.json и package-lock.json заменяются.
-6. Нажмите Commit changes.
-7. Убедитесь, что появился НОВЫЙ commit, не 12d1fb5.
-8. Затем в Render: Manual Deploy -> Clear build cache & deploy.
-
-Правильный лог после обновления:
-> ossetian-market@1.13.7 start
-[Ossetian Market] starting version 1.13.7
-
-Не загружайте .env в GitHub.
+Важно: версия 1.13.8 не завершает процесс при временно недоступной PostgreSQL,
+но база данных всё равно должна иметь статус Available, а DATABASE_URL должен
+содержать её текущий адрес подключения.

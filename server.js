@@ -14,7 +14,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.13.7";
+const APP_VERSION = "1.13.8";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -25,7 +25,19 @@ const BOT_USERNAME = String(
 )
   .trim()
   .replace(/^@/, "");
-const DATABASE_SSL = String(process.env.DATABASE_SSL || "true").toLowerCase() !== "false";
+const IS_RENDER = Boolean(process.env.RENDER_SERVICE_ID || process.env.RENDER_EXTERNAL_HOSTNAME);
+const DATABASE_HOST_HINT = (() => {
+  try {
+    return new URL(DATABASE_URL).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+})();
+const IS_RENDER_POSTGRES = /^dpg-/i.test(DATABASE_HOST_HINT) || DATABASE_HOST_HINT.endsWith(".render.com");
+const DATABASE_SSL_CONFIGURED = String(process.env.DATABASE_SSL || "true").toLowerCase() !== "false";
+// Render Postgres expects a TLS connection. A stale DATABASE_SSL=false value can
+// otherwise make the server close the socket during the PostgreSQL handshake.
+const DATABASE_SSL = IS_RENDER && IS_RENDER_POSTGRES ? true : DATABASE_SSL_CONFIGURED;
 const PUBLIC_BASE_URL = String(process.env.PUBLIC_BASE_URL || "").trim().replace(/\/+$/, "");
 const configuredAuthMaxAge = Number(
   process.env.TELEGRAM_AUTH_MAX_AGE_SECONDS || 86400
@@ -114,8 +126,53 @@ const DB_INIT_RETRY_MAX_MS = Math.max(
   DB_INIT_RETRY_BASE_MS,
   Math.min(60_000, Number(process.env.DB_INIT_RETRY_MAX_MS) || 30_000)
 );
+function normalizeDatabaseConnectionString(rawUrl) {
+  if (!DATABASE_SSL) return rawUrl;
+
+  try {
+    const parsed = new URL(rawUrl);
+    // node-postgres replaces the explicit ssl object when these parameters are
+    // present in the URL. Remove them so the known Render-safe config below wins.
+    for (const key of ["sslmode", "sslcert", "sslkey", "sslrootcert"]) {
+      parsed.searchParams.delete(key);
+    }
+    return parsed.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
+function describeDatabaseTarget(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl);
+    return {
+      host: parsed.hostname || "unknown",
+      port: parsed.port || "5432",
+      database: parsed.pathname.replace(/^\//, "") || "unknown",
+      renderInternal: /^dpg-/i.test(parsed.hostname) && !parsed.hostname.includes(".")
+    };
+  } catch {
+    return { host: "invalid-url", port: "unknown", database: "unknown", renderInternal: false };
+  }
+}
+
+const EFFECTIVE_DATABASE_URL = normalizeDatabaseConnectionString(DATABASE_URL);
+const DATABASE_TARGET = describeDatabaseTarget(EFFECTIVE_DATABASE_URL);
+const databaseState = {
+  ready: false,
+  initializing: false,
+  lastError: "",
+  connectedAt: null
+};
+let databaseInitializationPromise = null;
+let lifecycleTimer = null;
+
+if (IS_RENDER && IS_RENDER_POSTGRES && !DATABASE_SSL_CONFIGURED) {
+  console.warn("DATABASE_SSL=false is ignored on Render; TLS has been forced on.");
+}
+
 const pool = new Pool({
-  connectionString: DATABASE_URL,
+  connectionString: EFFECTIVE_DATABASE_URL,
   ssl: DATABASE_SSL ? { rejectUnauthorized: false } : false,
   max: DB_POOL_MAX,
   idleTimeoutMillis: 30_000,
@@ -130,7 +187,10 @@ const pool = new Pool({
 pool.on("error", error => {
   // Ошибка на простаивающем соединении не должна аварийно завершать процесс.
   // Пул удалит повреждённый клиент и создаст новый при следующем запросе.
+  databaseState.ready = false;
+  databaseState.lastError = String(error?.message || error || "Database connection error");
   console.error("Unexpected PostgreSQL pool error:", error);
+  ensureDatabaseInitialization();
 });
 
 const requireTelegramAuth = createTelegramAuthMiddleware({
@@ -1938,23 +1998,28 @@ app.get("/api/version", (req, res) => {
   });
 });
 
-app.get("/api/health", async (req, res) => {
-  try {
-    await pool.query("SELECT 1");
+app.get("/api/health", (req, res) => {
+  // Liveness endpoint: Render must see an open HTTP port even while PostgreSQL
+  // is waking up, restarting, or temporarily unavailable.
+  res.setHeader("Cache-Control", "no-store");
+  res.json({
+    ok: true,
+    server: "online",
+    database: databaseState.ready ? "ready" : "connecting",
+    version: APP_VERSION
+  });
+});
 
-    res.json({
-      ok: true,
-      message: "Server and database are working",
-      version: APP_VERSION
-    });
-  } catch (error) {
-    console.error("Health check error:", error);
-
-    res.status(500).json({
-      ok: false,
-      error: "Database error"
-    });
-  }
+app.get("/api/ready", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const status = databaseState.ready ? 200 : 503;
+  res.status(status).json({
+    ok: databaseState.ready,
+    server: "online",
+    database: databaseState.ready ? "ready" : "unavailable",
+    lastError: databaseState.ready ? "" : databaseState.lastError,
+    version: APP_VERSION
+  });
 });
 
 app.get("/api/config", (req, res) => {
@@ -1970,6 +2035,17 @@ app.get("/api/config", (req, res) => {
     businessListingLimit: BUSINESS_LISTING_LIMIT,
     businessListingPriceRub: BUSINESS_LISTING_PRICE_RUB,
     maxListingLimit: MAX_LISTING_LIMIT
+  });
+});
+
+app.use("/api", (req, res, next) => {
+  if (databaseState.ready) return next();
+
+  res.setHeader("Retry-After", "15");
+  return res.status(503).json({
+    ok: false,
+    error: "База данных временно недоступна. Сервер продолжает переподключение — повторите через несколько секунд",
+    code: "DATABASE_UNAVAILABLE"
   });
 });
 
@@ -5332,19 +5408,83 @@ async function runProductLifecycleMaintenance() {
   }
 }
 
+async function initializeDatabaseUntilReady() {
+  if (databaseState.initializing || databaseState.ready) return;
+  databaseState.initializing = true;
+
+  try {
+    while (!databaseState.ready) {
+      try {
+        await initDbWithRetry();
+        databaseState.ready = true;
+        databaseState.lastError = "";
+        databaseState.connectedAt = new Date().toISOString();
+        console.log("PostgreSQL is ready; database-backed API routes are enabled");
+
+        await runProductLifecycleMaintenance();
+        if (!lifecycleTimer) {
+          lifecycleTimer = setInterval(runProductLifecycleMaintenance, 60 * 60 * 1000);
+          lifecycleTimer.unref?.();
+        }
+      } catch (error) {
+        databaseState.lastError = String(error?.message || error || "Database connection error");
+        console.error(
+          "PostgreSQL is still unavailable. The web server remains online and will retry in 30 seconds:",
+          databaseState.lastError
+        );
+        await wait(30_000);
+      }
+    }
+  } finally {
+    databaseState.initializing = false;
+  }
+}
+
+function ensureDatabaseInitialization() {
+  if (databaseState.ready) return Promise.resolve();
+  if (!databaseInitializationPromise) {
+    databaseInitializationPromise = initializeDatabaseUntilReady()
+      .catch(error => {
+        databaseState.lastError = String(error?.message || error || "Database initialization error");
+        console.error("Unexpected database initialization loop error:", error);
+      })
+      .finally(() => {
+        databaseInitializationPromise = null;
+        if (!databaseState.ready) {
+          setTimeout(ensureDatabaseInitialization, 30_000).unref?.();
+        }
+      });
+  }
+  return databaseInitializationPromise;
+}
+
 console.log(`[Ossetian Market] starting version ${APP_VERSION}; ads, highlighting and feature-request admin flow enabled`);
+console.log(
+  `PostgreSQL target: host=${DATABASE_TARGET.host} port=${DATABASE_TARGET.port} ` +
+  `database=${DATABASE_TARGET.database} ssl=${DATABASE_SSL ? "required" : "disabled"} ` +
+  `connection=${DATABASE_TARGET.renderInternal ? "render-internal" : "external-or-custom"}`
+);
 
-initDbWithRetry()
-  .then(async () => {
-    await runProductLifecycleMaintenance();
-    const lifecycleTimer = setInterval(runProductLifecycleMaintenance, 60 * 60 * 1000);
-    lifecycleTimer.unref?.();
+const httpServer = app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server started on 0.0.0.0:${PORT}; PostgreSQL initialization continues in background`);
+});
+httpServer.keepAliveTimeout = 120_000;
+httpServer.headersTimeout = 125_000;
 
-    app.listen(PORT, () => {
-      console.log(`Server started on port ${PORT}`);
-    });
-  })
-  .catch(error => {
-    console.error("Database init error:", error);
-    process.exit(1);
+ensureDatabaseInitialization();
+
+async function shutdown(signal) {
+  console.log(`${signal} received; shutting down`);
+  if (lifecycleTimer) clearInterval(lifecycleTimer);
+  httpServer.close(async () => {
+    try {
+      await pool.end();
+    } finally {
+      process.exit(0);
+    }
   });
+  setTimeout(() => process.exit(1), 10_000).unref?.();
+}
+
+process.once("SIGTERM", () => shutdown("SIGTERM"));
+process.once("SIGINT", () => shutdown("SIGINT"));
