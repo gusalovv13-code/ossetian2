@@ -1669,6 +1669,16 @@ function getProductLink(productId = state.openedProductId) {
   return getProductTelegramLink(productId) || getProductWebLink(productId);
 }
 
+function getProductSharePageLink(productId = state.openedProductId, version = "") {
+  const cleanProductId = String(productId || "").trim();
+  if (!cleanProductId) return getProductLink(productId);
+
+  const url = new URL(`/share/product/${encodeURIComponent(cleanProductId)}`, window.location.origin);
+  const versionValue = Number(version) || 0;
+  if (versionValue > 0) url.searchParams.set("v", String(versionValue));
+  return url.toString();
+}
+
 function parseProductStartParam(value) {
   const match = String(value || "")
     .trim()
@@ -1720,7 +1730,30 @@ async function shareProduct() {
   const product = findProductById(state.openedProductId);
   if (!product) return;
 
-  const url = getProductLink(product.id);
+  try {
+    const canSharePreparedMessage =
+      typeof tg?.shareMessage === "function" &&
+      Boolean(tg?.initData?.trim()) &&
+      (typeof tg?.isVersionAtLeast !== "function" || tg.isVersionAtLeast("8.0"));
+
+    if (canSharePreparedMessage) {
+      const prepared = await apiRequest(
+        `/api/products/${encodeURIComponent(product.id)}/share-message`,
+        { method: "POST", body: "{}", timeoutMs: 20_000 }
+      );
+
+      if (prepared.preparedMessageId) {
+        tg.shareMessage(prepared.preparedMessageId, sent => {
+          if (sent) tg?.HapticFeedback?.notificationOccurred?.("success");
+        });
+        return;
+      }
+    }
+  } catch (error) {
+    console.warn("Prepared Telegram share is unavailable, using link preview:", error);
+  }
+
+  const url = getProductSharePageLink(product.id, product.updatedAt);
   const shareData = {
     title: product.name || "Объявление",
     text: `${product.name || "Товар"} — ${product.price || "цена не указана"}`,
@@ -1734,10 +1767,12 @@ async function shareProduct() {
       return;
     }
 
-    const opened = window.open(telegramUrl, "_blank", "noopener,noreferrer");
-    if (!opened && navigator.share) {
+    if (navigator.share) {
       await navigator.share(shareData);
+      return;
     }
+
+    window.open(telegramUrl, "_blank", "noopener,noreferrer");
   } catch (error) {
     if (error?.name !== "AbortError") {
       console.error("Share product error:", error);

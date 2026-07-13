@@ -5,24 +5,28 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { createHmac, randomUUID, timingSafeEqual } from "crypto";
 import pg from "pg";
+import sharp from "sharp";
+import { lookup } from "dns/promises";
+import { isIP } from "net";
 import { createTelegramAuthMiddleware } from "./telegram-auth.js";
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.12.6";
+const APP_VERSION = "1.12.7";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
   .trim()
   .replace(/^@/, "");
 const BOT_USERNAME = String(
-  process.env.BOT_USERNAME || process.env.TELEGRAM_BOT_USERNAME || ""
+  process.env.BOT_USERNAME || process.env.TELEGRAM_BOT_USERNAME || "os_15market_bot"
 )
   .trim()
   .replace(/^@/, "");
 const DATABASE_SSL = String(process.env.DATABASE_SSL || "true").toLowerCase() !== "false";
+const PUBLIC_BASE_URL = String(process.env.PUBLIC_BASE_URL || "").trim().replace(/\/+$/, "");
 const configuredAuthMaxAge = Number(
   process.env.TELEGRAM_AUTH_MAX_AGE_SECONDS || 86400
 );
@@ -621,6 +625,230 @@ function pickValidProductImage(...candidates) {
   }
 
   return "";
+}
+
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, character => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;"
+  }[character]));
+}
+
+function getPublicOrigin(req) {
+  if (/^https?:\/\/[^\s]+$/i.test(PUBLIC_BASE_URL)) {
+    return PUBLIC_BASE_URL;
+  }
+
+  const forwardedProtocol = String(req.get("x-forwarded-proto") || "")
+    .split(",")[0]
+    .trim();
+  const forwardedHost = String(req.get("x-forwarded-host") || "")
+    .split(",")[0]
+    .trim();
+  const protocol = forwardedProtocol || req.protocol || "https";
+  const host = forwardedHost || req.get("host") || "";
+
+  return host ? `${protocol}://${host}`.replace(/\/+$/, "") : "";
+}
+
+function buildProductTelegramLink(productId) {
+  const cleanProductId = normalizeText(productId, 64);
+  if (!BOT_USERNAME || !cleanProductId) return "";
+  return `https://t.me/${encodeURIComponent(BOT_USERNAME)}?startapp=${encodeURIComponent(`product_${cleanProductId}`)}`;
+}
+
+async function getPublicProductShareRow(productId) {
+  const result = await pool.query(
+    `
+      SELECT
+        p.id,
+        p.name,
+        p.price,
+        p.description,
+        p.location,
+        p.updated_at,
+        p.created_at,
+        (SELECT NULLIF(pi.preview_url, '')
+         FROM product_images pi
+         WHERE pi.product_id = p.id
+         ORDER BY pi.position ASC, pi.created_at ASC
+         LIMIT 1) AS preview_source,
+        NULLIF(p.thumbnail, '') AS thumbnail_source,
+        (SELECT NULLIF(pi.url, '')
+         FROM product_images pi
+         WHERE pi.product_id = p.id
+         ORDER BY pi.position ASC, pi.created_at ASC
+         LIMIT 1) AS table_source,
+        NULLIF(p.image, '') AS primary_source,
+        CASE
+          WHEN jsonb_typeof(p.images) = 'array' THEN p.images ->> 0
+          ELSE NULL
+        END AS legacy_source
+      FROM products p
+      WHERE p.id = $1
+        AND COALESCE(p.status, 'active') = 'active'
+        AND COALESCE(p.hidden, FALSE) = FALSE
+        AND COALESCE(p.moderation_status, 'approved') = 'approved'
+      LIMIT 1;
+    `,
+    [productId]
+  );
+
+  return result.rows[0] || null;
+}
+
+function getShareRowImageSource(row) {
+  if (!row) return "";
+  return pickValidProductImage(
+    row.preview_source,
+    row.thumbnail_source,
+    row.table_source,
+    row.primary_source,
+    row.legacy_source
+  );
+}
+
+function isPrivateNetworkAddress(address) {
+  let value = String(address || "").toLowerCase().split("%")[0];
+  if (value.startsWith("::ffff:")) value = value.slice(7);
+
+  const version = isIP(value);
+  if (version === 4) {
+    const parts = value.split(".").map(Number);
+    const [a, b] = parts;
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 198 && (b === 18 || b === 19)) ||
+      a >= 224
+    );
+  }
+
+  if (version === 6) {
+    return (
+      value === "::" ||
+      value === "::1" ||
+      /^f[cd]/i.test(value) ||
+      /^fe[89ab]/i.test(value)
+    );
+  }
+
+  return true;
+}
+
+async function validatePublicImageUrl(value) {
+  const url = new URL(value);
+  if (url.protocol !== "https:" || url.username || url.password) {
+    throw new Error("Разрешены только публичные HTTPS-фотографии");
+  }
+  if (url.port && url.port !== "443") {
+    throw new Error("Недопустимый порт фотографии");
+  }
+
+  const addresses = await lookup(url.hostname, { all: true, verbatim: true });
+  if (!addresses.length || addresses.some(item => isPrivateNetworkAddress(item.address))) {
+    throw new Error("Адрес фотографии недоступен");
+  }
+
+  return url;
+}
+
+async function readRemoteImageBuffer(source) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8_000);
+
+  try {
+    let currentUrl = await validatePublicImageUrl(source);
+    let response = null;
+
+    for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
+      response = await fetch(currentUrl, {
+        signal: controller.signal,
+        headers: { "User-Agent": "OssetianMarket/1.12.7" },
+        redirect: "manual"
+      });
+
+      if (response.status < 300 || response.status >= 400) break;
+      const location = response.headers.get("location");
+      if (!location || redirectCount === 3) {
+        throw new Error("Слишком много перенаправлений фотографии");
+      }
+      currentUrl = await validatePublicImageUrl(new URL(location, currentUrl).toString());
+    }
+
+    if (!response?.ok) {
+      throw new Error(`Не удалось загрузить фото: HTTP ${response?.status || 0}`);
+    }
+
+    const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+    if (contentType && !contentType.startsWith("image/")) {
+      throw new Error("Ссылка не ведёт на изображение");
+    }
+
+    const contentLength = Number(response.headers.get("content-length") || 0);
+    if (contentLength > MAX_STORED_IMAGE_BYTES) {
+      throw new Error("Фотография слишком большая");
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (!buffer.length || buffer.length > MAX_STORED_IMAGE_BYTES) {
+      throw new Error("Некорректный размер фотографии");
+    }
+
+    return buffer;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function createShareJpeg(source) {
+  const parsed = parseStoredDataImage(source);
+  const input = parsed?.buffer || await readRemoteImageBuffer(source);
+  const render = (size, quality) => sharp(input, { limitInputPixels: 40_000_000 })
+    .rotate()
+    .resize({
+      width: size,
+      height: size,
+      fit: "inside",
+      withoutEnlargement: true
+    })
+    .flatten({ background: "#ffffff" })
+    .jpeg({ quality, mozjpeg: true })
+    .toBuffer();
+
+  const primary = await render(1280, 84);
+  return primary.length <= 4_800_000 ? primary : render(1024, 70);
+}
+
+async function callTelegramBotApi(method, payload) {
+  const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(12_000)
+  });
+
+  let data = null;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error(`Telegram API вернул некорректный ответ: HTTP ${response.status}`);
+  }
+
+  if (!response.ok || !data?.ok) {
+    throw new Error(data?.description || `Telegram API error: HTTP ${response.status}`);
+  }
+
+  return data.result;
 }
 
 function formatStoredPrice(value) {
@@ -1355,7 +1583,7 @@ app.get("/api/version", (req, res) => {
     ok: true,
     version: APP_VERSION,
     catalogOrderFix: true,
-    build: "feature-color-chat-fonts"
+    build: "telegram-photo-sharing"
   });
 });
 
@@ -1388,6 +1616,202 @@ app.get("/api/config", (req, res) => {
     featureHighlightPriceRub: FEATURE_HIGHLIGHT_PRICE_RUB,
     featureHighlightDays: FEATURE_HIGHLIGHT_DAYS
   });
+});
+
+
+app.get("/api/products/:id/share-photo.jpg", async (req, res) => {
+  try {
+    const productId = normalizeText(req.params.id, 64);
+    if (!productId) return res.status(400).end();
+
+    const row = await getPublicProductShareRow(productId);
+    if (!row) return res.status(404).end();
+
+    const source = getShareRowImageSource(row);
+    if (!source) return res.status(404).end();
+
+    const jpeg = await createShareJpeg(source);
+    res.setHeader("Content-Type", "image/jpeg");
+    res.setHeader("Content-Length", String(jpeg.length));
+    res.setHeader("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    return res.send(jpeg);
+  } catch (error) {
+    console.error("Product share photo error:", error);
+    return res.status(500).end();
+  }
+});
+
+app.post(
+  "/api/products/:id/share-message",
+  requireTelegramAuth,
+  async (req, res) => {
+    try {
+      const productId = normalizeText(req.params.id, 64);
+      if (!productId) {
+        return res.status(400).json({ ok: false, error: "Некорректный ID объявления" });
+      }
+
+      const row = await getPublicProductShareRow(productId);
+      if (!row) {
+        return res.status(404).json({ ok: false, error: "Объявление не найдено" });
+      }
+
+      const userId = Number(req.telegramUser?.id);
+      if (!Number.isSafeInteger(userId) || userId <= 0) {
+        return res.status(400).json({ ok: false, error: "Некорректный Telegram ID" });
+      }
+
+      const origin = getPublicOrigin(req);
+      const telegramLink = buildProductTelegramLink(productId);
+      if (!origin || !telegramLink) {
+        return res.status(500).json({
+          ok: false,
+          error: "Не настроена публичная ссылка приложения или username бота"
+        });
+      }
+
+      const title = normalizeText(row.name, 120) || "Объявление";
+      const price = normalizeText(row.price, 60) || "Цена не указана";
+      const location = normalizeText(row.location, 80);
+      const captionLines = [title, price];
+      if (location) captionLines.push(location);
+      captionLines.push("", telegramLink);
+      const caption = captionLines.join("\n").slice(0, 1024);
+      const replyMarkup = {
+        inline_keyboard: [[{
+          text: "Открыть объявление",
+          url: telegramLink
+        }]]
+      };
+      const source = getShareRowImageSource(row);
+      const version = new Date(row.updated_at || row.created_at || Date.now()).getTime();
+      const photoUrl = `${origin}/api/products/${encodeURIComponent(productId)}/share-photo.jpg?v=${version}`;
+
+      const result = source && /^https:\/\//i.test(photoUrl)
+        ? {
+            type: "photo",
+            id: `product_${productId}`.slice(0, 64),
+            photo_url: photoUrl,
+            thumbnail_url: photoUrl,
+            title,
+            description: [price, location].filter(Boolean).join(" • ").slice(0, 256),
+            caption,
+            reply_markup: replyMarkup
+          }
+        : {
+            type: "article",
+            id: `product_${productId}`.slice(0, 64),
+            title,
+            description: [price, location].filter(Boolean).join(" • ").slice(0, 256),
+            input_message_content: {
+              message_text: caption
+            },
+            reply_markup: replyMarkup
+          };
+
+      const prepared = await callTelegramBotApi("savePreparedInlineMessage", {
+        user_id: userId,
+        result,
+        allow_user_chats: true,
+        allow_bot_chats: false,
+        allow_group_chats: true,
+        allow_channel_chats: true
+      });
+
+      return res.json({
+        ok: true,
+        preparedMessageId: prepared.id,
+        expirationDate: prepared.expiration_date || null,
+        includesPhoto: result.type === "photo"
+      });
+    } catch (error) {
+      console.error("Prepare product share message error:", error);
+      return res.status(502).json({
+        ok: false,
+        error: "Не удалось подготовить объявление для отправки в Telegram"
+      });
+    }
+  }
+);
+
+app.get("/share/product/:id", async (req, res) => {
+  try {
+    const productId = normalizeText(req.params.id, 64);
+    const row = productId ? await getPublicProductShareRow(productId) : null;
+
+    if (!row) {
+      return res.status(404).type("html").send("<!doctype html><meta charset=\"utf-8\"><title>Объявление не найдено</title><p>Объявление не найдено.</p>");
+    }
+
+    const origin = getPublicOrigin(req);
+    const telegramLink = buildProductTelegramLink(productId) || `${origin}/?product=${encodeURIComponent(productId)}`;
+    const telegramScheme = BOT_USERNAME
+      ? `tg://resolve?domain=${encodeURIComponent(BOT_USERNAME)}&startapp=${encodeURIComponent(`product_${productId}`)}`
+      : telegramLink;
+    const version = new Date(row.updated_at || row.created_at || Date.now()).getTime();
+    const imageSource = getShareRowImageSource(row);
+    const imageUrl = imageSource
+      ? `${origin}/api/products/${encodeURIComponent(productId)}/share-photo.jpg?v=${version}`
+      : "";
+    const shareUrl = `${origin}/share/product/${encodeURIComponent(productId)}?v=${version}`;
+    const title = normalizeText(row.name, 120) || "Объявление";
+    const price = normalizeText(row.price, 60) || "Цена не указана";
+    const description = normalizeText(
+      `${price}${row.location ? ` • ${row.location}` : ""}${row.description ? ` — ${String(row.description).replace(/\s+/g, " ")}` : ""}`,
+      280
+    );
+    const imageMeta = imageUrl ? `
+      <meta property="og:image" content="${escapeHtml(imageUrl)}">
+      <meta property="og:image:secure_url" content="${escapeHtml(imageUrl)}">
+      <meta property="og:image:type" content="image/jpeg">
+      <meta property="og:image:alt" content="${escapeHtml(title)}">
+      <meta name="twitter:image" content="${escapeHtml(imageUrl)}">` : "";
+
+    res.setHeader("Cache-Control", "public, max-age=300, stale-while-revalidate=3600");
+    res.type("html").send(`<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>${escapeHtml(title)} — Алания Маркет</title>
+  <meta name="description" content="${escapeHtml(description)}">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Алания Маркет">
+  <meta property="og:title" content="${escapeHtml(title)}">
+  <meta property="og:description" content="${escapeHtml(description)}">
+  <meta property="og:url" content="${escapeHtml(shareUrl)}">${imageMeta}
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="${escapeHtml(title)}">
+  <meta name="twitter:description" content="${escapeHtml(description)}">
+  <link rel="canonical" href="${escapeHtml(shareUrl)}">
+  <style>
+    body{margin:0;min-height:100vh;display:grid;place-items:center;background:#17181c;color:#f4f4f5;font-family:Arial,sans-serif;padding:24px;box-sizing:border-box}
+    main{max-width:480px;text-align:center;background:#23252a;border-radius:18px;padding:24px;box-shadow:0 16px 45px rgba(0,0,0,.3)}
+    img{width:100%;max-height:340px;object-fit:cover;border-radius:14px;margin-bottom:18px}
+    h1{font-size:22px;margin:0 0 8px}p{color:#c8cad1;margin:0 0 18px;line-height:1.45}
+    a{display:inline-block;background:#2aabee;color:#fff;text-decoration:none;padding:12px 18px;border-radius:12px;font-weight:700}
+  </style>
+</head>
+<body>
+  <main>
+    ${imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(title)}">` : ""}
+    <h1>${escapeHtml(title)}</h1>
+    <p>${escapeHtml(price)}</p>
+    <a href="${escapeHtml(telegramLink)}">Открыть в Telegram</a>
+  </main>
+  <script>
+    const telegramScheme = ${JSON.stringify(telegramScheme)};
+    const telegramLink = ${JSON.stringify(telegramLink)};
+    window.location.replace(telegramScheme);
+    window.setTimeout(() => window.location.replace(telegramLink), 850);
+  </script>
+</body>
+</html>`);
+  } catch (error) {
+    console.error("Product share page error:", error);
+    return res.status(500).type("html").send("<!doctype html><meta charset=\"utf-8\"><title>Ошибка</title><p>Не удалось открыть объявление.</p>");
+  }
 });
 
 // Сохраняем или обновляем профиль после успешной Telegram-авторизации.
