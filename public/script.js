@@ -111,7 +111,8 @@ const PRODUCT_DETAILS_CACHE_TTL_MS = 60_000;
 
 const OTHER_OPTION_VALUE = "__other__";
 const STRUCTURED_SPECIFICATION_KEYS = new Set([
-  "тип товара", "подкатегория", "марка / бренд", "марка", "бренд", "модель", "год выпуска", "год"
+  "тип товара", "подкатегория", "марка / бренд", "марка", "бренд", "модель", "год выпуска", "год",
+  "сфера работы", "график работы", "опыт работы", "тип занятости"
 ]);
 
 const CITY_DISTRICTS = Object.freeze({
@@ -188,6 +189,36 @@ const PRODUCT_TAXONOMY = Object.freeze({
       "Tecno": ["Camon 30", "Pova 6", "Pova 6 Pro", "Spark 20", "Spark 20 Pro"],
       "Vivo": ["V29", "V30", "V30 Pro", "Y36", "Y100"],
       "Xiaomi": ["Xiaomi 13T", "Xiaomi 13T Pro", "Xiaomi 14", "Xiaomi 14 Ultra", "Redmi 13", "Redmi Note 13", "Redmi Note 13 Pro", "Redmi Note 13 Pro+", "POCO F6", "POCO X6 Pro"]
+    }
+  },
+  "Вакансии": {
+    types: ["Продажи", "Транспорт и логистика", "Строительство", "Производство", "Общественное питание", "Розничная торговля", "Красота и здоровье", "Образование", "IT и связь", "Офис и администрация", "Охрана", "Домашний персонал", "Сельское хозяйство", "Без специальной подготовки", "Другое"],
+    brandsByType: {
+      "Продажи": ["Полный день", "Сменный график", "Гибкий график", "Удалённая работа"],
+      "Транспорт и логистика": ["Полный день", "Сменный график", "Вахта", "Гибкий график"],
+      "Строительство": ["Полный день", "Сменный график", "Вахта", "Проектная работа"],
+      "Производство": ["Полный день", "Сменный график", "Вахта"],
+      "Общественное питание": ["Полный день", "Сменный график", "Гибкий график"],
+      "Розничная торговля": ["Полный день", "Сменный график", "Гибкий график"],
+      "Красота и здоровье": ["Полный день", "Сменный график", "Гибкий график"],
+      "Образование": ["Полный день", "Частичная занятость", "Гибкий график", "Удалённая работа"],
+      "IT и связь": ["Полный день", "Гибкий график", "Удалённая работа", "Проектная работа"],
+      "Офис и администрация": ["Полный день", "Сменный график", "Удалённая работа"],
+      "Охрана": ["Сменный график", "Вахта", "Полный день"],
+      "Домашний персонал": ["Полный день", "Частичная занятость", "Гибкий график", "С проживанием"],
+      "Сельское хозяйство": ["Полный день", "Сменный график", "Вахта", "С проживанием"],
+      "Без специальной подготовки": ["Полный день", "Сменный график", "Гибкий график", "Вахта"],
+      "Другое": ["Полный день", "Сменный график", "Гибкий график", "Удалённая работа", "Вахта", "Проектная работа"]
+    },
+    modelsByBrand: {
+      "Полный день": ["Без опыта", "До 1 года", "1–3 года", "3–6 лет", "Более 6 лет"],
+      "Сменный график": ["Без опыта", "До 1 года", "1–3 года", "3–6 лет", "Более 6 лет"],
+      "Гибкий график": ["Без опыта", "До 1 года", "1–3 года", "3–6 лет", "Более 6 лет"],
+      "Удалённая работа": ["Без опыта", "До 1 года", "1–3 года", "3–6 лет", "Более 6 лет"],
+      "Вахта": ["Без опыта", "До 1 года", "1–3 года", "3–6 лет", "Более 6 лет"],
+      "Проектная работа": ["Без опыта", "До 1 года", "1–3 года", "3–6 лет", "Более 6 лет"],
+      "Частичная занятость": ["Без опыта", "До 1 года", "1–3 года", "3–6 лет", "Более 6 лет"],
+      "С проживанием": ["Без опыта", "До 1 года", "1–3 года", "3–6 лет", "Более 6 лет"]
     }
   }
 });
@@ -272,6 +303,8 @@ const state = {
   sellerOtherProducts: [],
   priceHistory: [],
   productDetailsCache: {},
+  preparedShareMessages: {},
+  preparedSharePromises: {},
   ads: [],
   currentProductImageIndex: 0,
   myAdsTab: "active",
@@ -490,6 +523,71 @@ function getYearOptions() {
   return years;
 }
 
+function isVacancyCategory(category = "") {
+  return String(category || "").trim() === "Вакансии";
+}
+
+function getYearOptionsForCategory(category = "") {
+  return isVacancyCategory(category)
+    ? ["Полная занятость", "Частичная занятость", "Проектная работа", "Стажировка", "Временная работа"]
+    : getYearOptions();
+}
+
+function getStructuredFieldLabels(category = "") {
+  if (isVacancyCategory(category)) {
+    return {
+      itemType: "Сфера работы",
+      brand: "График работы",
+      model: "Опыт работы",
+      year: "Тип занятости",
+      itemPlaceholder: "Выберите сферу работы",
+      brandPlaceholder: "Выберите график",
+      modelPlaceholder: "Выберите опыт",
+      yearPlaceholder: "Выберите занятость"
+    };
+  }
+  return {
+    itemType: "Тип товара",
+    brand: "Марка / бренд",
+    model: "Модель",
+    year: "Год выпуска",
+    itemPlaceholder: "Выберите тип",
+    brandPlaceholder: "Выберите марку / бренд",
+    modelPlaceholder: "Выберите модель",
+    yearPlaceholder: "Выберите год"
+  };
+}
+
+function setTextContent(id, value) {
+  const element = document.getElementById(id);
+  if (element) element.textContent = value;
+}
+
+function updateCategorySpecificUI(category = document.getElementById("adCategory")?.value || "") {
+  const vacancy = isVacancyCategory(category);
+  const labels = getStructuredFieldLabels(category);
+  setTextContent("adTitleLabel", vacancy ? "Название вакансии" : "Название товара");
+  setTextContent("adPriceLabel", vacancy ? "Зарплата в месяц" : "Цена");
+  setTextContent("adItemTypeLabel", labels.itemType);
+  setTextContent("adBrandLabel", labels.brand);
+  setTextContent("adModelLabel", labels.model);
+  setTextContent("adYearLabel", labels.year);
+  setTextContent("createPhotoHeading", vacancy ? "Фото вакансии" : "Фото объявления");
+  setTextContent("createPhotoHint", vacancy ? "Фото необязательно. Можно добавить логотип, офис или рабочее место." : "Добавьте до 5 фото товара.");
+  const title = document.getElementById("adTitle");
+  const price = document.getElementById("adPrice");
+  const description = document.getElementById("adDesc");
+  if (title) title.placeholder = vacancy ? "Например, водитель-экспедитор" : "Введите название";
+  if (price) price.placeholder = vacancy ? "Укажите зарплату" : "Укажите цену";
+  if (description) description.placeholder = vacancy ? "Опишите обязанности, требования и условия работы" : "Подробно опишите товар или услугу";
+  const conditionField = document.getElementById("adConditionField");
+  if (conditionField) conditionField.hidden = vacancy;
+  document.querySelectorAll("#adNegotiable, #adDelivery").forEach(input => {
+    input.closest?.(".toggle-row")?.toggleAttribute("hidden", vacancy);
+    if (vacancy) input.checked = false;
+  });
+}
+
 function setSelectOptions(select, options, { placeholder = "Выберите", selected = "", allowOther = false, otherLabel = "Другое", sortOptions = true } = {}) {
   if (!select) return "";
   const normalizedOptions = sortOptions
@@ -560,24 +658,33 @@ function refreshCatalogFilterOptions(values = {}) {
   const city = values.city ?? document.getElementById("filterCity")?.value ?? "";
   const itemType = values.itemType ?? document.getElementById("filterItemType")?.value ?? "";
   const brand = values.brand ?? document.getElementById("filterBrand")?.value ?? "";
+  const labels = getStructuredFieldLabels(state.category);
+  setTextContent("filterItemTypeLabel", labels.itemType);
+  setTextContent("filterBrandLabel", labels.brand);
+  setTextContent("filterModelLabel", labels.model);
+  setTextContent("filterYearLabel", labels.year);
   setSelectOptions(document.getElementById("filterDistrict"), getDistrictOptions(city), {
     placeholder: "Все районы", selected: values.district ?? document.getElementById("filterDistrict")?.value ?? ""
   });
   setSelectOptions(document.getElementById("filterItemType"), getItemTypeOptions(state.category), {
-    placeholder: "Все типы", selected: itemType
+    placeholder: isVacancyCategory(state.category) ? "Все сферы" : "Все типы", selected: itemType
   });
   const selectedType = document.getElementById("filterItemType")?.value || itemType;
   setSelectOptions(document.getElementById("filterBrand"), getBrandOptions(state.category, selectedType), {
-    placeholder: "Все марки и бренды", selected: brand
+    placeholder: isVacancyCategory(state.category) ? "Любой график" : "Все марки и бренды", selected: brand
   });
   const selectedBrand = document.getElementById("filterBrand")?.value || brand;
   setSelectOptions(document.getElementById("filterModel"), getModelOptions(state.category, selectedType, selectedBrand), {
-    placeholder: selectedBrand ? "Все модели" : "Сначала выберите бренд", selected: values.model ?? document.getElementById("filterModel")?.value ?? ""
+    placeholder: isVacancyCategory(state.category)
+      ? (selectedBrand ? "Любой опыт" : "Сначала выберите график")
+      : (selectedBrand ? "Все модели" : "Сначала выберите бренд"),
+    selected: values.model ?? document.getElementById("filterModel")?.value ?? ""
   });
   const modelSelect = document.getElementById("filterModel");
   if (modelSelect) modelSelect.disabled = !selectedBrand;
-  setSelectOptions(document.getElementById("filterYear"), getYearOptions(), {
-    placeholder: "Любой год", selected: values.year ?? document.getElementById("filterYear")?.value ?? "", sortOptions: false
+  setSelectOptions(document.getElementById("filterYear"), getYearOptionsForCategory(state.category), {
+    placeholder: isVacancyCategory(state.category) ? "Любая занятость" : "Любой год",
+    selected: values.year ?? document.getElementById("filterYear")?.value ?? "", sortOptions: false
   });
 }
 
@@ -598,8 +705,14 @@ function refreshAdStructuredFields(values = {}) {
   const category = document.getElementById("adCategory")?.value || "";
   const root = document.getElementById("adStructuredFields");
   const enabled = Boolean(PRODUCT_TAXONOMY[category]);
+  updateCategorySpecificUI(category);
+  const labels = getStructuredFieldLabels(category);
   if (root) root.hidden = !enabled;
   if (!enabled) return;
+  setTextContent("adItemTypeLabel", labels.itemType);
+  setTextContent("adBrandLabel", labels.brand);
+  setTextContent("adModelLabel", labels.model);
+  setTextContent("adYearLabel", labels.year);
 
   const currentType = values.itemType ?? readSelectWithCustom("adItemType", "adItemTypeCustom") ?? "";
   const currentBrand = values.brand ?? readSelectWithCustom("adBrand", "adBrandCustom") ?? "";
@@ -607,11 +720,14 @@ function refreshAdStructuredFields(values = {}) {
   const currentYear = values.year ?? document.getElementById("adYear")?.value ?? "";
 
   setSelectOptions(document.getElementById("adItemType"), getItemTypeOptions(category), {
-    placeholder: "Выберите тип", selected: currentType
+    placeholder: labels.itemPlaceholder, selected: currentType
   });
   const selectedType = document.getElementById("adItemType")?.value || currentType;
   setSelectOptions(document.getElementById("adBrand"), getBrandOptions(category, selectedType), {
-    placeholder: selectedType ? "Выберите марку / бренд" : "Сначала выберите тип", selected: currentBrand, allowOther: true, otherLabel: "Другая марка / бренд"
+    placeholder: selectedType ? labels.brandPlaceholder : (isVacancyCategory(category) ? "Сначала выберите сферу" : "Сначала выберите тип"),
+    selected: currentBrand,
+    allowOther: !isVacancyCategory(category),
+    otherLabel: "Другая марка / бренд"
   });
   const brandSelect = document.getElementById("adBrand");
   if (brandSelect) brandSelect.disabled = !selectedType;
@@ -620,15 +736,18 @@ function refreshAdStructuredFields(values = {}) {
 
   const selectedBrand = readSelectWithCustom("adBrand", "adBrandCustom");
   setSelectOptions(document.getElementById("adModel"), getModelOptions(category, selectedType, selectedBrand), {
-    placeholder: selectedBrand ? "Выберите модель" : "Сначала выберите бренд", selected: currentModel, allowOther: Boolean(selectedBrand), otherLabel: "Другая модель"
+    placeholder: selectedBrand ? labels.modelPlaceholder : (isVacancyCategory(category) ? "Сначала выберите график" : "Сначала выберите бренд"),
+    selected: currentModel,
+    allowOther: Boolean(selectedBrand) && !isVacancyCategory(category),
+    otherLabel: "Другая модель"
   });
   const modelSelect = document.getElementById("adModel");
   if (modelSelect) modelSelect.disabled = !selectedBrand;
   if (modelSelect?.value === OTHER_OPTION_VALUE) document.getElementById("adModelCustom").value = currentModel;
   updateCustomSelectInput("adModel", "adModelCustom");
 
-  setSelectOptions(document.getElementById("adYear"), getYearOptions(), {
-    placeholder: "Выберите год", selected: currentYear, sortOptions: false
+  setSelectOptions(document.getElementById("adYear"), getYearOptionsForCategory(category), {
+    placeholder: labels.yearPlaceholder, selected: currentYear, sortOptions: false
   });
 }
 
@@ -652,7 +771,7 @@ function getStructuredAdValues() {
 
 function getStructuredAdValidationError(ad) {
   if (!PRODUCT_TAXONOMY[ad.category]) return "";
-  if (!ad.itemType) return "Выберите тип товара";
+  if (!ad.itemType) return isVacancyCategory(ad.category) ? "Выберите сферу работы" : "Выберите тип товара";
 
   if (ad.category === "Авто") {
     if (!ad.brand) return "Выберите марку автомобиля";
@@ -663,6 +782,11 @@ function getStructuredAdValidationError(ad) {
   if (ad.category === "Электроника") {
     if (!ad.brand) return "Выберите бренд устройства";
     if (["Смартфон", "Кнопочный телефон"].includes(ad.itemType) && !ad.model) return "Выберите модель телефона";
+  }
+
+  if (ad.category === "Вакансии") {
+    if (!ad.brand) return "Выберите график работы";
+    if (!ad.year) return "Выберите тип занятости";
   }
 
   return "";
@@ -1587,6 +1711,9 @@ function getProductCard(product, options = {}) {
   const priceDropMarkup = product.priceDropped
     ? `<span class="price-drop-card-badge">Скидка${product.priceDropPercent ? ` −${Number(product.priceDropPercent)}%` : ""}</span>`
     : "";
+  const vacancyBadge = isVacancyCategory(product.category)
+    ? '<span class="vacancy-card-badge">💼 Вакансия</span>'
+    : "";
   const status = product.status || "active";
   const isSoldHistory = options.ownerActions && status === "sold";
   const featureColor = FEATURE_REQUEST_COLORS.has(product.featuredColor)
@@ -1653,8 +1780,10 @@ function getProductCard(product, options = {}) {
       <img src="${image}" alt="${name}" loading="${options.priority ? "eager" : "lazy"}" decoding="async" fetchpriority="${options.priority ? "high" : "low"}" onerror="handleImageError(this)">
       <div class="${options.ownerActions ? "product-card-info" : ""}">
         ${featureRequestBadge}
+        ${vacancyBadge}
         ${priceDropMarkup}
         <h4>${name}</h4>
+        ${isVacancyCategory(product.category) ? '<small class="salary-caption">Зарплата</small>' : ""}
         <div class="card-price-row">${product.priceDropped && previousPrice ? `<s>${previousPrice}</s>` : ""}<b class="${product.priceDropped ? "discounted-price" : ""}">${price}</b></div>
         <p>${location} · ${getTimeAgo(isSoldHistory ? historyTime : product.createdAt)}</p>
         ${options.showStatus ? `<p class="product-status status-${escapeHTML(status)}">${escapeHTML(product.moderationStatus === "blocked" ? getProductStatusLabel(status, product) : (product.hidden && status !== "sold" ? "Скрыто модератором" : getProductStatusLabel(status, product)))}</p>` : ""}
@@ -2221,85 +2350,95 @@ function getDirectProductId() {
   return parseProductStartParam(startParam);
 }
 
-async function copyText(value) {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(value);
+function canUsePreparedTelegramShare() {
+  return typeof tg?.shareMessage === "function" &&
+    Boolean(tg?.initData?.trim()) &&
+    (typeof tg?.isVersionAtLeast !== "function" || tg.isVersionAtLeast("8.0"));
+}
+
+function getShareCacheKey(product) {
+  return `${product?.id || ""}:${Number(product?.updatedAt) || 0}`;
+}
+
+function prepareProductShareMessage(product, { force = false } = {}) {
+  if (!product?.id || !canUsePreparedTelegramShare()) return Promise.resolve(null);
+  const key = getShareCacheKey(product);
+  const cached = state.preparedShareMessages[key];
+  if (!force && cached?.preparedMessageId && (!cached.expirationDate || Number(cached.expirationDate) * 1000 > Date.now() + 30_000)) {
+    return Promise.resolve(cached);
+  }
+  if (!force && state.preparedSharePromises[key]) return state.preparedSharePromises[key];
+
+  const promise = apiRequest(`/api/products/${encodeURIComponent(product.id)}/share-message`, {
+    method: "POST",
+    body: "{}",
+    timeoutMs: 12_000
+  }).then(prepared => {
+    if (prepared?.preparedMessageId) state.preparedShareMessages[key] = prepared;
+    return prepared;
+  }).catch(error => {
+    console.warn("Не удалось заранее подготовить отправку:", error);
+    return null;
+  }).finally(() => {
+    delete state.preparedSharePromises[key];
+  });
+  state.preparedSharePromises[key] = promise;
+  return promise;
+}
+
+function openFastTelegramShare(product) {
+  const url = getProductSharePageLink(product.id, product.updatedAt);
+  const text = `${product.name || (isVacancyCategory(product.category) ? "Вакансия" : "Товар")} — ${product.price || "цена не указана"}`;
+  const telegramUrl = `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}`;
+  if (tg?.openTelegramLink) {
+    tg.openTelegramLink(telegramUrl);
     return;
   }
-
-  const textarea = document.createElement("textarea");
-  textarea.value = value;
-  textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  textarea.select();
-  document.execCommand("copy");
-  textarea.remove();
+  window.open(telegramUrl, "_blank", "noopener,noreferrer");
 }
 
-async function copyProductLink() {
-  if (!state.openedProductId) return;
-
-  try {
-    await copyText(getProductLink());
-    alert("Ссылка скопирована ✅");
-  } catch (error) {
-    console.error("Copy product link error:", error);
-    alert("Не удалось скопировать ссылку");
-  }
-}
-
-async function shareProduct() {
+async function shareProduct(button = null) {
   const product = findProductById(state.openedProductId);
   if (!product) return;
 
+  const shareButton = button || document.getElementById("shareProductBtn");
+  const originalText = shareButton?.textContent || "↗ Поделиться";
+  if (shareButton) {
+    shareButton.disabled = true;
+    shareButton.textContent = "Открываем…";
+    shareButton.classList.add("is-sharing");
+  }
+  tg?.HapticFeedback?.impactOccurred?.("light");
+
   try {
-    const canSharePreparedMessage =
-      typeof tg?.shareMessage === "function" &&
-      Boolean(tg?.initData?.trim()) &&
-      (typeof tg?.isVersionAtLeast !== "function" || tg.isVersionAtLeast("8.0"));
-
-    if (canSharePreparedMessage) {
-      const prepared = await apiRequest(
-        `/api/products/${encodeURIComponent(product.id)}/share-message`,
-        { method: "POST", body: "{}", timeoutMs: 20_000 }
-      );
-
-      if (prepared.preparedMessageId) {
+    if (canUsePreparedTelegramShare()) {
+      const key = getShareCacheKey(product);
+      let prepared = state.preparedShareMessages[key] || null;
+      if (!prepared?.preparedMessageId) {
+        const pending = prepareProductShareMessage(product);
+        prepared = await Promise.race([
+          pending,
+          new Promise(resolve => window.setTimeout(() => resolve(null), 850))
+        ]);
+      }
+      if (prepared?.preparedMessageId) {
         tg.shareMessage(prepared.preparedMessageId, sent => {
           if (sent) tg?.HapticFeedback?.notificationOccurred?.("success");
         });
         return;
       }
     }
+    openFastTelegramShare(product);
   } catch (error) {
-    console.warn("Prepared Telegram share is unavailable, using link preview:", error);
-  }
-
-  const url = getProductSharePageLink(product.id, product.updatedAt);
-  const shareData = {
-    title: product.name || "Объявление",
-    text: `${product.name || "Товар"} — ${product.price || "цена не указана"}`,
-    url
-  };
-  const telegramUrl = `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(shareData.text)}`;
-
-  try {
-    if (tg?.openTelegramLink) {
-      tg.openTelegramLink(telegramUrl);
-      return;
-    }
-
-    if (navigator.share) {
-      await navigator.share(shareData);
-      return;
-    }
-
-    window.open(telegramUrl, "_blank", "noopener,noreferrer");
-  } catch (error) {
-    if (error?.name !== "AbortError") {
-      console.error("Share product error:", error);
-      await copyProductLink();
+    console.error("Share product error:", error);
+    openFastTelegramShare(product);
+  } finally {
+    if (shareButton) {
+      window.setTimeout(() => {
+        shareButton.disabled = false;
+        shareButton.textContent = originalText;
+        shareButton.classList.remove("is-sharing");
+      }, 500);
     }
   }
 }
@@ -2335,9 +2474,10 @@ function renderProductDetails(product) {
 
   if (nameEl) nameEl.textContent = product.name || "Без названия";
   if (priceEl) {
-    priceEl.innerHTML = product.priceDropped
+    const pricePrefix = isVacancyCategory(product.category) ? '<small class="detail-price-caption">Зарплата</small>' : "";
+    priceEl.innerHTML = pricePrefix + (product.priceDropped
       ? `<s>${escapeHTML(product.previousPrice || "")}</s><span class="discounted-price">${escapeHTML(product.price || "Цена не указана")}</span><em>Скидка${product.priceDropPercent ? ` −${Number(product.priceDropPercent)}%` : ""}</em>`
-      : escapeHTML(product.price || "Цена не указана");
+      : escapeHTML(product.price || (isVacancyCategory(product.category) ? "Зарплата не указана" : "Цена не указана")));
   }
   if (productPriceHistory) {
     const drops = (state.priceHistory || []).filter(item => Number(item.new_price_amount) < Number(item.old_price_amount));
@@ -2380,9 +2520,11 @@ function renderProductDetails(product) {
 
   if (productBadges) {
     const badges = [
-      `Состояние: ${getConditionLabel(product.condition)}`,
-      product.negotiable ? "Возможен торг" : "Цена без торга",
-      product.delivery ? "Есть доставка" : "Самовывоз",
+      isVacancyCategory(product.category) ? "Актуальная вакансия" : `Состояние: ${getConditionLabel(product.condition)}`,
+      !isVacancyCategory(product.category) && product.negotiable ? "Возможен торг" : "",
+      !isVacancyCategory(product.category) && !product.negotiable ? "Цена без торга" : "",
+      !isVacancyCategory(product.category) && product.delivery ? "Есть доставка" : "",
+      !isVacancyCategory(product.category) && !product.delivery ? "Самовывоз" : "",
       product.district ? `Район: ${product.district}` : "",
       product.priceDropped ? `Скидка${product.priceDropPercent ? ` −${Number(product.priceDropPercent)}%` : ""}` : "",
       product.isFeatured ? "Платное выделение" : "",
@@ -2486,7 +2628,10 @@ function renderProductDetails(product) {
   }
 
   if (reportButton) {
-    reportButton.hidden = String(product.ownerId || "") === String(state.telegramUser?.id || "");
+    const isOwnProduct = String(product.ownerId || "") === String(state.telegramUser?.id || "");
+    reportButton.hidden = isOwnProduct;
+    reportButton.disabled = !isAvailable;
+    reportButton.title = isOwnProduct ? "Нельзя пожаловаться на своё объявление" : "Сообщить модератору о нарушении";
   }
 
   if (sellerProductsButton) {
@@ -2496,6 +2641,7 @@ function renderProductDetails(product) {
   renderRelatedProducts("sellerOtherProducts", "sellerOtherProductsSection", state.sellerOtherProducts);
   renderRelatedProducts("similarProducts", "similarProductsSection", state.similarProducts);
   renderProductDetailAds();
+  prepareProductShareMessage(product).catch(() => {});
   state.currentProductImageIndex = 0;
   showProductImage(0);
 }
@@ -2704,8 +2850,10 @@ function updateDiscountEditor() {
   if (!editor || !enabledInput || !fields) return;
 
   const isEditing = Boolean(state.editingProductId);
-  editor.hidden = !isEditing;
-  enabledInput.disabled = !isEditing;
+  const isVacancy = isVacancyCategory(document.getElementById("adCategory")?.value || "");
+  editor.hidden = !isEditing || isVacancy;
+  enabledInput.disabled = !isEditing || isVacancy;
+  if (isVacancy && enabledInput.checked) enabledInput.checked = false;
 
   const form = getDiscountFormState();
   fields.hidden = !form.enabled;
@@ -2729,10 +2877,18 @@ function getAdFormData() {
   const specificationsText = document.getElementById("adSpecifications")?.value || "";
   const specifications = parseSpecificationsText(specificationsText);
   const structured = getStructuredAdValues();
-  if (structured.itemType) specifications["Тип товара"] = structured.itemType;
-  if (structured.brand) specifications["Марка / бренд"] = structured.brand;
-  if (structured.model) specifications["Модель"] = structured.model;
-  if (structured.year) specifications["Год выпуска"] = structured.year;
+  const category = document.getElementById("adCategory")?.value || "";
+  if (isVacancyCategory(category)) {
+    if (structured.itemType) specifications["Сфера работы"] = structured.itemType;
+    if (structured.brand) specifications["График работы"] = structured.brand;
+    if (structured.model) specifications["Опыт работы"] = structured.model;
+    if (structured.year) specifications["Тип занятости"] = structured.year;
+  } else {
+    if (structured.itemType) specifications["Тип товара"] = structured.itemType;
+    if (structured.brand) specifications["Марка / бренд"] = structured.brand;
+    if (structured.model) specifications["Модель"] = structured.model;
+    if (structured.year) specifications["Год выпуска"] = structured.year;
+  }
 
   const discount = getDiscountFormState();
   const effectivePrice = discount.enabled ? discount.discountPrice : discount.originalPrice;
@@ -2743,7 +2899,7 @@ function getAdFormData() {
     originalPrice: discount.originalPrice,
     discountPrice: discount.discountPrice,
     discountEnabled: discount.enabled,
-    category: document.getElementById("adCategory")?.value || "",
+    category,
     condition: document.getElementById("adCondition")?.value || "used",
     desc: document.getElementById("adDesc")?.value.trim() || "",
     location: document.getElementById("adLocation")?.value || "Владикавказ",
@@ -2801,7 +2957,8 @@ function isCreateStep1Valid() {
 }
 
 function isCreateStep2Valid() {
-  return draftAd.images.length > 0;
+  const category = document.getElementById("adCategory")?.value || "";
+  return isVacancyCategory(category) || draftAd.images.length > 0;
 }
 
 function updateCreateButtons() {
@@ -2826,7 +2983,7 @@ function updateCreateButtons() {
     step2Btn.classList.toggle("disabled-btn", !validStep2);
 
     step2Btn.innerText = validStep2
-      ? "Далее"
+      ? (isVacancyCategory(document.getElementById("adCategory")?.value || "") && draftAd.images.length === 0 ? "Продолжить без фото" : "Далее")
       : "Добавьте хотя бы 1 фото";
   }
 }
@@ -2861,11 +3018,12 @@ function renderPhotoPreview() {
   }
 
   if (draftAd.images.length === 0) {
+    const vacancy = isVacancyCategory(document.getElementById("adCategory")?.value || "");
     photoPreview.innerHTML = `
       <div class="photo-empty">
         <div class="photo-plus">＋</div>
-        <p>Нажмите “Добавить фото”</p>
-        <small>Можно добавить до ${MAX_PHOTOS} фото</small>
+        <p>${vacancy ? "Фото вакансии необязательно" : "Нажмите “Добавить фото”"}</p>
+        <small>${vacancy ? "При желании добавьте логотип или рабочее место" : `Можно добавить до ${MAX_PHOTOS} фото`}</small>
       </div>
     `;
 
@@ -2918,11 +3076,13 @@ function updatePreviewCard() {
   const ad = getAdFormData();
   const previewImage = draftAd.images[0] || DEFAULT_IMAGE;
   const location = [ad.location, ad.district].filter(Boolean).join(", ");
-  const options = [
-    getConditionLabel(ad.condition),
-    ad.negotiable ? "торг" : "без торга",
-    ad.delivery ? "доставка" : "самовывоз"
-  ].join(" · ");
+  const options = isVacancyCategory(ad.category)
+    ? [ad.itemType, ad.brand, ad.model, ad.year].filter(Boolean).join(" · ")
+    : [
+        getConditionLabel(ad.condition),
+        ad.negotiable ? "торг" : "без торга",
+        ad.delivery ? "доставка" : "самовывоз"
+      ].join(" · ");
 
   const previewPriceMarkup = ad.discountEnabled && !getDiscountValidationError(ad)
     ? `<div class="preview-discount-price"><s>${escapeHTML(formatPrice(ad.originalPrice) || ad.originalPrice)}</s><b>${escapeHTML(formatPrice(ad.price) || ad.price)}</b><span>Скидка</span></div>`
@@ -2931,7 +3091,7 @@ function updatePreviewCard() {
   preview.innerHTML = `
     <img src="${escapeHTML(safeImageUrl(previewImage))}" alt="Предпросмотр">
     <div>
-      <h4>${escapeHTML(ad.title || "Название товара")}</h4>
+      <h4>${escapeHTML(ad.title || (isVacancyCategory(ad.category) ? "Название вакансии" : "Название товара"))}</h4>
       ${previewPriceMarkup}
       <p>${escapeHTML(ad.category || "Категория")} · ${escapeHTML(location)}</p>
       <p>${escapeHTML(options)}</p>
@@ -2972,12 +3132,12 @@ async function publishAd(status = "active") {
     const priceNumber = getPriceNumber(ad.price);
 
     if (!ad.title) {
-      alert("Введите название товара");
+      alert(isVacancyCategory(ad.category) ? "Введите название вакансии" : "Введите название товара");
       return;
     }
 
     if (priceNumber <= 0) {
-      alert("Укажите корректную цену");
+      alert(isVacancyCategory(ad.category) ? "Укажите корректную зарплату" : "Укажите корректную цену");
       return;
     }
 
@@ -3011,12 +3171,12 @@ async function publishAd(status = "active") {
     }
 
     const images = draftAd.images.slice(0, MAX_PHOTOS);
-    const mainImage = images[0] || DEFAULT_IMAGE;
-    if (draftAd.thumbnailSource !== mainImage || !draftAd.thumbnail) {
+    const mainImage = images[0] || "";
+    if (mainImage && (draftAd.thumbnailSource !== mainImage || !draftAd.thumbnail)) {
       draftAd.thumbnail = await createThumbnailFromImage(mainImage);
       draftAd.thumbnailSource = mainImage;
     }
-    const thumbnail = draftAd.thumbnail || mainImage;
+    const thumbnail = mainImage ? (draftAd.thumbnail || mainImage) : "";
 
     const editingId = state.editingProductId;
     const endpoint = editingId
@@ -3154,6 +3314,7 @@ function clearCreateForm() {
   if (modelCustom) modelCustom.value = "";
   if (year) year.value = "";
   refreshAdStructuredFields();
+  updateCategorySpecificUI("");
   refreshAdDistrictOptions();
   if (negotiable) negotiable.checked = false;
   if (delivery) delivery.checked = false;
@@ -3238,10 +3399,10 @@ async function editAd(id) {
     location.value = hasLocation ? product.location : "Другое";
   }
   refreshAdStructuredFields({
-    itemType: getSpecificationValue(product.specifications, ["Тип товара", "Подкатегория", "Тип"]),
-    brand: getSpecificationValue(product.specifications, ["Марка / бренд", "Марка", "Бренд"]),
-    model: getSpecificationValue(product.specifications, ["Модель"]),
-    year: getSpecificationValue(product.specifications, ["Год выпуска", "Год"])
+    itemType: getSpecificationValue(product.specifications, ["Тип товара", "Подкатегория", "Тип", "Сфера работы"]),
+    brand: getSpecificationValue(product.specifications, ["Марка / бренд", "Марка", "Бренд", "График работы"]),
+    model: getSpecificationValue(product.specifications, ["Модель", "Опыт работы"]),
+    year: getSpecificationValue(product.specifications, ["Год выпуска", "Год", "Тип занятости"])
   });
   refreshAdDistrictOptions(product.district || "");
   if (districtCustom && district?.value !== OTHER_OPTION_VALUE) districtCustom.value = "";

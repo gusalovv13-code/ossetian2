@@ -14,7 +14,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.13.1";
+const APP_VERSION = "1.13.2";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -67,7 +67,8 @@ const PRODUCT_CATEGORIES = new Set([
   "Дом",
   "Инструменты",
   "Сад и огород",
-  "Животные"
+  "Животные",
+  "Вакансии"
 ]);
 const MODERATION_STATUSES = new Set(["approved", "blocked", "rejected"]);
 const MODERATION_MATCH_TYPES = new Set(["word", "phrase", "domain"]);
@@ -80,6 +81,7 @@ const DELETED_PRODUCT_RETENTION_DAYS = Math.max(1, Math.min(3650, Number(process
 const FEATURE_HIGHLIGHT_PRICE_RUB = Math.max(0, Number(process.env.FEATURE_HIGHLIGHT_PRICE_RUB) || 199);
 const FEATURE_HIGHLIGHT_DAYS = Math.max(1, Math.min(90, Number(process.env.FEATURE_HIGHLIGHT_DAYS) || 7));
 const FEATURE_COLORS = new Set(["purple", "green", "gold"]);
+const preparedShareMessageCache = new Map();
 
 if (!BOT_TOKEN) {
   console.error("Ошибка: BOT_TOKEN не найден в переменных окружения");
@@ -792,7 +794,7 @@ async function readRemoteImageBuffer(source) {
     for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
       response = await fetch(currentUrl, {
         signal: controller.signal,
-        headers: { "User-Agent": "OssetianMarket/1.13.1" },
+        headers: { "User-Agent": "OssetianMarket/1.13.2" },
         redirect: "manual"
       });
 
@@ -1621,7 +1623,7 @@ app.get("/api/version", (req, res) => {
     ok: true,
     version: APP_VERSION,
     catalogOrderFix: true,
-    build: "advanced-search-and-seller-profiles"
+    build: "vacancies-fast-share-visible-report"
   });
 });
 
@@ -1700,6 +1702,13 @@ app.post(
         return res.status(400).json({ ok: false, error: "Некорректный Telegram ID" });
       }
 
+      const shareVersion = new Date(row.updated_at || row.created_at || Date.now()).getTime();
+      const shareCacheKey = `${userId}:${productId}:${shareVersion}`;
+      const cachedPrepared = preparedShareMessageCache.get(shareCacheKey);
+      if (cachedPrepared && (!cachedPrepared.expirationDate || cachedPrepared.expirationDate * 1000 > Date.now() + 30_000)) {
+        return res.json({ ok: true, ...cachedPrepared, cached: true });
+      }
+
       const origin = getPublicOrigin(req);
       const telegramLink = buildProductTelegramLink(productId);
       if (!origin || !telegramLink) {
@@ -1728,7 +1737,7 @@ app.post(
         }]]
       };
       const source = getShareRowImageSource(row);
-      const version = new Date(row.updated_at || row.created_at || Date.now()).getTime();
+      const version = shareVersion;
       const photoUrl = `${origin}/api/products/${encodeURIComponent(productId)}/share-photo.jpg?v=${version}`;
 
       const result = source && /^https:\/\//i.test(photoUrl)
@@ -1762,12 +1771,17 @@ app.post(
         allow_channel_chats: true
       });
 
-      return res.json({
-        ok: true,
+      const responsePayload = {
         preparedMessageId: prepared.id,
         expirationDate: prepared.expiration_date || null,
         includesPhoto: result.type === "photo"
-      });
+      };
+      preparedShareMessageCache.set(shareCacheKey, responsePayload);
+      if (preparedShareMessageCache.size > 500) {
+        const oldestKey = preparedShareMessageCache.keys().next().value;
+        if (oldestKey) preparedShareMessageCache.delete(oldestKey);
+      }
+      return res.json({ ok: true, ...responsePayload, cached: false });
     } catch (error) {
       console.error("Prepare product share message error:", error);
       return res.status(502).json({
@@ -2347,9 +2361,23 @@ app.get("/api/products", async (req, res) => {
     ];
     const values = [PUBLIC_PRODUCT_STATUS];
 
-    const searchTerms = search
+    const rawSearchTerms = search
       ? [...new Set(search.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean))].slice(0, 6)
       : [];
+    const vacancyRequested = !category && rawSearchTerms.some(term =>
+      term.startsWith("ваканс") || ["работа", "работы", "работу", "работе"].includes(term)
+    );
+    const vacancyStopWords = new Set(["ищу", "найти", "нужна", "нужен", "нужны", "покажи", "показать", "все", "актуальные"]);
+    const searchTerms = vacancyRequested
+      ? rawSearchTerms.filter(term =>
+          !(term.startsWith("ваканс") || ["работа", "работы", "работу", "работе"].includes(term) || vacancyStopWords.has(term))
+        )
+      : rawSearchTerms;
+
+    if (vacancyRequested) {
+      values.push("Вакансии");
+      conditions.push(`p.category = $${values.length}`);
+    }
 
     for (const term of searchTerms) {
       values.push(`%${term}%`);
@@ -2409,10 +2437,10 @@ app.get("/api/products", async (req, res) => {
         OR LOWER(COALESCE(p.specifications::text, '')) LIKE ${fallbackParameter}
       )`);
     };
-    addStructuredFilter(itemType, ["Тип товара", "Подкатегория", "Тип"]);
-    addStructuredFilter(brand, ["Марка / бренд", "Марка", "Бренд"]);
-    addStructuredFilter(model, ["Модель"]);
-    addStructuredFilter(year, ["Год выпуска", "Год"]);
+    addStructuredFilter(itemType, ["Тип товара", "Подкатегория", "Тип", "Сфера работы"]);
+    addStructuredFilter(brand, ["Марка / бренд", "Марка", "Бренд", "График работы"]);
+    addStructuredFilter(model, ["Модель", "Опыт работы"]);
+    addStructuredFilter(year, ["Год выпуска", "Год", "Тип занятости"]);
 
     if (minPrice) {
       values.push(minPrice);

@@ -12,7 +12,7 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=1.13.1" />
+  <link rel="stylesheet" href="style.css?v=1.13.2" />
 </head>
 
 <body>
@@ -37,8 +37,8 @@
         <button onclick="showPage('catalog')" class="menu-card purple" type="button">
           <span>🔍</span>
           <div>
-            <b>Найти товар</b>
-            <small>Поиск по всем объявлениям</small>
+            <b>Найти товар или вакансию</b>
+            <small>Поиск по актуальным объявлениям</small>
           </div>
         </button>
 
@@ -46,7 +46,7 @@
           <span>＋</span>
           <div>
             <b>Разместить объявление</b>
-            <small>Добавьте свой товар</small>
+            <small>Добавьте товар или вакансию</small>
           </div>
         </button>
 
@@ -76,7 +76,7 @@
         id="searchInput"
         class="search"
         type="search"
-        placeholder="Марка авто, модель телефона, товар..."
+        placeholder="Товар, вакансия, марка авто, модель телефона..."
         enterkeyhint="search"
         autocomplete="off"
       />
@@ -123,13 +123,13 @@
 
     <div class="filter-grid two-columns">
       <label>
-        <span>Тип товара</span>
+        <span id="filterItemTypeLabel">Тип товара</span>
         <select id="filterItemType">
           <option value="">Все типы</option>
         </select>
       </label>
       <label>
-        <span>Год выпуска</span>
+        <span id="filterYearLabel">Год выпуска</span>
         <select id="filterYear">
           <option value="">Любой год</option>
         </select>
@@ -138,13 +138,13 @@
 
     <div class="filter-grid two-columns">
       <label>
-        <span>Марка / бренд</span>
+        <span id="filterBrandLabel">Марка / бренд</span>
         <select id="filterBrand">
           <option value="">Все марки и бренды</option>
         </select>
       </label>
       <label>
-        <span>Модель</span>
+        <span id="filterModelLabel">Модель</span>
         <select id="filterModel">
           <option value="">Все модели</option>
         </select>
@@ -162,7 +162,7 @@
 
     <div class="filter-actions">
       <button id="resetCatalogFilters" class="outline" type="button">Сбросить</button>
-      <button class="primary" type="submit">Показать товары</button>
+      <button class="primary" type="submit">Показать объявления</button>
     </div>
   </form>
   <div id="searchStatus" class="search-status" aria-live="polite"></div>
@@ -178,6 +178,7 @@
     <button type="button" data-category="Инструменты" aria-pressed="false">🔧 Инструменты</button>
     <button type="button" data-category="Сад и огород" aria-pressed="false">🌱 Сад и огород</button>
     <button type="button" data-category="Животные" aria-pressed="false">🐄 Животные</button>
+    <button type="button" data-category="Вакансии" aria-pressed="false">💼 Вакансии</button>
   </div>
 
   <div id="productList" class="product-list"></div>
@@ -224,9 +225,8 @@
       </section>
 
       <div class="product-secondary-actions">
-        <button type="button" class="outline compact-share-action" onclick="shareProduct()">↗ Поделиться</button>
-        <button type="button" class="outline compact-share-action" onclick="copyProductLink()">🔗 Скопировать ссылку</button>
-        <button id="reportProductBtn" type="button" class="outline danger-outline" onclick="openReportDialog()">⚑ Пожаловаться</button>
+        <button id="shareProductBtn" type="button" class="outline compact-share-action" onclick="shareProduct(this)">↗ Поделиться</button>
+        <button id="reportProductBtn" type="button" class="outline danger-outline report-product-action" onclick="openReportDialog()">🚩 Пожаловаться на объявление</button>
       </div>
 
       <div class="actions">
@@ -259,10 +259,10 @@
         <b>3</b>
       </div>
 
-      <label for="adTitle">Название товара</label>
+      <label id="adTitleLabel" for="adTitle">Название товара</label>
       <input id="adTitle" placeholder="Введите название" enterkeyhint="done" />
 
-      <label for="adPrice">Цена</label>
+      <label id="adPriceLabel" for="adPrice">Цена</label>
       <input
         id="adPrice"
         type="text"
@@ -312,6 +312,7 @@
         <option value="Инструменты">Инструменты</option>
         <option value="Сад и огород">Сад и огород</option>
         <option value="Животные">Животные</option>
+        <option value="Вакансии">Вакансии</option>
       </select>
 
       <section id="adStructuredFields" class="structured-fields-card" hidden>
@@ -325,36 +326,38 @@
 
         <div class="filter-grid two-columns">
           <label>
-            <span>Тип товара</span>
+            <span id="adItemTypeLabel">Тип товара</span>
             <select id="adItemType"></select>
           </label>
           <label>
-            <span>Год выпуска</span>
+            <span id="adYearLabel">Год выпуска</span>
             <select id="adYear"></select>
           </label>
         </div>
 
         <div class="filter-grid two-columns">
           <label>
-            <span>Марка / бренд</span>
+            <span id="adBrandLabel">Марка / бренд</span>
             <select id="adBrand"></select>
             <input id="adBrandCustom" maxlength="80" placeholder="Введите марку или бренд" hidden />
           </label>
           <label>
-            <span>Модель</span>
+            <span id="adModelLabel">Модель</span>
             <select id="adModel"></select>
             <input id="adModelCustom" maxlength="80" placeholder="Введите модель" hidden />
           </label>
         </div>
       </section>
 
-      <label for="adCondition">Состояние товара</label>
-      <select id="adCondition">
-        <option value="new">Новое</option>
-        <option value="like_new">Как новое</option>
-        <option value="used" selected>Бывшее в употреблении</option>
-        <option value="for_parts">На запчасти</option>
-      </select>
+      <div id="adConditionField">
+        <label for="adCondition">Состояние товара</label>
+        <select id="adCondition">
+          <option value="new">Новое</option>
+          <option value="like_new">Как новое</option>
+          <option value="used" selected>Бывшее в употреблении</option>
+          <option value="for_parts">На запчасти</option>
+        </select>
+      </div>
 
       <label for="adDesc">Описание</label>
       <textarea
@@ -383,8 +386,8 @@
         <b>3</b>
       </div>
 
-      <h3>Фото объявления</h3>
-      <p class="muted">Добавьте до 5 фото товара.</p>
+      <h3 id="createPhotoHeading">Фото объявления</h3>
+      <p id="createPhotoHint" class="muted">Добавьте до 5 фото товара.</p>
 
       <input id="photoInput" type="file" accept="image/*" multiple hidden />
 
@@ -805,11 +808,11 @@
       <select id="reportReason" required>
         <option value="">Выберите причину</option>
         <option value="fraud">Мошенничество</option>
-        <option value="prohibited">Запрещённый товар</option>
+        <option value="prohibited">Запрещённый товар или содержание</option>
         <option value="wrong_category">Неверная категория</option>
         <option value="wrong_price">Неверная цена</option>
         <option value="duplicate">Дубликат</option>
-        <option value="sold">Товар уже продан</option>
+        <option value="sold">Объявление уже неактуально</option>
         <option value="stolen_photos">Чужие фотографии</option>
         <option value="offensive">Оскорбительное содержание</option>
         <option value="other">Другая причина</option>
@@ -827,6 +830,6 @@
 
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">‹</div>
 
-  <script src="script.js?v=1.13.1"></script>
+  <script src="script.js?v=1.13.2"></script>
 </body>
 </html>

@@ -19,9 +19,9 @@ const packageSource = JSON.parse(
   await readFile(new URL("../package.json", import.meta.url), "utf8")
 );
 
-test("версия проекта обновлена до 1.13.1", () => {
-  assert.equal(packageSource.version, "1.13.1");
-  assert.match(serverSource, /const APP_VERSION = "1\.13\.1"/);
+test("версия проекта обновлена до 1.13.2", () => {
+  assert.equal(packageSource.version, "1.13.2");
+  assert.match(serverSource, /const APP_VERSION = "1\.13\.2"/);
 });
 
 test("карточка товара получает похожие объявления, товары продавца и счётчик избранного", () => {
@@ -91,12 +91,12 @@ test("админка содержит очередь жалоб и действ�
   assert.match(clientSource, /function moderateAdminReport/);
 });
 
-test("поделиться и скопировать ссылку используют прямую ссылку на товар", () => {
-  assert.match(htmlSource, /onclick="shareProduct\(\)"/);
-  assert.match(htmlSource, /onclick="copyProductLink\(\)"/);
-  assert.match(clientSource, /url\.searchParams\.set\("product"/);
-  assert.match(clientSource, /navigator\.share/);
-  assert.match(clientSource, /navigator\.clipboard/);
+test("поделиться использует прямую ссылку на товар, а копирование ссылки удалено", () => {
+  assert.match(htmlSource, /onclick="shareProduct\(this\)"/);
+  assert.doesNotMatch(htmlSource, /copyProductLink/);
+  assert.match(clientSource, /getProductSharePageLink/);
+  assert.match(clientSource, /openFastTelegramShare/);
+  assert.match(clientSource, /tg\?\.openTelegramLink/);
   assert.match(clientSource, /directProductId/);
 });
 

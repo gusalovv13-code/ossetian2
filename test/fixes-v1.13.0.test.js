@@ -8,11 +8,11 @@ const server = fs.readFileSync(new URL("../server.js", import.meta.url), "utf8")
 const css = fs.readFileSync(new URL("../public/style.css", import.meta.url), "utf8");
 const packageJson = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
-test("версия и кеш обновлены до 1.13.1", () => {
-  assert.equal(packageJson.version, "1.13.1");
-  assert.match(server, /const APP_VERSION = "1\.13\.1"/);
-  assert.match(html, /style\.css\?v=1\.13\.1/);
-  assert.match(html, /script\.js\?v=1\.13\.1/);
+test("версия и кеш обновлены до 1.13.2", () => {
+  assert.equal(packageJson.version, "1.13.2");
+  assert.match(server, /const APP_VERSION = "1\.13\.2"/);
+  assert.match(html, /style\.css\?v=1\.13\.2/);
+  assert.match(html, /script\.js\?v=1\.13\.2/);
 });
 
 test("фильтры каталога используют зависимые выпадающие списки", () => {
@@ -48,8 +48,8 @@ test("сервер фильтрует структурированные хар�
   assert.match(server, /req\.query\.itemType/);
   assert.match(server, /req\.query\.year/);
   assert.match(server, /function? addStructuredFilter|const addStructuredFilter/);
-  assert.match(server, /addStructuredFilter\(brand, \["Марка \/ бренд", "Марка", "Бренд"\]\)/);
-  assert.match(server, /addStructuredFilter\(year, \["Год выпуска", "Год"\]\)/);
+  assert.match(server, /addStructuredFilter\(brand, \["Марка \/ бренд", "Марка", "Бренд", "График работы"\]\)/);
+  assert.match(server, /addStructuredFilter\(year, \["Год выпуска", "Год", "Тип занятости"\]\)/);
 });
 
 test("новые элементы имеют отдельное оформление", () => {

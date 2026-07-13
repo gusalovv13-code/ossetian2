@@ -29,7 +29,7 @@ test("ссылка объявления запускает Telegram Mini App", (
 });
 
 test("кнопки обмена и шрифты стали компактнее", () => {
-  assert.match(html, /class="outline compact-share-action" onclick="shareProduct\(\)"/);
+  assert.match(html, /id="shareProductBtn"[\s\S]*?onclick="shareProduct\(this\)"/);
   assert.match(css, /\.product-secondary-actions \.compact-share-action[\s\S]*?min-height: 34px/);
   assert.match(css, /body \{\n  font-size: 15px;/);
 });
