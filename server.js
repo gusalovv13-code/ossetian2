@@ -14,7 +14,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.12.7";
+const APP_VERSION = "1.12.8";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -184,6 +184,8 @@ function mapProduct(row) {
     autoHidden: Boolean(row.auto_hidden),
     hidden: Boolean(row.hidden),
     status: row.status || "active",
+    soldAt: row.sold_at ? new Date(row.sold_at).getTime() : null,
+    mediaPurgedAt: row.media_purged_at ? new Date(row.media_purged_at).getTime() : null,
     archivedAt: row.archived_at ? new Date(row.archived_at).getTime() : null,
     expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : null,
     featuredUntil: row.featured_until ? new Date(row.featured_until).getTime() : null,
@@ -232,6 +234,8 @@ const PRODUCT_SUMMARY_COLUMNS = `
   p.delivery,
   p.views,
   p.status,
+  p.sold_at,
+  p.media_purged_at,
   p.hidden,
   p.moderation_status,
   p.moderation_reason,
@@ -267,6 +271,8 @@ const PRODUCT_PUBLIC_DETAIL_COLUMNS = `
   p.specifications,
   p.views,
   p.status,
+  p.sold_at,
+  p.media_purged_at,
   p.hidden,
   p.moderation_status,
   p.moderation_reason,
@@ -362,6 +368,8 @@ function mapProductSummary(row) {
     views: Number(row.views) || 0,
     favoriteCount: Number(row.favorite_count) || 0,
     status: row.status || "active",
+    soldAt: row.sold_at ? new Date(row.sold_at).getTime() : null,
+    mediaPurgedAt: row.media_purged_at ? new Date(row.media_purged_at).getTime() : null,
     hidden: Boolean(row.hidden),
     moderationStatus: MODERATION_STATUSES.has(row.moderation_status) ? row.moderation_status : "approved",
     moderationReason: row.moderation_reason || "",
@@ -773,7 +781,7 @@ async function readRemoteImageBuffer(source) {
     for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
       response = await fetch(currentUrl, {
         signal: controller.signal,
-        headers: { "User-Agent": "OssetianMarket/1.12.7" },
+        headers: { "User-Agent": "OssetianMarket/1.12.8" },
         redirect: "manual"
       });
 
@@ -1309,6 +1317,8 @@ async function initDb() {
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS auto_hidden BOOLEAN DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS moderation_target_status TEXT DEFAULT 'active';`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS sold_at TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS media_purged_at TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_until TIMESTAMPTZ;`);
@@ -1583,7 +1593,7 @@ app.get("/api/version", (req, res) => {
     ok: true,
     version: APP_VERSION,
     catalogOrderFix: true,
-    build: "telegram-photo-sharing"
+    build: "sold-history-and-free-pan"
   });
 });
 
@@ -2323,7 +2333,7 @@ app.get("/api/my-products/:id/details", requireTelegramAuth, syncTelegramUser, a
         FROM products p
         WHERE p.id = $1
           AND p.owner_id = $2
-          AND COALESCE(status, 'active') <> 'deleted';
+          AND COALESCE(status, 'active') NOT IN ('deleted', 'sold');
       `,
       [productId, req.telegramUser.id]
     );
@@ -2498,6 +2508,13 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     }
 
     const existing = existingResult.rows[0];
+    if ((existing.status || "active") === "sold") {
+      await client.query("ROLLBACK");
+      return res.status(409).json({
+        ok: false,
+        error: "Проданное объявление хранится только в истории и больше не редактируется"
+      });
+    }
     const existingImages = normalizeImages(existing);
     const mainImageChanged = String(cleanImages[0] || "") !== String(existingImages[0] || existing.image || "");
     const cleanThumbnail = requestedThumbnail || (!mainImageChanged ? existing.thumbnail : "") || cleanImages[0] || "";
@@ -2513,7 +2530,7 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     }, client);
     const finalStatus = moderation.blocked
       ? "draft"
-      : (["active", "sold", "draft"].includes(requestedStatus) ? requestedStatus : "active");
+      : (["active", "draft"].includes(requestedStatus) ? requestedStatus : "active");
 
     const result = await client.query(
       `
@@ -2725,6 +2742,7 @@ app.post("/api/products/:id/view", async (req, res) => {
 });
 
 app.patch("/api/products/:id/status", requireTelegramAuth, syncTelegramUser, async (req, res) => {
+  const client = await pool.connect();
   try {
     const productId = normalizeText(req.params.id, 64);
     const status = normalizeProductStatus(req.body?.status, "");
@@ -2736,24 +2754,109 @@ app.patch("/api/products/:id/status", requireTelegramAuth, syncTelegramUser, asy
       });
     }
 
-    const result = await pool.query(
-      `
-        UPDATE products
-        SET status = $3,
-            published_at = CASE WHEN $3 = 'active' THEN NOW() ELSE published_at END,
-            expires_at = CASE WHEN $3 = 'active' THEN NOW() + ($4::int * INTERVAL '1 day') ELSE expires_at END,
-            archived_at = CASE WHEN $3 = 'archived' THEN NOW() WHEN $3 = 'active' THEN NULL ELSE archived_at END,
-            updated_at = NOW()
-        WHERE id = $1
-          AND owner_id = $2
-          AND COALESCE(status, 'active') <> 'deleted'
-          AND ($3 <> 'active' OR COALESCE(moderation_status, 'approved') = 'approved')
-        RETURNING *;
-      `,
-      [productId, req.telegramUser.id, status, PRODUCT_ARCHIVE_DAYS]
+    await client.query("BEGIN");
+    const existingResult = await client.query(
+      `SELECT * FROM products WHERE id = $1 AND owner_id = $2 AND COALESCE(status, 'active') <> 'deleted' FOR UPDATE`,
+      [productId, req.telegramUser.id]
     );
 
+    if (existingResult.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({
+        ok: false,
+        error: "Объявление не найдено или у вас нет прав"
+      });
+    }
+
+    const existing = existingResult.rows[0];
+    const currentStatus = existing.status || "active";
+
+    if (currentStatus === "sold") {
+      await client.query("ROLLBACK");
+      return res.status(409).json({
+        ok: false,
+        error: "Проданное объявление окончательно закрыто и доступно только в истории"
+      });
+    }
+
+    let result;
+
+    if (status === "sold") {
+      if (currentStatus !== "active") {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          ok: false,
+          error: "Отметить проданным можно только активное объявление"
+        });
+      }
+
+      await client.query("DELETE FROM favorites WHERE product_id = $1", [productId]);
+      await client.query("DELETE FROM product_images WHERE product_id = $1", [productId]);
+      await client.query("DELETE FROM product_price_history WHERE product_id = $1", [productId]);
+      await client.query("DELETE FROM reports WHERE product_id = $1", [productId]);
+      await client.query("DELETE FROM product_feature_requests WHERE product_id = $1", [productId]);
+      await client.query("DELETE FROM moderation_events WHERE product_id = $1", [productId]);
+      await client.query(
+        `UPDATE advertising_campaigns
+         SET linked_product_id = '',
+             status = CASE WHEN status = 'active' THEN 'paused' ELSE status END,
+             updated_at = NOW()
+         WHERE linked_product_id = $1`,
+        [productId]
+      );
+
+      result = await client.query(
+        `
+          UPDATE products
+          SET status = 'sold',
+              hidden = TRUE,
+              sold_at = COALESCE(sold_at, NOW()),
+              media_purged_at = NOW(),
+              image = '',
+              thumbnail = '',
+              images = '[]'::jsonb,
+              description = '',
+              phone = '',
+              allow_messages = FALSE,
+              district = '',
+              specifications = '{}'::jsonb,
+              previous_price = '',
+              previous_price_amount = NULL,
+              price_dropped_at = NULL,
+              moderation_reason = '',
+              moderation_matches = '[]'::jsonb,
+              moderation_target_status = 'sold',
+              featured_paid = FALSE,
+              featured_until = NULL,
+              expires_at = NULL,
+              archived_at = NULL,
+              updated_at = NOW()
+          WHERE id = $1 AND owner_id = $2
+          RETURNING *;
+        `,
+        [productId, req.telegramUser.id]
+      );
+    } else {
+      result = await client.query(
+        `
+          UPDATE products
+          SET status = $3,
+              published_at = CASE WHEN $3 = 'active' THEN NOW() ELSE published_at END,
+              expires_at = CASE WHEN $3 = 'active' THEN NOW() + ($4::int * INTERVAL '1 day') ELSE expires_at END,
+              archived_at = CASE WHEN $3 = 'archived' THEN NOW() WHEN $3 = 'active' THEN NULL ELSE archived_at END,
+              updated_at = NOW()
+          WHERE id = $1
+            AND owner_id = $2
+            AND COALESCE(status, 'active') NOT IN ('deleted', 'sold')
+            AND ($3 <> 'active' OR COALESCE(moderation_status, 'approved') = 'approved')
+          RETURNING *;
+        `,
+        [productId, req.telegramUser.id, status, PRODUCT_ARCHIVE_DAYS]
+      );
+    }
+
     if (result.rows.length === 0) {
+      await client.query("ROLLBACK");
       return res.status(404).json({
         ok: false,
         error: status === "active"
@@ -2762,16 +2865,20 @@ app.patch("/api/products/:id/status", requireTelegramAuth, syncTelegramUser, asy
       });
     }
 
+    await client.query("COMMIT");
     res.json({
       ok: true,
       product: mapProduct(result.rows[0])
     });
   } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
     console.error("Update product status error:", error);
     res.status(500).json({
       ok: false,
       error: "Не удалось изменить статус объявления"
     });
+  } finally {
+    client.release();
   }
 });
 
@@ -2887,7 +2994,7 @@ app.delete("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (re
             updated_at = NOW()
         WHERE id = $1
           AND owner_id = $2
-          AND COALESCE(status, 'active') <> 'deleted'
+          AND COALESCE(status, 'active') NOT IN ('deleted', 'sold')
         RETURNING id;
       `,
       [productId, req.telegramUser.id]
@@ -2896,7 +3003,7 @@ app.delete("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (re
     if (result.rows.length === 0) {
       return res.status(403).json({
         ok: false,
-        error: "Нет прав на удаление или товар не найден"
+        error: "Проданные объявления не удаляются из истории; либо товар не найден"
       });
     }
 
@@ -3553,7 +3660,7 @@ app.get(
         (SELECT COUNT(*)::int FROM reports r WHERE r.product_id = products.id AND r.status = 'pending') AS report_count,
         (SELECT COUNT(*)::int FROM product_feature_requests pfr WHERE pfr.product_id = products.id AND pfr.status = 'pending') AS pending_feature_requests
       FROM products
-      WHERE COALESCE(status, 'active') <> 'deleted'
+      WHERE COALESCE(status, 'active') NOT IN ('deleted', 'sold')
       ORDER BY created_at DESC
       LIMIT 100;
     `);
@@ -3581,7 +3688,7 @@ app.patch(
             END,
             updated_at = NOW()
         WHERE id = $1
-          AND COALESCE(status, 'active') <> 'deleted'
+          AND COALESCE(status, 'active') NOT IN ('deleted', 'sold')
         RETURNING id, name, hidden, moderation_status;
       `,
       [productId]
@@ -3629,7 +3736,7 @@ app.patch(
             featured_until = $4,
             updated_at = NOW()
         WHERE id = $1
-          AND COALESCE(status, 'active') <> 'deleted'
+          AND COALESCE(status, 'active') NOT IN ('deleted', 'sold')
           AND (
             $2 = FALSE
             OR (
@@ -4324,6 +4431,7 @@ app.delete(
             status = 'deleted',
             updated_at = NOW()
         WHERE id = $1
+          AND COALESCE(status, 'active') <> 'sold'
         RETURNING id, name;
       `,
       [productId]
@@ -4471,6 +4579,68 @@ async function runProductLifecycleMaintenance() {
       [PRODUCT_ARCHIVE_DAYS]
     );
 
+    const soldCleanup = await pool.query(
+      `
+        WITH sold_ids AS (
+          SELECT id
+          FROM products
+          WHERE status = 'sold'
+            AND media_purged_at IS NULL
+        ),
+        delete_favorites AS (
+          DELETE FROM favorites WHERE product_id IN (SELECT id FROM sold_ids)
+        ),
+        delete_images AS (
+          DELETE FROM product_images WHERE product_id IN (SELECT id FROM sold_ids)
+        ),
+        delete_price_history AS (
+          DELETE FROM product_price_history WHERE product_id IN (SELECT id FROM sold_ids)
+        ),
+        delete_reports AS (
+          DELETE FROM reports WHERE product_id IN (SELECT id FROM sold_ids)
+        ),
+        delete_feature_requests AS (
+          DELETE FROM product_feature_requests WHERE product_id IN (SELECT id FROM sold_ids)
+        ),
+        delete_moderation_events AS (
+          DELETE FROM moderation_events WHERE product_id IN (SELECT id FROM sold_ids)
+        ),
+        unlink_campaigns AS (
+          UPDATE advertising_campaigns
+          SET linked_product_id = '',
+              status = CASE WHEN status = 'active' THEN 'paused' ELSE status END,
+              updated_at = NOW()
+          WHERE linked_product_id IN (SELECT id FROM sold_ids)
+        )
+        UPDATE products
+        SET hidden = TRUE,
+            sold_at = COALESCE(sold_at, updated_at, NOW()),
+            media_purged_at = NOW(),
+            image = '',
+            thumbnail = '',
+            images = '[]'::jsonb,
+            description = '',
+            phone = '',
+            allow_messages = FALSE,
+            district = '',
+            specifications = '{}'::jsonb,
+            previous_price = '',
+            previous_price_amount = NULL,
+            price_dropped_at = NULL,
+            moderation_reason = '',
+            moderation_matches = '[]'::jsonb,
+            moderation_target_status = 'sold',
+            auto_hidden = FALSE,
+            featured_paid = FALSE,
+            featured_until = NULL,
+            expires_at = NULL,
+            archived_at = NULL,
+            updated_at = NOW()
+        WHERE id IN (SELECT id FROM sold_ids)
+        RETURNING id;
+      `
+    );
+
     const purged = await pool.query(
       `
         DELETE FROM products
@@ -4481,8 +4651,10 @@ async function runProductLifecycleMaintenance() {
       [DELETED_PRODUCT_RETENTION_DAYS]
     );
 
-    if (archived.rowCount || purged.rowCount) {
-      console.log(`Lifecycle maintenance: archived=${archived.rowCount}, purged=${purged.rowCount}`);
+    if (archived.rowCount || soldCleanup.rowCount || purged.rowCount) {
+      console.log(
+        `Lifecycle maintenance: archived=${archived.rowCount}, sold-media-purged=${soldCleanup.rowCount}, deleted-purged=${purged.rowCount}`
+      );
     }
   } catch (error) {
     console.error("Product lifecycle maintenance error:", error);

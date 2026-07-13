@@ -141,8 +141,6 @@ let galleryImageSequence = 0;
 let lightboxZoom = 1;
 let lightboxPanX = 0;
 let lightboxPanY = 0;
-let lightboxTouchDistance = 0;
-let lightboxTouchScale = 1;
 
 function getTelegramAuthHeaders() {
   const initData = tg?.initData?.trim();
@@ -1186,6 +1184,7 @@ function getProductCard(product, options = {}) {
     ? `<span class="price-drop-card-badge">Цена снизилась${product.priceDropPercent ? ` −${Number(product.priceDropPercent)}%` : ""}</span>`
     : "";
   const status = product.status || "active";
+  const isSoldHistory = options.ownerActions && status === "sold";
   const featureColor = FEATURE_REQUEST_COLORS.has(product.featuredColor)
     ? product.featuredColor
     : "purple";
@@ -1204,7 +1203,14 @@ function getProductCard(product, options = {}) {
     >${isFav ? "♥" : "♡"}</button>
   `;
 
-  if (options.ownerActions) {
+  if (isSoldHistory) {
+    actions = `
+      <div class="sold-history-note" role="status">
+        <span aria-hidden="true">✓</span>
+        <div><b>Сделка завершена</b><small>Фото и личные данные удалены. Объявление оставлено только в истории.</small></div>
+      </div>
+    `;
+  } else if (options.ownerActions) {
     const canRequestFeature = status === "active" && !product.hidden && product.moderationStatus !== "blocked";
     const featureActionTitle = product.featureRequestPending
       ? "Заявка ожидает подтверждения"
@@ -1232,9 +1238,13 @@ function getProductCard(product, options = {}) {
   const cardAction = options.ownerActions && (status !== "active" || product.hidden || product.moderationStatus === "blocked")
     ? `editAd('${productId}')`
     : `openProduct('${productId}')`;
+  const interactionAttributes = isSoldHistory
+    ? 'aria-disabled="true" tabindex="-1"'
+    : `onclick="${cardAction}"`;
+  const historyTime = product.soldAt || product.updatedAt || product.createdAt;
 
   return `
-    <div class="product-card ${options.ownerActions ? "owner-product-card" : ""} ${status !== "active" ? "is-inactive" : ""} ${featuredClass}" onclick="${cardAction}">
+    <div class="product-card ${options.ownerActions ? "owner-product-card" : ""} ${status !== "active" ? "is-inactive" : ""} ${isSoldHistory ? "sold-history-card is-noninteractive" : ""} ${featuredClass}" ${interactionAttributes}>
       ${featuredBadge}
       <img src="${image}" alt="${name}" loading="${options.priority ? "eager" : "lazy"}" decoding="async" fetchpriority="${options.priority ? "high" : "low"}" onerror="handleImageError(this)">
       <div class="${options.ownerActions ? "product-card-info" : ""}">
@@ -1242,8 +1252,8 @@ function getProductCard(product, options = {}) {
         ${priceDropMarkup}
         <h4>${name}</h4>
         <div class="card-price-row"><b>${price}</b>${product.priceDropped && previousPrice ? `<s>${previousPrice}</s>` : ""}</div>
-        <p>${location} · ${getTimeAgo(product.createdAt)}</p>
-        ${options.showStatus ? `<p class="product-status status-${escapeHTML(status)}">${escapeHTML(product.moderationStatus === "blocked" ? getProductStatusLabel(status, product) : (product.hidden ? "Скрыто модератором" : getProductStatusLabel(status, product)))}</p>` : ""}
+        <p>${location} · ${getTimeAgo(isSoldHistory ? historyTime : product.createdAt)}</p>
+        ${options.showStatus ? `<p class="product-status status-${escapeHTML(status)}">${escapeHTML(product.moderationStatus === "blocked" ? getProductStatusLabel(status, product) : (product.hidden && status !== "sold" ? "Скрыто модератором" : getProductStatusLabel(status, product)))}</p>` : ""}
         ${options.showStatus && product.moderationStatus === "blocked" && product.moderationReason ? `<p class="moderation-owner-reason">${escapeHTML(product.moderationReason)}</p>` : ""}
       </div>
       ${actions}
@@ -1518,10 +1528,26 @@ function showProductImage(index) {
   });
 }
 
+function clampLightboxPan() {
+  const image = document.getElementById("lightboxImage");
+  const viewport = document.getElementById("lightboxViewport");
+  if (!image || !viewport || lightboxZoom <= 1.01) {
+    lightboxPanX = 0;
+    lightboxPanY = 0;
+    return;
+  }
+
+  const maxPanX = Math.max(0, (image.clientWidth * lightboxZoom - viewport.clientWidth) / 2);
+  const maxPanY = Math.max(0, (image.clientHeight * lightboxZoom - viewport.clientHeight) / 2);
+  lightboxPanX = Math.max(-maxPanX, Math.min(maxPanX, lightboxPanX));
+  lightboxPanY = Math.max(-maxPanY, Math.min(maxPanY, lightboxPanY));
+}
+
 function applyLightboxTransform() {
   const image = document.getElementById("lightboxImage");
   const resetButton = document.getElementById("lightboxZoomReset");
   if (!image) return;
+  clampLightboxPan();
   image.style.transform = `translate3d(${lightboxPanX}px, ${lightboxPanY}px, 0) scale(${lightboxZoom})`;
   image.classList.toggle("is-zoomed", lightboxZoom > 1.01);
   if (resetButton) resetButton.textContent = `${Math.round(lightboxZoom * 100)}%`;
@@ -1529,10 +1555,18 @@ function applyLightboxTransform() {
 
 function setLightboxZoom(value) {
   lightboxZoom = Math.max(1, Math.min(4, Number(value) || 1));
-  if (lightboxZoom === 1) {
+  if (lightboxZoom <= 1.01) {
+    lightboxZoom = 1;
     lightboxPanX = 0;
     lightboxPanY = 0;
   }
+  applyLightboxTransform();
+}
+
+function setLightboxPan(x, y) {
+  if (lightboxZoom <= 1.01) return;
+  lightboxPanX = Number(x) || 0;
+  lightboxPanY = Number(y) || 0;
   applyLightboxTransform();
 }
 
@@ -1576,44 +1610,95 @@ function getTouchDistance(touches) {
   );
 }
 
+function getTouchCenter(touches) {
+  if (!touches || touches.length < 2) return { x: 0, y: 0 };
+  return {
+    x: (touches[0].clientX + touches[1].clientX) / 2,
+    y: (touches[0].clientY + touches[1].clientY) / 2
+  };
+}
+
 function initProductGalleryGestures() {
-  const attachSwipe = element => {
+  const attachSwipe = (element, isLightbox = false) => {
     if (!element || element.dataset.swipeReady === "1") return;
     element.dataset.swipeReady = "1";
 
     let startX = 0;
     let startY = 0;
+    let startPanX = 0;
+    let startPanY = 0;
+    let startDistance = 0;
+    let startScale = 1;
+    let startCenter = { x: 0, y: 0 };
+    let gestureMode = "";
 
     element.addEventListener("touchstart", event => {
-      if (element.id === "photoLightbox" && event.touches?.length === 2) {
-        lightboxTouchDistance = getTouchDistance(event.touches);
-        lightboxTouchScale = lightboxZoom;
+      if (isLightbox && event.touches?.length === 2) {
+        startDistance = getTouchDistance(event.touches);
+        startScale = lightboxZoom;
+        startCenter = getTouchCenter(event.touches);
+        startPanX = lightboxPanX;
+        startPanY = lightboxPanY;
+        gestureMode = "pinch";
         return;
       }
+
       const touch = event.touches?.[0];
       if (!touch) return;
       startX = touch.clientX;
       startY = touch.clientY;
+      startPanX = lightboxPanX;
+      startPanY = lightboxPanY;
+      gestureMode = isLightbox && lightboxZoom > 1.01 ? "pan" : "swipe";
     }, { passive: true });
 
     element.addEventListener("touchmove", event => {
-      if (element.id !== "photoLightbox" || event.touches?.length !== 2) return;
-      const distance = getTouchDistance(event.touches);
-      if (!lightboxTouchDistance || !distance) return;
-      event.preventDefault();
-      setLightboxZoom(lightboxTouchScale * (distance / lightboxTouchDistance));
+      if (!isLightbox) return;
+
+      if (event.touches?.length === 2 && gestureMode === "pinch") {
+        const distance = getTouchDistance(event.touches);
+        if (!startDistance || !distance) return;
+        event.preventDefault();
+
+        const nextZoom = Math.max(1, Math.min(4, startScale * (distance / startDistance)));
+        const center = getTouchCenter(event.touches);
+        const rect = element.getBoundingClientRect();
+        const viewportCenterX = rect.left + rect.width / 2;
+        const viewportCenterY = rect.top + rect.height / 2;
+        const anchorX = (startCenter.x - viewportCenterX - startPanX) / Math.max(startScale, 0.01);
+        const anchorY = (startCenter.y - viewportCenterY - startPanY) / Math.max(startScale, 0.01);
+
+        lightboxZoom = nextZoom;
+        lightboxPanX = center.x - viewportCenterX - nextZoom * anchorX;
+        lightboxPanY = center.y - viewportCenterY - nextZoom * anchorY;
+        applyLightboxTransform();
+        return;
+      }
+
+      if (event.touches?.length === 1 && gestureMode === "pan" && lightboxZoom > 1.01) {
+        const touch = event.touches[0];
+        event.preventDefault();
+        setLightboxPan(
+          startPanX + touch.clientX - startX,
+          startPanY + touch.clientY - startY
+        );
+      }
     }, { passive: false });
 
     element.addEventListener("touchend", event => {
-      if (element.id === "photoLightbox" && (lightboxTouchDistance || lightboxZoom > 1.01)) {
-        lightboxTouchDistance = 0;
+      if (gestureMode === "pinch" || gestureMode === "pan") {
+        startDistance = 0;
+        gestureMode = "";
+        applyLightboxTransform();
         return;
       }
+
       const touch = event.changedTouches?.[0];
       if (!touch) return;
 
       const deltaX = touch.clientX - startX;
       const deltaY = Math.abs(touch.clientY - startY);
+      gestureMode = "";
       if (Math.abs(deltaX) < 45 || deltaY > 70) return;
 
       changeProductImage(deltaX < 0 ? 1 : -1);
@@ -1621,7 +1706,8 @@ function initProductGalleryGestures() {
   };
 
   attachSwipe(document.getElementById("productGallery"));
-  attachSwipe(document.getElementById("photoLightbox"));
+  const lightboxViewport = document.getElementById("lightboxViewport");
+  attachSwipe(lightboxViewport, true);
 
   document.getElementById("productPrevImage")?.addEventListener("click", event => {
     event.stopPropagation();
@@ -1639,7 +1725,40 @@ function initProductGalleryGestures() {
     setLightboxZoom(lightboxZoom > 1.01 ? 1 : 2.5);
   });
 
-  document.getElementById("lightboxViewport")?.addEventListener("wheel", event => {
+  let pointerDragging = false;
+  let pointerStartX = 0;
+  let pointerStartY = 0;
+  let pointerStartPanX = 0;
+  let pointerStartPanY = 0;
+
+  lightboxViewport?.addEventListener("pointerdown", event => {
+    if (event.pointerType === "touch" || lightboxZoom <= 1.01) return;
+    pointerDragging = true;
+    pointerStartX = event.clientX;
+    pointerStartY = event.clientY;
+    pointerStartPanX = lightboxPanX;
+    pointerStartPanY = lightboxPanY;
+    lightboxViewport.setPointerCapture?.(event.pointerId);
+  });
+
+  lightboxViewport?.addEventListener("pointermove", event => {
+    if (!pointerDragging) return;
+    event.preventDefault();
+    setLightboxPan(
+      pointerStartPanX + event.clientX - pointerStartX,
+      pointerStartPanY + event.clientY - pointerStartY
+    );
+  });
+
+  const stopPointerDrag = event => {
+    if (!pointerDragging) return;
+    pointerDragging = false;
+    lightboxViewport?.releasePointerCapture?.(event.pointerId);
+  };
+  lightboxViewport?.addEventListener("pointerup", stopPointerDrag);
+  lightboxViewport?.addEventListener("pointercancel", stopPointerDrag);
+
+  lightboxViewport?.addEventListener("wheel", event => {
     event.preventDefault();
     changeLightboxZoom(event.deltaY < 0 ? 0.5 : -0.5);
   }, { passive: false });
@@ -1979,6 +2098,11 @@ function renderProductDetails(product) {
 
 async function openProduct(id) {
   if (!id) return;
+  const knownProduct = findProductById(id);
+  if ((knownProduct?.status || "active") === "sold") {
+    alert("Проданное объявление доступно только как запись в истории.");
+    return;
+  }
 
   const openSequence = ++productOpenSequence;
   state.openedProductId = id;
@@ -2534,6 +2658,11 @@ async function editAd(id) {
     return;
   }
 
+  if ((product.status || "active") === "sold") {
+    alert("Проданное объявление закрыто. Его нельзя открыть или редактировать.");
+    return;
+  }
+
   if (product.isSummary || !Array.isArray(product.images) || typeof product.desc === "undefined") {
     try {
       const data = await apiRequest(`/api/my-products/${encodeURIComponent(id)}/details`);
@@ -2704,6 +2833,19 @@ async function changeAdStatus(id, status) {
     return;
   }
 
+  const currentProduct = state.myProducts.find(product => product.id === id);
+  if ((currentProduct?.status || "active") === "sold") {
+    alert("Проданное объявление окончательно закрыто и доступно только в истории.");
+    return;
+  }
+
+  if (status === "sold") {
+    const confirmed = confirm(
+      "Отметить товар проданным? После подтверждения фотографии, описание, контакты и связанные данные будут удалены. В истории останутся только название, цена, категория, город и дата продажи. Восстановить или редактировать объявление будет нельзя."
+    );
+    if (!confirmed) return;
+  }
+
   try {
     const data = await apiRequest(`/api/products/${encodeURIComponent(id)}/status`, {
       method: "PATCH",
@@ -2747,6 +2889,12 @@ async function changeAdStatus(id, status) {
 async function deleteAd(id) {
   if (!state.telegramUser?.id) {
     alert("Откройте приложение через Telegram");
+    return;
+  }
+
+  const product = state.myProducts.find(item => item.id === id);
+  if ((product?.status || "active") === "sold") {
+    alert("Проданное объявление нельзя удалить или изменить: оно оставлено как неактивная запись в истории.");
     return;
   }
 

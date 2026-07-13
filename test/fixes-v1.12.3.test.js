@@ -13,9 +13,9 @@ test("catalog query never falls back to ORDER BY 0", () => {
 });
 
 test("deployment exposes an independently verifiable build version", () => {
-  assert.match(server, /const APP_VERSION = "1\.12\.7"/);
+  assert.match(server, /const APP_VERSION = "1\.12\.8"/);
   assert.match(server, /app\.get\("\/api\/version"/);
   assert.match(server, /X-Ossetian-Market-Version/);
-  assert.match(index, /style\.css\?v=1\.12\.7/);
-  assert.match(index, /script\.js\?v=1\.12\.7/);
+  assert.match(index, /style\.css\?v=1\.12\.8/);
+  assert.match(index, /script\.js\?v=1\.12\.8/);
 });
