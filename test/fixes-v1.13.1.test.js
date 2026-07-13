@@ -8,11 +8,11 @@ const html = await readFile(new URL("../public/index.html", import.meta.url), "u
 const css = await readFile(new URL("../public/style.css", import.meta.url), "utf8");
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 
-test("версия и кеш обновлены до 1.13.5", () => {
-  assert.equal(packageJson.version, "1.13.5");
-  assert.match(server, /const APP_VERSION = "1\.13\.5"/);
-  assert.match(html, /style\.css\?v=1\.13\.5/);
-  assert.match(html, /script\.js\?v=1\.13\.5/);
+test("версия и кеш обновлены до 1.13.6", () => {
+  assert.equal(packageJson.version, "1.13.6");
+  assert.match(server, /const APP_VERSION = "1\.13\.6"/);
+  assert.match(html, /style\.css\?v=1\.13\.6/);
+  assert.match(html, /script\.js\?v=1\.13\.6/);
 });
 
 test("редактор объявления содержит явное управление скидкой", () => {

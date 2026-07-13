@@ -14,7 +14,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.13.5";
+const APP_VERSION = "1.13.6";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -80,6 +80,10 @@ const PRODUCT_ARCHIVE_DAYS = Math.max(1, Math.min(365, Number(process.env.PRODUC
 const DELETED_PRODUCT_RETENTION_DAYS = Math.max(1, Math.min(3650, Number(process.env.DELETED_PRODUCT_RETENTION_DAYS) || 30));
 const FEATURE_HIGHLIGHT_PRICE_RUB = Math.max(0, Number(process.env.FEATURE_HIGHLIGHT_PRICE_RUB) || 199);
 const FEATURE_HIGHLIGHT_DAYS = Math.max(1, Math.min(90, Number(process.env.FEATURE_HIGHLIGHT_DAYS) || 7));
+const DEFAULT_LISTING_LIMIT = 3;
+const BUSINESS_LISTING_LIMIT = 50;
+const MAX_LISTING_LIMIT = 100;
+const BUSINESS_LISTING_PRICE_RUB = Math.max(0, Number(process.env.BUSINESS_LISTING_PRICE_RUB) || 299);
 const FEATURE_COLORS = new Set(["purple", "green", "gold"]);
 const preparedShareMessageCache = new Map();
 
@@ -492,6 +496,7 @@ function mapPublicUser(row) {
     description: row.profile_description || "",
     city: row.city || "",
     phone: row.phone || "",
+    listingLimit: normalizeListingLimit(row.listing_limit),
     lastSeen: row.last_seen ? new Date(row.last_seen).getTime() : null,
     createdAt: row.created_at ? new Date(row.created_at).getTime() : null,
     updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : null
@@ -500,6 +505,106 @@ function mapPublicUser(row) {
 
 function normalizeText(value, maxLength) {
   return String(value ?? "").trim().slice(0, maxLength);
+}
+
+function normalizePhoneKey(value) {
+  let digits = String(value || "").replace(/\D/g, "");
+  if (digits.length === 10) digits = `7${digits}`;
+  if (digits.length === 11 && digits.startsWith("8")) digits = `7${digits.slice(1)}`;
+  return digits.slice(0, 15);
+}
+
+function normalizeListingLimit(value, fallback = DEFAULT_LISTING_LIMIT) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.min(MAX_LISTING_LIMIT, parsed));
+}
+
+async function getListingQuota(db, userId, { lockUser = false } = {}) {
+  const userResult = await db.query(
+    `SELECT listing_limit
+     FROM users
+     WHERE telegram_id = $1
+     ${lockUser ? "FOR UPDATE" : ""}`,
+    [String(userId)]
+  );
+  const limit = normalizeListingLimit(userResult.rows[0]?.listing_limit);
+  const countResult = await db.query(
+    `SELECT COUNT(*)::int AS used
+     FROM products
+     WHERE owner_id = $1
+       AND COALESCE(status, 'active') NOT IN ('deleted', 'sold')`,
+    [String(userId)]
+  );
+  const used = Number(countResult.rows[0]?.used) || 0;
+  return {
+    used,
+    limit,
+    remaining: Math.max(0, limit - used),
+    businessLimit: BUSINESS_LISTING_LIMIT,
+    businessPriceRub: BUSINESS_LISTING_PRICE_RUB,
+    maxLimit: MAX_LISTING_LIMIT
+  };
+}
+
+async function resolveBoundPhone(db, userId, requestedPhone) {
+  const userResult = await db.query(
+    `SELECT phone, phone_normalized
+     FROM users
+     WHERE telegram_id = $1
+     FOR UPDATE`,
+    [String(userId)]
+  );
+  const user = userResult.rows[0] || {};
+  const savedPhone = normalizeText(user.phone, 30);
+  const savedKey = normalizePhoneKey(user.phone_normalized || savedPhone);
+  const requested = normalizeText(requestedPhone, 30);
+  const requestedKey = normalizePhoneKey(requested);
+
+  if (!requestedKey) {
+    return { ok: true, phone: savedPhone, phoneKey: savedKey };
+  }
+
+  if (requestedKey.length < 10) {
+    return { ok: false, status: 400, code: "INVALID_PHONE", error: "Проверьте формат телефона" };
+  }
+
+  if (savedKey && savedKey !== requestedKey) {
+    return {
+      ok: false,
+      status: 409,
+      code: "PROFILE_PHONE_MISMATCH",
+      error: "В объявлении можно использовать только номер, привязанный к вашему профилю. Сначала измените номер в профиле."
+    };
+  }
+
+  const ownerResult = await db.query(
+    `SELECT telegram_id
+     FROM users
+     WHERE phone_normalized = $1
+       AND telegram_id <> $2
+     LIMIT 1`,
+    [requestedKey, String(userId)]
+  );
+  if (ownerResult.rows.length > 0) {
+    return {
+      ok: false,
+      status: 409,
+      code: "PHONE_ALREADY_USED",
+      error: "Этот номер уже привязан к другому профилю"
+    };
+  }
+
+  if (!savedKey) {
+    await db.query(
+      `UPDATE users
+       SET phone = $2, phone_normalized = $3, updated_at = NOW()
+       WHERE telegram_id = $1`,
+      [String(userId), requested, requestedKey]
+    );
+  }
+
+  return { ok: true, phone: savedPhone || requested, phoneKey: requestedKey };
 }
 
 function normalizeProductStatus(value, fallback = "active") {
@@ -794,7 +899,7 @@ async function readRemoteImageBuffer(source) {
     for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
       response = await fetch(currentUrl, {
         signal: controller.signal,
-        headers: { "User-Agent": "OssetianMarket/1.13.5" },
+        headers: { "User-Agent": "OssetianMarket/1.13.6" },
         redirect: "manual"
       });
 
@@ -1179,6 +1284,47 @@ async function initDb() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT DEFAULT '';`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_username TEXT DEFAULT '';`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_normalized TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS listing_limit INTEGER DEFAULT ${DEFAULT_LISTING_LIMIT};`);
+  await pool.query(`
+    UPDATE users
+    SET listing_limit = ${DEFAULT_LISTING_LIMIT}
+    WHERE listing_limit IS NULL OR listing_limit < 1 OR listing_limit > ${MAX_LISTING_LIMIT};
+  `);
+  await pool.query(`
+    UPDATE users
+    SET phone_normalized = CASE
+      WHEN LENGTH(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g')) = 10
+        THEN '7' || REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g')
+      WHEN LENGTH(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g')) = 11
+        AND LEFT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), 1) = '8'
+        THEN '7' || SUBSTRING(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g') FROM 2)
+      ELSE LEFT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), 15)
+    END
+    WHERE COALESCE(phone_normalized, '') = '' AND COALESCE(phone, '') <> '';
+  `);
+  // В старой БД одинаковый телефон мог быть сохранён у нескольких профилей.
+  // Сохраняем привязку у самого раннего профиля, а дубликаты очищаем до создания индекса.
+  await pool.query(`
+    WITH ranked AS (
+      SELECT telegram_id,
+             ROW_NUMBER() OVER (
+               PARTITION BY phone_normalized
+               ORDER BY COALESCE(created_at, updated_at, NOW()) ASC, telegram_id ASC
+             ) AS duplicate_number
+      FROM users
+      WHERE COALESCE(phone_normalized, '') <> ''
+    )
+    UPDATE users u
+    SET phone = '', phone_normalized = '', updated_at = NOW()
+    FROM ranked r
+    WHERE u.telegram_id = r.telegram_id AND r.duplicate_number > 1;
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone_normalized_unique
+    ON users (phone_normalized)
+    WHERE phone_normalized <> '';
+  `);
 
   await pool.query(`
     ALTER TABLE products
@@ -1654,7 +1800,11 @@ app.get("/api/config", (req, res) => {
     botUsername: BOT_USERNAME,
     productArchiveDays: PRODUCT_ARCHIVE_DAYS,
     featureHighlightPriceRub: FEATURE_HIGHLIGHT_PRICE_RUB,
-    featureHighlightDays: FEATURE_HIGHLIGHT_DAYS
+    featureHighlightDays: FEATURE_HIGHLIGHT_DAYS,
+    defaultListingLimit: DEFAULT_LISTING_LIMIT,
+    businessListingLimit: BUSINESS_LISTING_LIMIT,
+    businessListingPriceRub: BUSINESS_LISTING_PRICE_RUB,
+    maxListingLimit: MAX_LISTING_LIMIT
   });
 });
 
@@ -1938,14 +2088,16 @@ app.get("/api/me", requireTelegramAuth, syncTelegramUser, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT telegram_id, username, first_name, last_name, avatar, profile_description,
-              city, phone, contact_username, last_seen, created_at, updated_at
+              city, phone, contact_username, listing_limit, last_seen, created_at, updated_at
        FROM users WHERE telegram_id = $1 LIMIT 1`,
       [String(req.telegramUser.id)]
     );
 
     const profile = result.rows[0] ? mapPublicUser(result.rows[0]) : {};
+    const listingQuota = await getListingQuota(pool, req.telegramUser.id);
     res.json({
       ok: true,
+      listingQuota,
       user: {
         ...req.telegramUser,
         ...profile,
@@ -1958,11 +2110,23 @@ app.get("/api/me", requireTelegramAuth, syncTelegramUser, async (req, res) => {
   }
 });
 
+app.get("/api/me/listing-quota", requireTelegramAuth, syncTelegramUser, async (req, res) => {
+  try {
+    const listingQuota = await getListingQuota(pool, req.telegramUser.id);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, listingQuota });
+  } catch (error) {
+    console.error("Get listing quota error:", error);
+    res.status(500).json({ ok: false, error: "Не удалось проверить лимит объявлений" });
+  }
+});
+
 app.patch("/api/me/profile", requireTelegramAuth, syncTelegramUser, async (req, res) => {
   try {
     const description = normalizeText(req.body?.description, 600);
     const city = normalizeText(req.body?.city, 80);
     const phone = normalizeText(req.body?.phone, 30);
+    const phoneKey = normalizePhoneKey(phone);
     const contactUsername = normalizeText(req.body?.contactUsername, 40).replace(/^@/, "");
 
     if (contactUsername && !/^[A-Za-z0-9_]{5,32}$/.test(contactUsername)) {
@@ -1975,26 +2139,37 @@ app.patch("/api/me/profile", requireTelegramAuth, syncTelegramUser, async (req, 
     if (phone && !/^[+0-9()\s.-]{5,30}$/.test(phone)) {
       return res.status(400).json({ ok: false, error: "Проверьте формат телефона" });
     }
+    if (phone && phoneKey.length < 10) {
+      return res.status(400).json({ ok: false, code: "INVALID_PHONE", error: "Проверьте формат телефона" });
+    }
 
     const result = await pool.query(
       `UPDATE users
-       SET profile_description = $2, city = $3, phone = $4, contact_username = $5, updated_at = NOW()
+       SET profile_description = $2, city = $3, phone = $4, phone_normalized = $5,
+           contact_username = $6, updated_at = NOW()
        WHERE telegram_id = $1
        RETURNING telegram_id, username, first_name, last_name, avatar, profile_description,
-                 city, phone, contact_username, last_seen, created_at, updated_at`,
-      [String(req.telegramUser.id), description, city, phone, contactUsername]
+                 city, phone, contact_username, listing_limit, last_seen, created_at, updated_at`,
+      [String(req.telegramUser.id), description, city, phone, phoneKey, contactUsername]
     );
 
     const preferredUsername = contactUsername || result.rows[0]?.username || req.telegramUser.username || "";
     await pool.query(
-      `UPDATE products SET owner_username = $2, updated_at = NOW()
+      `UPDATE products SET owner_username = $2, phone = $3, updated_at = NOW()
        WHERE owner_id = $1 AND COALESCE(status, 'active') NOT IN ('deleted', 'sold')`,
-      [String(req.telegramUser.id), preferredUsername]
+      [String(req.telegramUser.id), preferredUsername, phone]
     );
 
     res.json({ ok: true, user: mapPublicUser(result.rows[0]) });
   } catch (error) {
     console.error("Update own profile error:", error);
+    if (error?.code === "23505" && String(error?.constraint || "").includes("phone_normalized")) {
+      return res.status(409).json({
+        ok: false,
+        code: "PHONE_ALREADY_USED",
+        error: "Этот номер уже привязан к другому профилю"
+      });
+    }
     res.status(500).json({ ok: false, error: "Не удалось сохранить профиль" });
   }
 });
@@ -2512,7 +2687,8 @@ app.get("/api/my-products", requireTelegramAuth, syncTelegramUser, async (req, r
       [req.telegramUser.id]
     );
 
-    res.json({ ok: true, products: result.rows.map(mapOwnProductSummary) });
+    const listingQuota = await getListingQuota(pool, req.telegramUser.id);
+    res.json({ ok: true, products: result.rows.map(mapOwnProductSummary), listingQuota });
   } catch (error) {
     console.error("Get my products error:", error);
     res.status(500).json({ ok: false, error: "Не удалось получить мои объявления" });
@@ -2567,7 +2743,7 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
     const cleanCategory = normalizeText(category, 60);
     const cleanDescription = normalizeText(desc, 5000);
     const cleanLocation = normalizeText(location, 80) || "Владикавказ";
-    const cleanPhone = normalizeText(phone, 30);
+    let cleanPhone = normalizeText(phone, 30);
     const cleanCondition = normalizeProductCondition(condition);
     const cleanDistrict = normalizeText(district, 80);
     const cleanSpecifications = normalizeSpecifications(specifications);
@@ -2586,6 +2762,25 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
     if (cleanImages.length === 0 && fallbackImage) cleanImages.push(fallbackImage);
     const cleanThumbnail = normalizeProductImage(thumbnail) || cleanImages[0] || "";
 
+    await client.query("BEGIN");
+    const listingQuota = await getListingQuota(client, req.telegramUser.id, { lockUser: true });
+    if (listingQuota.used >= listingQuota.limit) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({
+        ok: false,
+        code: "LISTING_LIMIT_REACHED",
+        error: `У вас уже ${listingQuota.used} из ${listingQuota.limit} доступных объявлений. Удалите одно объявление или отметьте его проданным.`,
+        listingQuota
+      });
+    }
+
+    const phoneBinding = await resolveBoundPhone(client, req.telegramUser.id, cleanPhone);
+    if (!phoneBinding.ok) {
+      await client.query("ROLLBACK");
+      return res.status(phoneBinding.status || 409).json(phoneBinding);
+    }
+    cleanPhone = phoneBinding.phone;
+
     const moderation = await evaluateProductModeration({
       name: cleanName,
       desc: cleanDescription,
@@ -2597,7 +2792,6 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
     const id = randomUUID();
     const ownerName = getTelegramDisplayName(req.telegramUser);
 
-    await client.query("BEGIN");
     const result = await client.query(
       `
         INSERT INTO products (
@@ -2648,15 +2842,20 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
       );
     }
 
+    const updatedListingQuota = await getListingQuota(client, req.telegramUser.id);
     await client.query("COMMIT");
     res.status(201).json({
       ok: true,
       product: mapProduct(result.rows[0]),
+      listingQuota: updatedListingQuota,
       moderation: { blocked: moderation.blocked, reason: moderation.reason }
     });
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
     console.error("Create product error:", error);
+    if (error?.code === "23505" && String(error?.constraint || "").includes("phone_normalized")) {
+      return res.status(409).json({ ok: false, code: "PHONE_ALREADY_USED", error: "Этот номер уже привязан к другому профилю" });
+    }
     res.status(500).json({ ok: false, error: "Не удалось создать объявление" });
   } finally {
     client.release();
@@ -2685,7 +2884,7 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     const cleanCategory = normalizeText(category, 60);
     const cleanDescription = normalizeText(desc, 5000);
     const cleanLocation = normalizeText(location, 80) || "Владикавказ";
-    const cleanPhone = normalizeText(phone, 30);
+    let cleanPhone = normalizeText(phone, 30);
     const cleanCondition = normalizeProductCondition(condition);
     const cleanDistrict = normalizeText(district, 80);
     const cleanSpecifications = normalizeSpecifications(specifications);
@@ -2728,6 +2927,12 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
         error: "Проданное объявление хранится только в истории и больше не редактируется"
       });
     }
+    const phoneBinding = await resolveBoundPhone(client, req.telegramUser.id, cleanPhone);
+    if (!phoneBinding.ok) {
+      await client.query("ROLLBACK");
+      return res.status(phoneBinding.status || 409).json(phoneBinding);
+    }
+    cleanPhone = phoneBinding.phone;
     const existingImages = normalizeImages(existing);
     const mainImageChanged = String(cleanImages[0] || "") !== String(existingImages[0] || existing.image || "");
     const cleanThumbnail = requestedThumbnail || (!mainImageChanged ? existing.thumbnail : "") || cleanImages[0] || "";
@@ -2858,6 +3063,9 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
     console.error("Update product error:", error);
+    if (error?.code === "23505" && String(error?.constraint || "").includes("phone_normalized")) {
+      return res.status(409).json({ ok: false, code: "PHONE_ALREADY_USED", error: "Этот номер уже привязан к другому профилю" });
+    }
     res.status(500).json({ ok: false, error: "Не удалось обновить объявление" });
   } finally {
     client.release();
@@ -4063,6 +4271,45 @@ app.post(
   })
 );
 
+app.patch(
+  "/api/admin/users/:id/listing-limit",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const userId = normalizeText(req.params.id, 64);
+    const requestedLimit = Number.parseInt(String(req.body?.limit ?? ""), 10);
+
+    if (!userId || !Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > MAX_LISTING_LIMIT) {
+      return res.status(400).json({
+        ok: false,
+        error: `Лимит должен быть от 1 до ${MAX_LISTING_LIMIT}`
+      });
+    }
+
+    const result = await pool.query(
+      `UPDATE users
+       SET listing_limit = $2, updated_at = NOW()
+       WHERE telegram_id = $1
+       RETURNING telegram_id, username, first_name, last_name, listing_limit`,
+      [userId, requestedLimit]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ ok: false, error: "Пользователь не найден" });
+    }
+
+    await addAdminLog(
+      req.telegramUser.id,
+      "set_listing_limit",
+      userId,
+      `Лимит объявлений: ${requestedLimit}`
+    );
+
+    res.json({ ok: true, user: result.rows[0] });
+  })
+);
+
 app.get(
   "/api/admin/reports",
   requireTelegramAuth,
@@ -4597,7 +4844,11 @@ app.get(
             u.last_seen,
             u.created_at,
             u.banned,
-            COUNT(p.id)::int AS products_count
+            u.listing_limit,
+            COUNT(p.id)::int AS products_count,
+            COUNT(p.id) FILTER (
+              WHERE COALESCE(p.status, 'active') NOT IN ('deleted', 'sold')
+            )::int AS listing_slots_used
           FROM users u
           LEFT JOIN products p
             ON p.owner_id = u.telegram_id
@@ -4723,7 +4974,11 @@ app.get(
         u.last_seen,
         u.created_at,
         u.banned,
-        COUNT(p.id)::int AS products_count
+        u.listing_limit,
+        COUNT(p.id)::int AS products_count,
+        COUNT(p.id) FILTER (
+          WHERE COALESCE(p.status, 'active') NOT IN ('deleted', 'sold')
+        )::int AS listing_slots_used
       FROM users u
       LEFT JOIN products p
         ON p.owner_id = u.telegram_id
