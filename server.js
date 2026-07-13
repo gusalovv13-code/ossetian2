@@ -11,10 +11,15 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.12.5";
+const APP_VERSION = "1.12.6";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
+  .trim()
+  .replace(/^@/, "");
+const BOT_USERNAME = String(
+  process.env.BOT_USERNAME || process.env.TELEGRAM_BOT_USERNAME || ""
+)
   .trim()
   .replace(/^@/, "");
 const DATABASE_SSL = String(process.env.DATABASE_SSL || "true").toLowerCase() !== "false";
@@ -1378,6 +1383,7 @@ app.get("/api/config", (req, res) => {
     ok: true,
     version: APP_VERSION,
     supportUsername: SUPPORT_USERNAME,
+    botUsername: BOT_USERNAME,
     productArchiveDays: PRODUCT_ARCHIVE_DAYS,
     featureHighlightPriceRub: FEATURE_HIGHLIGHT_PRICE_RUB,
     featureHighlightDays: FEATURE_HIGHLIGHT_DAYS

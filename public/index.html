@@ -12,7 +12,7 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=1.12.5" />
+  <link rel="stylesheet" href="style.css?v=1.12.6" />
 </head>
 
 <body>
@@ -116,7 +116,14 @@
       <div id="productBadges" class="product-badges"></div>
 
       <div class="seller-info">
-        <p id="productSeller">Продавец</p>
+        <button id="productSeller" class="seller-profile-link" type="button">
+          <span class="seller-profile-link-icon" aria-hidden="true">👤</span>
+          <span class="seller-profile-link-copy">
+            <b>Продавец</b>
+            <small>Открыть профиль</small>
+          </span>
+          <span class="seller-profile-link-arrow" aria-hidden="true">›</span>
+        </button>
         <p id="productLocation">Город</p>
         <p id="productPhoneLine">Телефон</p>
       </div>
@@ -132,8 +139,8 @@
       </section>
 
       <div class="product-secondary-actions">
-        <button type="button" class="outline" onclick="shareProduct()">↗ Поделиться</button>
-        <button type="button" class="outline" onclick="copyProductLink()">🔗 Скопировать ссылку</button>
+        <button type="button" class="outline compact-share-action" onclick="shareProduct()">↗ Поделиться</button>
+        <button type="button" class="outline compact-share-action" onclick="copyProductLink()">🔗 Скопировать ссылку</button>
         <button id="reportProductBtn" type="button" class="outline danger-outline" onclick="openReportDialog()">⚑ Пожаловаться</button>
       </div>
 
@@ -619,6 +626,6 @@
 
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">‹</div>
 
-  <script src="script.js?v=1.12.5"></script>
+  <script src="script.js?v=1.12.6"></script>
 </body>
 </html>

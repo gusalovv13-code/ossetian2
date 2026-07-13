@@ -1,4 +1,4 @@
-# Алания Маркет 2026 — v1.12.2
+# Алания Маркет 2026 — v1.12.6
 
 Telegram Mini App локального маркетплейса на Node.js, Express и PostgreSQL.
 
@@ -15,6 +15,7 @@ Telegram Mini App локального маркетплейса на Node.js, Ex
 Скопируйте `.env.example` в `.env` и заполните:
 
 - `BOT_TOKEN` — токен Telegram-бота.
+- `BOT_USERNAME` — username этого бота без `@`; используется для прямых ссылок вида `t.me/...?...startapp=product_ID`.
 - `DATABASE_URL` — строка подключения PostgreSQL.
 - `DATABASE_SSL` — `true` для облачной БД с SSL или `false` для локального PostgreSQL без SSL.
 - `PORT` — порт приложения, по умолчанию `3000`.

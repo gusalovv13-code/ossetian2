@@ -185,6 +185,7 @@ const state = {
   config: {
     version: "",
     supportUsername: "",
+    botUsername: "",
     productArchiveDays: 15,
     featureHighlightPriceRub: 199,
     featureHighlightDays: 7
@@ -266,6 +267,7 @@ async function loadConfig() {
     const data = await apiRequest("/api/config");
     state.config.version = data.version || "";
     state.config.supportUsername = data.supportUsername || "";
+    state.config.botUsername = String(data.botUsername || "").replace(/^@/, "");
     state.config.productArchiveDays = Number(data.productArchiveDays) || 15;
     state.config.featureHighlightPriceRub = Number(data.featureHighlightPriceRub) || 0;
     state.config.featureHighlightDays = Number(data.featureHighlightDays) || 7;
@@ -568,6 +570,27 @@ async function loadFavorites({ force = false } = {}) {
    NAVIGATION
 ======================= */
 
+function resetPageScroll(pageId) {
+  const scrollToTop = () => {
+    window.scrollTo(0, 0);
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+
+    const phone = document.querySelector(".phone");
+    if (phone) phone.scrollTop = 0;
+
+    const page = document.getElementById(pageId);
+    if (page) page.scrollTop = 0;
+  };
+
+  scrollToTop();
+  requestAnimationFrame(() => {
+    scrollToTop();
+    requestAnimationFrame(scrollToTop);
+  });
+  window.setTimeout(scrollToTop, 80);
+}
+
 function showPage(page, addToHistory = true, preserveCreateSession = false) {
   if (
     page === "create1" &&
@@ -638,7 +661,7 @@ function showPage(page, addToHistory = true, preserveCreateSession = false) {
     if (page === "admin") loadAdminPanel();
   });
 
-  window.scrollTo(0, 0);
+  resetPageScroll(page);
 }
 
 function goBack() {
@@ -1622,12 +1645,47 @@ function initProductGalleryGestures() {
   }, { passive: false });
 }
 
-function getProductLink(productId = state.openedProductId) {
+function getProductWebLink(productId = state.openedProductId) {
   const url = new URL(window.location.href);
   url.search = "";
   url.hash = "";
   url.searchParams.set("product", productId || "");
   return url.toString();
+}
+
+function getProductTelegramLink(productId = state.openedProductId) {
+  const botUsername = String(state.config.botUsername || "")
+    .trim()
+    .replace(/^@/, "");
+  const cleanProductId = String(productId || "").trim();
+
+  if (!botUsername || !cleanProductId) return "";
+
+  const startParam = `product_${cleanProductId}`;
+  return `https://t.me/${encodeURIComponent(botUsername)}?startapp=${encodeURIComponent(startParam)}`;
+}
+
+function getProductLink(productId = state.openedProductId) {
+  return getProductTelegramLink(productId) || getProductWebLink(productId);
+}
+
+function parseProductStartParam(value) {
+  const match = String(value || "")
+    .trim()
+    .match(/^product[_-]([A-Za-z0-9_-]{1,200})$/);
+  return match ? match[1] : "";
+}
+
+function getDirectProductId() {
+  const params = new URLSearchParams(window.location.search);
+  const queryProductId = String(params.get("product") || "").trim();
+  if (queryProductId) return queryProductId;
+
+  const startParam =
+    params.get("tgWebAppStartParam") ||
+    tg?.initDataUnsafe?.start_param ||
+    "";
+  return parseProductStartParam(startParam);
 }
 
 async function copyText(value) {
@@ -1668,16 +1726,18 @@ async function shareProduct() {
     text: `${product.name || "Товар"} — ${product.price || "цена не указана"}`,
     url
   };
+  const telegramUrl = `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(shareData.text)}`;
 
   try {
-    if (navigator.share) {
-      await navigator.share(shareData);
+    if (tg?.openTelegramLink) {
+      tg.openTelegramLink(telegramUrl);
       return;
     }
 
-    const telegramUrl = `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(shareData.text)}`;
-    if (tg?.openTelegramLink) tg.openTelegramLink(telegramUrl);
-    else window.open(telegramUrl, "_blank", "noopener,noreferrer");
+    const opened = window.open(telegramUrl, "_blank", "noopener,noreferrer");
+    if (!opened && navigator.share) {
+      await navigator.share(shareData);
+    }
   } catch (error) {
     if (error?.name !== "AbortError") {
       console.error("Share product error:", error);
@@ -1796,10 +1856,15 @@ function renderProductDetails(product) {
   const isAvailable = (product.status || "active") === "active" && !product.hidden;
 
   if (productSeller) {
-    productSeller.textContent = sellerUsername
-      ? `👤 ${sellerName} · @${sellerUsername}`
-      : `👤 ${sellerName}`;
-    productSeller.classList.add("clickable-seller");
+    productSeller.innerHTML = `
+      <span class="seller-profile-link-icon" aria-hidden="true">👤</span>
+      <span class="seller-profile-link-copy">
+        <b>${escapeHTML(sellerName)}</b>
+        <small>${sellerUsername ? `@${escapeHTML(sellerUsername)} · ` : ""}<u>Открыть профиль</u></small>
+      </span>
+      <span class="seller-profile-link-arrow" aria-hidden="true">›</span>
+    `;
+    productSeller.setAttribute("aria-label", `Открыть профиль продавца ${sellerName}`);
     productSeller.onclick = () => openSellerProfile(product.ownerId);
   }
 
@@ -3221,7 +3286,7 @@ async function initApp() {
     if (!document.hidden) loadAds();
   });
 
-  const directProductId = new URLSearchParams(window.location.search).get("product");
+  const directProductId = getDirectProductId();
   if (directProductId) {
     await openProduct(directProductId);
   }
