@@ -227,8 +227,6 @@ const tg = window.Telegram?.WebApp || null;
 let telegramAvatarObjectUrl = null;
 let productSearchTimer = null;
 let productsRequestSequence = 0;
-let myProductsRequestSequence = 0;
-let catalogAppendStart = null;
 const featureRequestInFlight = new Set();
 let highlightRequestProductId = "";
 let fallbackAdClientKey = `client-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
@@ -292,8 +290,6 @@ const state = {
   productsLoading: false,
   productsLoadError: "",
   myProducts: [],
-  myProductsOwnerId: "",
-  myProductsLoaded: false,
   sellerProducts: [],
   sellerSoldProducts: [],
   openedSeller: null,
@@ -313,25 +309,13 @@ const state = {
   currentProductImageIndex: 0,
   myAdsTab: "active",
   editingProductId: null,
-  listingQuota: {
-    used: 0,
-    limit: 3,
-    remaining: 3,
-    businessLimit: 50,
-    businessPriceRub: 299,
-    maxLimit: 100
-  },
   config: {
     version: "",
     supportUsername: "",
     botUsername: "",
     productArchiveDays: 15,
     featureHighlightPriceRub: 199,
-    featureHighlightDays: 7,
-    defaultListingLimit: 3,
-    businessListingLimit: 50,
-    businessListingPriceRub: 299,
-    maxListingLimit: 100
+    featureHighlightDays: 7
   }
 };
 
@@ -390,11 +374,7 @@ async function apiRequest(url, options = {}) {
     }
 
     if (!response.ok || !data.ok) {
-      const apiError = new Error(data.error || `Ошибка сервера: ${response.status}`);
-      apiError.status = response.status;
-      apiError.code = data.code || "";
-      apiError.details = data;
-      throw apiError;
+      throw new Error(data.error || `Ошибка сервера: ${response.status}`);
     }
 
     return data;
@@ -418,10 +398,6 @@ async function loadConfig() {
     state.config.productArchiveDays = Number(data.productArchiveDays) || 15;
     state.config.featureHighlightPriceRub = Number(data.featureHighlightPriceRub) || 0;
     state.config.featureHighlightDays = Number(data.featureHighlightDays) || 7;
-    state.config.defaultListingLimit = Number(data.defaultListingLimit) || 3;
-    state.config.businessListingLimit = Number(data.businessListingLimit) || 50;
-    state.config.businessListingPriceRub = Number(data.businessListingPriceRub) || 299;
-    state.config.maxListingLimit = Number(data.maxListingLimit) || 100;
   } catch (error) {
     console.error("Не удалось загрузить конфигурацию:", error);
   }
@@ -952,7 +928,6 @@ function isFresh(timestamp, ttl = DATA_CACHE_TTL_MS) {
 async function loadProducts({ force = false, append = false } = {}) {
   const cacheKey = getProductsCacheKey();
   const sameQuery = state.productsCacheKey === cacheKey;
-  const previousProductCount = state.products.length;
 
   if (!append && !force && sameQuery && isFresh(state.productsLoadedAt)) {
     renderProducts();
@@ -970,7 +945,6 @@ async function loadProducts({ force = false, append = false } = {}) {
   updateSearchStatus();
 
   if (!append && !sameQuery) {
-    catalogAppendStart = null;
     state.products = [];
     state.catalogPagination = { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE, hasMore: true };
   }
@@ -1004,11 +978,8 @@ async function loadProducts({ force = false, append = false } = {}) {
     const incoming = data.products || [];
     if (append) {
       const knownIds = new Set(state.products.map(item => item.id));
-      const newProducts = incoming.filter(item => !knownIds.has(item.id));
-      state.products.push(...newProducts);
-      catalogAppendStart = newProducts.length > 0 ? previousProductCount : null;
+      state.products.push(...incoming.filter(item => !knownIds.has(item.id)));
     } else {
-      catalogAppendStart = null;
       state.products = incoming;
     }
 
@@ -1042,50 +1013,30 @@ function loadMoreProducts() {
 }
 
 async function loadMyProducts({ force = false } = {}) {
-  const ownerId = String(state.telegramUser?.id || "");
-
-  if (!ownerId) {
-    state.myProductsLoadedAt = 0;
-    state.myProductsLoaded = false;
-    renderMyAds();
-    return;
-  }
-
-  if (state.myProductsOwnerId !== ownerId) {
-    state.myProductsOwnerId = ownerId;
+  if (!state.telegramUser?.id) {
     state.myProducts = [];
-    state.myProductsLoadedAt = 0;
-    state.myProductsLoaded = false;
-  }
-
-  if (!force && state.myProductsLoaded && isFresh(state.myProductsLoadedAt)) {
+    state.myProductsLoadedAt = Date.now();
     renderMyAds();
     return;
   }
 
-  const requestSequence = ++myProductsRequestSequence;
+  if (!force && isFresh(state.myProductsLoadedAt)) {
+    renderMyAds();
+    return;
+  }
+
   state.myProductsLoading = true;
   renderMyAds();
-
   try {
-    const data = await apiRequest("/api/my-products", { cache: "no-store" });
-    if (requestSequence !== myProductsRequestSequence || ownerId !== String(state.telegramUser?.id || "")) return;
-
-    state.myProducts = Array.isArray(data.products) ? data.products : [];
+    const data = await apiRequest("/api/my-products");
+    state.myProducts = data.products || [];
     state.myProductsLoadedAt = Date.now();
-    state.myProductsLoaded = true;
-    if (data.listingQuota) state.listingQuota = { ...state.listingQuota, ...data.listingQuota };
   } catch (error) {
-    if (requestSequence === myProductsRequestSequence) {
-      console.error("Не удалось загрузить мои объявления:", error);
-      state.myProductsLoaded = state.myProducts.length > 0;
-    }
+    console.error("Не удалось загрузить мои объявления:", error);
   } finally {
-    if (requestSequence === myProductsRequestSequence) {
-      state.myProductsLoading = false;
-      renderMyAds();
-      renderProfileCounters();
-    }
+    state.myProductsLoading = false;
+    renderMyAds();
+    renderProfileCounters();
   }
 }
 
@@ -1134,104 +1085,11 @@ async function loadFavorites({ force = false } = {}) {
   }
 }
 
-function setListingQuota(quota = {}) {
-  state.listingQuota = {
-    ...state.listingQuota,
-    ...quota,
-    used: Math.max(0, Number(quota.used ?? state.listingQuota.used) || 0),
-    limit: Math.max(1, Number(quota.limit ?? state.listingQuota.limit) || 3)
-  };
-  state.listingQuota.remaining = Math.max(
-    0,
-    Number(state.listingQuota.limit) - Number(state.listingQuota.used)
-  );
-  renderProfileCounters();
-  return state.listingQuota;
-}
-
-async function refreshListingQuota() {
-  if (!state.telegramUser?.id) return state.listingQuota;
-  const data = await apiRequest("/api/me/listing-quota", { cache: "no-store" });
-  return setListingQuota(data.listingQuota || {});
-}
-
-function closeListingLimitDialog() {
-  const dialog = document.getElementById("listingLimitDialog");
-  if (!dialog) return;
-  if (typeof dialog.close === "function") dialog.close();
-  else dialog.removeAttribute("open");
-}
-
-function showListingLimitDialog(quota = state.listingQuota) {
-  const normalized = setListingQuota(quota || {});
-  const dialog = document.getElementById("listingLimitDialog");
-  const summary = document.getElementById("listingLimitSummary");
-  const offer = document.getElementById("listingLimitOffer");
-  const price = Number(normalized.businessPriceRub ?? state.config.businessListingPriceRub) || 299;
-  const businessLimit = Number(normalized.businessLimit ?? state.config.businessListingLimit) || 50;
-
-  if (summary) {
-    summary.textContent = `Использовано ${normalized.used} из ${normalized.limit}. Чтобы добавить новое объявление, удалите одно из существующих или отметьте его проданным.`;
-  }
-  if (offer) {
-    offer.textContent = `Для магазинов и предприятий доступно до ${businessLimit} объявлений за ${price.toLocaleString("ru-RU")} ₽. Напишите в поддержку.`;
-  }
-
-  if (!dialog) {
-    alert(`${summary?.textContent || "Достигнут лимит объявлений"}\n\n${offer?.textContent || "Обратитесь в поддержку."}`);
-    return;
-  }
-  if (typeof dialog.showModal === "function") dialog.showModal();
-  else dialog.setAttribute("open", "");
-}
-
-function contactSupportForListingLimit() {
-  const quota = state.listingQuota || {};
-  const businessLimit = Number(quota.businessLimit ?? state.config.businessListingLimit) || 50;
-  const price = Number(quota.businessPriceRub ?? state.config.businessListingPriceRub) || 299;
-  closeListingLimitDialog();
-  openSupportMessage(`Здравствуйте! Хочу подключить тариф для магазина: до ${businessLimit} объявлений за ${price} ₽.`);
-}
-
-async function openCreatePage() {
-  if (!state.telegramUser?.id) {
-    alert("Откройте приложение через Telegram, чтобы разместить объявление");
-    return;
-  }
-
-  try {
-    const quota = await refreshListingQuota();
-    if (Number(quota.used) >= Number(quota.limit)) {
-      showListingLimitDialog(quota);
-      return;
-    }
-    showPage("create1");
-  } catch (error) {
-    console.error("Listing quota check error:", error);
-    alert(error.message || "Не удалось проверить доступное количество объявлений");
-  }
-}
-
 /* =======================
    NAVIGATION
 ======================= */
 
 const PAGE_TRANSITION_MS = 230;
-const MAIN_NAV_PAGES = new Set(["home", "favorites", "chats", "profile"]);
-const PAGE_FALLBACK_PARENTS = {
-  catalog: "home",
-  product: "catalog",
-  create1: "home",
-  create2: "create1",
-  create3: "create2",
-  myAds: "profile",
-  favorites: "home",
-  chats: "home",
-  profile: "home",
-  settings: "profile",
-  sellerProfile: "product",
-  admin: "profile"
-};
 let pageTransitionTimer = null;
 let pageTransitionSequence = 0;
 
@@ -1333,15 +1191,7 @@ function showPage(page, addToHistory = true, preserveCreateSession = false, tran
   const pageChanged = previousPage !== page;
 
   if (addToHistory && pageChanged) {
-    const previousHistoryPage = state.history[state.history.length - 1];
-    if (previousHistoryPage === page) {
-      state.history.pop();
-      transitionDirection = transitionDirection || "back";
-      addToHistory = false;
-    } else if (previousPage && previousHistoryPage !== previousPage) {
-      state.history.push(previousPage);
-      if (state.history.length > 30) state.history.splice(0, state.history.length - 30);
-    }
+    state.history.push(previousPage);
   }
 
   state.page = page;
@@ -1410,16 +1260,6 @@ function showPage(page, addToHistory = true, preserveCreateSession = false, tran
   resetPageScroll(page);
 }
 
-function navigateMainTab(page) {
-  if (!MAIN_NAV_PAGES.has(page)) {
-    showPage(page);
-    return;
-  }
-
-  state.history = [];
-  showPage(page, false, false, state.page === page ? null : "forward");
-}
-
 function goBack() {
   const lightbox = document.getElementById("photoLightbox");
   if (lightbox && !lightbox.hidden) {
@@ -1439,11 +1279,7 @@ function goBack() {
     return;
   }
 
-  let prev = "";
-  while (state.history.length > 0 && !prev) {
-    const candidate = state.history.pop();
-    if (candidate && candidate !== state.page && document.getElementById(candidate)) prev = candidate;
-  }
+  const prev = state.history.pop();
 
   if (prev) {
     showPage(prev, false, false, "back");
@@ -1451,8 +1287,7 @@ function goBack() {
   }
 
   if (state.page !== "home") {
-    const fallback = PAGE_FALLBACK_PARENTS[state.page] || "home";
-    showPage(document.getElementById(fallback) ? fallback : "home", false, false, "back");
+    showPage("home", false, false, "back");
     return;
   }
 
@@ -1505,57 +1340,6 @@ function normalizePhoneForTel(phone) {
   }
 
   return "+" + digits;
-}
-
-let appToastTimer = null;
-
-function showToast(message) {
-  const toast = document.getElementById("appToast");
-  if (!toast) return;
-  window.clearTimeout(appToastTimer);
-  toast.textContent = String(message || "");
-  toast.hidden = false;
-  requestAnimationFrame(() => toast.classList.add("visible"));
-  appToastTimer = window.setTimeout(() => {
-    toast.classList.remove("visible");
-    window.setTimeout(() => { toast.hidden = true; }, 180);
-  }, 1700);
-}
-
-async function copyText(value) {
-  const text = String(value || "");
-  if (!text) return false;
-
-  try {
-    if (navigator.clipboard?.writeText && window.isSecureContext) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-
-    const textarea = document.createElement("textarea");
-    textarea.value = text;
-    textarea.setAttribute("readonly", "");
-    textarea.style.position = "fixed";
-    textarea.style.opacity = "0";
-    document.body.appendChild(textarea);
-    textarea.select();
-    const copied = document.execCommand("copy");
-    textarea.remove();
-    return copied;
-  } catch (error) {
-    console.error("Clipboard error:", error);
-    return false;
-  }
-}
-
-async function copyPhoneNumber(phone) {
-  const copied = await copyText(phone);
-  if (copied) {
-    showToast("Номер скопирован");
-    tg?.HapticFeedback?.notificationOccurred?.("success");
-  } else {
-    alert("Не удалось скопировать номер");
-  }
 }
 
 
@@ -1637,35 +1421,6 @@ function initKeyboardAutoHide() {
     },
     true
   );
-}
-
-function initKeyboardViewportGuard() {
-  const root = document.documentElement;
-  const viewport = window.visualViewport;
-  let stableViewportHeight = Math.max(window.innerHeight, Number(viewport?.height) || 0);
-
-  const syncKeyboardState = () => {
-    const active = document.activeElement;
-    const fieldFocused = Boolean(active?.matches?.("input, textarea, select, [contenteditable='true']"));
-    const visibleHeight = Number(viewport?.height) || window.innerHeight;
-
-    if (!fieldFocused) {
-      stableViewportHeight = Math.max(stableViewportHeight, window.innerHeight, visibleHeight);
-    }
-
-    const heightDifference = Math.max(0, stableViewportHeight - visibleHeight);
-    // В некоторых Telegram WebView innerHeight уменьшается вместе с visualViewport,
-    // поэтому фокус поля используется как надёжный запасной сигнал.
-    const keyboardOpen = fieldFocused && (heightDifference > 80 || active?.matches?.("input, textarea, [contenteditable='true']"));
-    root.classList.toggle("keyboard-open", Boolean(keyboardOpen));
-  };
-
-  viewport?.addEventListener("resize", syncKeyboardState);
-  viewport?.addEventListener("scroll", syncKeyboardState);
-  window.addEventListener("resize", syncKeyboardState);
-  document.addEventListener("focusin", () => window.setTimeout(syncKeyboardState, 50));
-  document.addEventListener("focusout", () => window.setTimeout(syncKeyboardState, 180));
-  syncKeyboardState();
 }
 
 function getTimeAgo(timestamp) {
@@ -1913,36 +1668,6 @@ function getCatalogSkeletonMarkup(count = 6) {
   `).join("");
 }
 
-function buildCatalogFeedMarkup(products, feedAds, startIndex = 0) {
-  const markup = [];
-  let adIndex = 0;
-  let nextAdPosition = Number.POSITIVE_INFINITY;
-
-  if (feedAds.length > 0) {
-    const firstInterval = Math.max(2, Number(feedAds[0].insertEvery) || 6);
-    nextAdPosition = Math.min(firstInterval, products.length);
-  }
-
-  products.forEach((product, index) => {
-    const productPosition = index + 1;
-    if (index >= startIndex) {
-      markup.push(getProductCard(product, { priority: index < 2 }));
-    }
-
-    if (feedAds.length > 0 && productPosition === nextAdPosition) {
-      const ad = feedAds[adIndex % feedAds.length];
-      if (productPosition > startIndex) markup.push(renderAdCard(ad, "feed"));
-      adIndex += 1;
-
-      const nextAd = feedAds[adIndex % feedAds.length];
-      const nextInterval = Math.max(2, Number(nextAd?.insertEvery) || 6);
-      nextAdPosition = productPosition + nextInterval;
-    }
-  });
-
-  return markup.join("");
-}
-
 function renderProducts() {
   const productList = document.getElementById("productList");
   const loadMoreButton = document.getElementById("catalogLoadMore");
@@ -1953,18 +1678,14 @@ function renderProducts() {
   const products = getFiltered();
 
   if (state.productsLoading && products.length === 0) {
-    catalogAppendStart = null;
     delete productList.dataset.renderSignature;
-    delete productList.dataset.catalogCacheKey;
     productList.innerHTML = getCatalogSkeletonMarkup();
     if (loadMoreButton) loadMoreButton.hidden = true;
     return;
   }
 
   if (state.productsLoadError && products.length === 0) {
-    catalogAppendStart = null;
     delete productList.dataset.renderSignature;
-    delete productList.dataset.catalogCacheKey;
     productList.innerHTML = `
       <div class="empty-state">
         <h3>Не удалось загрузить объявления</h3>
@@ -1977,9 +1698,7 @@ function renderProducts() {
   }
 
   if (products.length === 0) {
-    catalogAppendStart = null;
     delete productList.dataset.renderSignature;
-    delete productList.dataset.catalogCacheKey;
     productList.innerHTML = `
       <div class="empty-state">
         <h3>Объявлений пока нет</h3>
@@ -1991,6 +1710,32 @@ function renderProducts() {
   }
 
   const feedAds = getAdsByPlacement("catalog_feed");
+  const markup = [];
+  let adIndex = 0;
+  let nextAdPosition = Number.POSITIVE_INFINITY;
+
+  if (feedAds.length > 0) {
+    const firstInterval = Math.max(2, Number(feedAds[0].insertEvery) || 6);
+    // Даже в небольшом каталоге первая активная реклама должна быть видна.
+    nextAdPosition = Math.min(firstInterval, products.length);
+  }
+
+  products.forEach((product, index) => {
+    markup.push(getProductCard(product, { priority: index < 2 }));
+    const productPosition = index + 1;
+
+    if (feedAds.length > 0 && productPosition === nextAdPosition) {
+      const ad = feedAds[adIndex % feedAds.length];
+      markup.push(renderAdCard(ad, "feed"));
+      adIndex += 1;
+
+      const nextAd = feedAds[adIndex % feedAds.length];
+      const nextInterval = Math.max(2, Number(nextAd?.insertEvery) || 6);
+      nextAdPosition = productPosition + nextInterval;
+    }
+  });
+
+  const html = markup.join("");
   const renderSignature = [
     state.productsCacheKey,
     ...products.map(product => [
@@ -2003,29 +1748,10 @@ function renderProducts() {
     ...feedAds.map(ad => `${ad.id}:${ad.updatedAt || 0}`)
   ].join("|");
 
-  const appendFrom = Number.isInteger(catalogAppendStart) ? catalogAppendStart : null;
-  const canAppendWithoutRerender =
-    appendFrom !== null &&
-    appendFrom > 0 &&
-    appendFrom <= products.length &&
-    productList.dataset.catalogCacheKey === state.productsCacheKey &&
-    productList.children.length > 0;
-
-  if (canAppendWithoutRerender) {
-    const newMarkup = buildCatalogFeedMarkup(products, feedAds, appendFrom);
-    if (newMarkup) {
-      const template = document.createElement("template");
-      template.innerHTML = newMarkup;
-      productList.appendChild(template.content);
-    }
+  if (productList.dataset.renderSignature !== renderSignature) {
+    productList.innerHTML = html;
     productList.dataset.renderSignature = renderSignature;
-  } else if (productList.dataset.renderSignature !== renderSignature) {
-    productList.innerHTML = buildCatalogFeedMarkup(products, feedAds, 0);
-    productList.dataset.renderSignature = renderSignature;
-    productList.dataset.catalogCacheKey = state.productsCacheKey;
   }
-
-  catalogAppendStart = null;
 
   if (loadMoreButton) {
     const hasMore = typeof state.catalogPagination.hasMore === "boolean"
@@ -2256,10 +1982,7 @@ function renderProfileCounters() {
 
     if (text.includes("Мои объявления")) {
       row.querySelector("b")?.remove();
-      const count = Number.isFinite(Number(state.listingQuota?.used))
-        ? Number(state.listingQuota.used)
-        : (state.myProductsLoaded ? state.myProducts.length : 0);
-      row.insertAdjacentHTML("beforeend", `<b>${count}</b>`);
+      row.insertAdjacentHTML("beforeend", `<b>${state.myProducts.length}</b>`);
     }
 
     if (text.includes("Избранное")) {
@@ -3570,7 +3293,6 @@ async function publishAd(status = "active") {
     });
 
     const savedProduct = data.product;
-    if (data.listingQuota) setListingQuota(data.listingQuota);
     delete state.productDetailsCache[savedProduct.id];
     const ownIndex = state.myProducts.findIndex(product => product.id === savedProduct.id);
 
@@ -3598,8 +3320,6 @@ async function publishAd(status = "active") {
     }
 
     const wasEditing = Boolean(editingId);
-    state.myProductsOwnerId = String(state.telegramUser.id);
-    state.myProductsLoaded = true;
     state.myProductsLoadedAt = Date.now();
     state.productsLoadedAt = 0;
     state.favoritesLoadedAt = 0;
@@ -3618,10 +3338,6 @@ async function publishAd(status = "active") {
     }
   } catch (error) {
     console.error("Не удалось сохранить объявление:", error);
-    if (error.code === "LISTING_LIMIT_REACHED") {
-      showListingLimitDialog(error.details?.listingQuota || state.listingQuota);
-      return;
-    }
     alert("Не удалось сохранить объявление: " + error.message);
   } finally {
     isPublishingAd = false;
@@ -3665,7 +3381,6 @@ function clearCreateForm() {
   const allowMessages = document.getElementById("adAllowMessages");
   const preview = document.getElementById("previewCard");
   const photoInput = document.getElementById("photoInput");
-  const cameraInput = document.getElementById("cameraInput");
 
   if (title) title.value = "";
   if (price) price.value = "";
@@ -3690,11 +3405,10 @@ function clearCreateForm() {
   if (negotiable) negotiable.checked = false;
   if (delivery) delivery.checked = false;
   if (specifications) specifications.value = "";
-  if (phone) phone.value = state.telegramUser?.phone || "";
+  if (phone) phone.value = "";
   if (allowMessages) allowMessages.checked = true;
   if (preview) preview.innerHTML = "";
   if (photoInput) photoInput.value = "";
-  if (cameraInput) cameraInput.value = "";
 
   draftAd.images = [];
   draftAd.thumbnail = "";
@@ -3952,10 +3666,6 @@ async function changeAdStatus(id, status) {
     }
 
     state.myAdsTab = updated.status;
-    if (updated.status === "sold") {
-      setListingQuota({ used: Math.max(0, Number(state.listingQuota.used) - 1) });
-      refreshListingQuota().catch(error => console.warn("Не удалось обновить лимит:", error));
-    }
     render();
   } catch (error) {
     console.error("Не удалось изменить статус объявления:", error);
@@ -3993,9 +3703,6 @@ async function deleteAd(id) {
     state.sellerProducts = state.sellerProducts.filter(product => product.id !== id);
     state.favoriteProducts = state.favoriteProducts.filter(product => product.id !== id);
     state.favorites = state.favorites.filter(favId => favId !== id);
-
-    setListingQuota({ used: Math.max(0, Number(state.listingQuota.used) - 1) });
-    refreshListingQuota().catch(error => console.warn("Не удалось обновить лимит:", error));
 
     render();
   } catch (error) {
@@ -4056,65 +3763,67 @@ function initEvents() {
   document.getElementById("filterBrand")?.addEventListener("change", () => refreshCatalogFilterOptions({ model: "" }));
 
   const addPhotoBtn = document.getElementById("addPhotoBtn");
-  const takePhotoBtn = document.getElementById("takePhotoBtn");
   const photoInput = document.getElementById("photoInput");
-  const cameraInput = document.getElementById("cameraInput");
 
-  const openPhotoSource = input => {
-    if (draftAd.images.length >= MAX_PHOTOS) {
-      alert(`Можно добавить максимум ${MAX_PHOTOS} фото`);
-      return;
-    }
-    input?.click();
-  };
-
-  addPhotoBtn?.addEventListener("click", () => openPhotoSource(photoInput));
-  takePhotoBtn?.addEventListener("click", () => openPhotoSource(cameraInput));
-
-  const processSelectedPhotos = async event => {
-    const input = event.target;
-    const files = Array.from(input.files || []);
-    if (files.length === 0) return;
-
-    const slotsLeft = MAX_PHOTOS - draftAd.images.length;
-    if (slotsLeft <= 0) {
-      alert(`Можно добавить максимум ${MAX_PHOTOS} фото`);
-      input.value = "";
-      return;
-    }
-
-    const filesToAdd = files.slice(0, slotsLeft);
-    if (files.length > slotsLeft) {
-      alert(`Добавим только ${slotsLeft} фото. Максимум — ${MAX_PHOTOS}.`);
-    }
-
-    try {
-      for (const file of filesToAdd) {
-        if (!file.type.startsWith("image/")) continue;
-        if (file.size > 15 * 1024 * 1024) {
-          alert(`Файл «${file.name}» больше 15 МБ и будет пропущен.`);
-          continue;
-        }
-
-        const compressed = await compressImage(file, 800, 0.68);
-        draftAd.images.push(compressed);
+  if (addPhotoBtn) {
+    addPhotoBtn.addEventListener("click", () => {
+      if (draftAd.images.length >= MAX_PHOTOS) {
+        alert(`Можно добавить максимум ${MAX_PHOTOS} фото`);
+        return;
       }
 
-      draftAd.thumbnail = "";
-      draftAd.thumbnailSource = "";
-      renderPhotoPreview();
-      updatePreviewCard();
-      updateCreateButtons();
-    } catch (error) {
-      console.error("Ошибка обработки фото:", error);
-      alert("Не удалось загрузить фото");
-    } finally {
-      input.value = "";
-    }
-  };
+      photoInput?.click();
+    });
+  }
 
-  photoInput?.addEventListener("change", processSelectedPhotos);
-  cameraInput?.addEventListener("change", processSelectedPhotos);
+  if (photoInput) {
+    photoInput.addEventListener("change", async event => {
+      const files = Array.from(event.target.files || []);
+
+      if (files.length === 0) return;
+
+      const slotsLeft = MAX_PHOTOS - draftAd.images.length;
+
+      if (slotsLeft <= 0) {
+        alert(`Можно добавить максимум ${MAX_PHOTOS} фото`);
+        event.target.value = "";
+        return;
+      }
+
+      const filesToAdd = files.slice(0, slotsLeft);
+
+      if (files.length > slotsLeft) {
+        alert(`Добавим только ${slotsLeft} фото. Максимум — ${MAX_PHOTOS}.`);
+      }
+
+      try {
+        for (const file of filesToAdd) {
+          if (!file.type.startsWith("image/")) {
+            continue;
+          }
+
+          if (file.size > 15 * 1024 * 1024) {
+            alert(`Файл «${file.name}» больше 15 МБ и будет пропущен.`);
+            continue;
+          }
+
+          const compressed = await compressImage(file, 800, 0.68);
+          draftAd.images.push(compressed);
+        }
+
+        draftAd.thumbnail = "";
+        draftAd.thumbnailSource = "";
+        renderPhotoPreview();
+        updatePreviewCard();
+        updateCreateButtons();
+      } catch (error) {
+        console.error("Ошибка обработки фото:", error);
+        alert("Не удалось загрузить фото");
+      } finally {
+        event.target.value = "";
+      }
+    });
+  }
 
   const categoriesRoot = document.querySelector(".categories");
 
@@ -4475,7 +4184,7 @@ function getSwipeBackIndicator() {
     indicator.id = "swipeBackIndicator";
     indicator.className = "swipe-back-indicator";
     indicator.setAttribute("aria-hidden", "true");
-    indicator.innerText = "←";
+    indicator.innerText = "‹";
     document.body.appendChild(indicator);
   }
 
@@ -4490,38 +4199,28 @@ function initSwipeBack() {
   let startX = 0;
   let startY = 0;
   let isEdgeSwipe = false;
-  let horizontalGesture = false;
   let indicatorVisible = false;
 
-  const swipeStartZone = 28;
-  const showArrowDistance = 30;
-  const backTriggerDistance = 92;
-
-  const resetSwipeIndicator = () => {
-    const indicator = getSwipeBackIndicator();
-    indicator.classList.remove("active", "completing");
-    indicator.style.removeProperty("--swipe-x");
-    indicator.style.removeProperty("--swipe-progress");
-    isEdgeSwipe = false;
-    horizontalGesture = false;
-    indicatorVisible = false;
-  };
+  const swipeStartZone = 85;
+  const showArrowDistance = 18;
+  const backTriggerDistance = 55;
 
   document.addEventListener(
     "touchstart",
     event => {
       if (!event.touches || event.touches.length !== 1) return;
-      if (event.target?.closest?.("input, textarea, select, dialog, .product-gallery, .photo-lightbox, .categories, .tabs, .product-thumbs, .related-products")) {
-        resetSwipeIndicator();
+      if (event.target?.closest?.(".product-gallery, .photo-lightbox, .report-dialog")) {
+        isEdgeSwipe = false;
         return;
       }
 
       const touch = event.touches[0];
+
       startX = touch.clientX;
       startY = touch.clientY;
-      isEdgeSwipe = startX <= swipeStartZone && canSwipeBack();
-      horizontalGesture = false;
       indicatorVisible = false;
+
+      isEdgeSwipe = startX <= swipeStartZone && canSwipeBack();
     },
     { passive: true }
   );
@@ -4535,23 +4234,10 @@ function initSwipeBack() {
       const deltaX = touch.clientX - startX;
       const deltaY = Math.abs(touch.clientY - startY);
 
-      if (!horizontalGesture && (Math.abs(deltaX) > 10 || deltaY > 10)) {
-        if (deltaY > Math.abs(deltaX) * 1.15 || deltaX < 0) {
-          resetSwipeIndicator();
-          return;
-        }
-        horizontalGesture = true;
-      }
+      if (deltaX > showArrowDistance && deltaY < 55) {
+        event.preventDefault();
 
-      if (!horizontalGesture || deltaX <= 0) return;
-      event.preventDefault();
-
-      const progress = Math.max(0, Math.min(1, deltaX / backTriggerDistance));
-      const indicator = getSwipeBackIndicator();
-      indicator.style.setProperty("--swipe-x", `${Math.min(38, -18 + deltaX * 0.42)}px`);
-      indicator.style.setProperty("--swipe-progress", String(progress));
-
-      if (deltaX >= showArrowDistance) {
+        const indicator = getSwipeBackIndicator();
         indicator.classList.add("active");
         indicatorVisible = true;
       }
@@ -4563,33 +4249,42 @@ function initSwipeBack() {
     "touchend",
     event => {
       if (!isEdgeSwipe) return;
+
+      const indicator = getSwipeBackIndicator();
+
+      if (indicatorVisible) {
+        indicator.classList.remove("active");
+      }
+
       const touch = event.changedTouches?.[0];
+
       if (!touch) {
-        resetSwipeIndicator();
+        isEdgeSwipe = false;
         return;
       }
 
       const deltaX = touch.clientX - startX;
       const deltaY = Math.abs(touch.clientY - startY);
-      const shouldGoBack = horizontalGesture && deltaX >= backTriggerDistance && deltaX > deltaY * 1.4;
-      const indicator = getSwipeBackIndicator();
 
-      if (shouldGoBack) {
-        indicator.classList.add("completing");
-        window.setTimeout(() => {
-          resetSwipeIndicator();
-          goBack();
-        }, 80);
-        return;
+      if (deltaX > backTriggerDistance && deltaY < 65) {
+        goBack();
       }
 
-      if (indicatorVisible) indicator.classList.remove("active");
-      window.setTimeout(resetSwipeIndicator, 120);
+      isEdgeSwipe = false;
+      indicatorVisible = false;
     },
     { passive: true }
   );
 
-  document.addEventListener("touchcancel", resetSwipeIndicator, { passive: true });
+  document.addEventListener(
+    "touchcancel",
+    () => {
+      getSwipeBackIndicator().classList.remove("active");
+      isEdgeSwipe = false;
+      indicatorVisible = false;
+    },
+    { passive: true }
+  );
 }
 
 /* =======================
@@ -4641,10 +4336,6 @@ async function initTelegramUser() {
       phone: user.phone || "",
       photoUrl: user.photoUrl || user.avatar || ""
     };
-    state.myProductsOwnerId = String(user.id || "");
-    state.myProductsLoadedAt = 0;
-    state.myProductsLoaded = false;
-    if (data.listingQuota) setListingQuota(data.listingQuota);
 
     if (avatar) avatar.innerText = firstName[0]?.toUpperCase() || "?";
     if (name) name.innerText = fullName;
@@ -4712,7 +4403,7 @@ function renderOwnProfileDetails() {
   if (contacts) {
     const rows = [];
     if (user.city) rows.push(`<span>📍 ${escapeHTML(user.city)}</span>`);
-    if (user.phone) rows.push(`<button type="button" class="profile-phone-copy" onclick="copyPhoneNumber(decodeURIComponent('${escapeHTML(encodeURIComponent(user.phone))}'))">📞 ${escapeHTML(user.phone)} <small>Копировать</small></button>`);
+    if (user.phone) rows.push(`<a href="tel:${escapeHTML(normalizePhoneForTel(user.phone))}">📞 ${escapeHTML(user.phone)}</a>`);
     const contactUsername = user.contactUsername || user.username || "";
     if (contactUsername) rows.push(`<span>✈️ @${escapeHTML(contactUsername)}</span>`);
     contacts.innerHTML = rows.join("");
@@ -4789,7 +4480,6 @@ async function initApp() {
   initZoomLock();
   initSwipeBack();
   initKeyboardAutoHide();
-  initKeyboardViewportGuard();
   initEvents();
   syncCatalogFiltersUI();
   const adsPromise = loadAds();
@@ -4917,7 +4607,7 @@ async function openSellerProfile(userId) {
     if (sellerContacts) {
       const contactRows = [];
       if (user.city) contactRows.push(`<span>📍 ${escapeHTML(user.city)}</span>`);
-      if (user.phone) contactRows.push(`<button type="button" class="profile-phone-copy" onclick="copyPhoneNumber(decodeURIComponent('${escapeHTML(encodeURIComponent(user.phone))}'))">📞 ${escapeHTML(user.phone)} <small>Копировать</small></button>`);
+      if (user.phone) contactRows.push(`<a href="tel:${escapeHTML(normalizePhoneForTel(user.phone))}">📞 ${escapeHTML(user.phone)}</a>`);
       if (username) contactRows.push(`<span>✈️ @${escapeHTML(username)}</span>`);
       sellerContacts.innerHTML = contactRows.join("");
     }
@@ -5443,24 +5133,16 @@ function renderAdminUsers(users = []) {
               <div class="admin-record-meta">
                 <span>ID: ${escapeHTML(user.telegram_id)}</span>
                 <span>📦 ${Number(user.products_count) || 0}</span>
-                <span>Места: ${Number(user.listing_slots_used) || 0}/${Number(user.listing_limit) || 3}</span>
                 <span>${escapeHTML(formatAdminDate(user.last_seen))}</span>
               </div>
             </div>
-            <div class="admin-user-actions">
-              <label class="admin-limit-control">
-                <span>Лимит</span>
-                <input id="listingLimit-${escapeHTML(user.telegram_id)}" type="number" min="1" max="100" value="${Number(user.listing_limit) || 3}">
-                <button class="admin-action-button" type="button" onclick="updateAdminListingLimit('${escapeHTML(user.telegram_id)}', this)">Сохранить</button>
-              </label>
-              <button
-                class="admin-action-button ${user.banned ? "restore" : "danger"}"
-                type="button"
-                onclick="toggleAdminUserBan('${escapeHTML(user.telegram_id)}', this)"
-              >
-                ${user.banned ? "Разблокировать" : "Заблокировать"}
-              </button>
-            </div>
+            <button
+              class="admin-action-button ${user.banned ? "restore" : "danger"}"
+              type="button"
+              onclick="toggleAdminUserBan('${escapeHTML(user.telegram_id)}', this)"
+            >
+              ${user.banned ? "Разблокировать" : "Заблокировать"}
+            </button>
           </article>
         `;
       }).join("")}
@@ -5474,7 +5156,6 @@ function getAdminActionLabel(action) {
     show_product: "Вернул объявление",
     ban_user: "Заблокировал пользователя",
     unban_user: "Разблокировал пользователя",
-    set_listing_limit: "Изменил лимит объявлений",
     archive_product: "Архивировал объявление",
     report_resolved: "Обработал жалобу",
     report_rejected: "Отклонил жалобу",
@@ -6273,38 +5954,6 @@ async function toggleAdminUserBan(id, button) {
     console.error("Toggle user ban error:", error);
     alert(error.message || "Не удалось изменить блокировку пользователя");
     if (button) button.disabled = false;
-  }
-}
-
-async function updateAdminListingLimit(id, button) {
-  if (!id || button?.disabled) return;
-  const input = document.getElementById(`listingLimit-${id}`);
-  const limit = Number.parseInt(String(input?.value || ""), 10);
-
-  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
-    alert("Укажите лимит от 1 до 100 объявлений");
-    return;
-  }
-
-  if (button) {
-    button.disabled = true;
-    button.textContent = "Сохраняем…";
-  }
-
-  try {
-    await apiRequest(`/api/admin/users/${encodeURIComponent(id)}/listing-limit`, {
-      method: "PATCH",
-      body: JSON.stringify({ limit })
-    });
-    showToast(`Лимит изменён: ${limit}`);
-    await loadAdminUsers();
-  } catch (error) {
-    console.error("Update listing limit error:", error);
-    alert(error.message || "Не удалось изменить лимит");
-    if (button) {
-      button.disabled = false;
-      button.textContent = "Сохранить";
-    }
   }
 }
 

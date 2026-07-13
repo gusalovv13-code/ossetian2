@@ -12,7 +12,7 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=1.13.8" />
+  <link rel="stylesheet" href="style.css?v=1.13.5" />
 </head>
 
 <body>
@@ -42,7 +42,7 @@
           </div>
         </button>
 
-        <button onclick="openCreatePage()" class="menu-card blue" type="button">
+        <button onclick="showPage('create1')" class="menu-card blue" type="button">
           <span>＋</span>
           <div>
             <b>Разместить объявление</b>
@@ -390,16 +390,10 @@
       <p id="createPhotoHint" class="muted">Добавьте до 5 фото товара.</p>
 
       <input id="photoInput" type="file" accept="image/*" multiple hidden />
-      <input id="cameraInput" type="file" accept="image/*" capture="environment" hidden />
 
-      <div class="photo-source-actions">
-        <button id="addPhotoBtn" type="button" class="outline">
-          ＋ Из галереи
-        </button>
-        <button id="takePhotoBtn" type="button" class="outline">
-          📷 Сфотографировать
-        </button>
-      </div>
+      <button id="addPhotoBtn" type="button" class="outline wide">
+        ＋ Добавить фото
+      </button>
 
       <div id="photoPreview" class="photo-grid"></div>
 
@@ -523,7 +517,7 @@
 
       <div id="myAdsList" class="product-list"></div>
 
-      <button class="primary wide fixed-btn" onclick="openCreatePage()" type="button">
+      <button class="primary wide fixed-btn" onclick="showPage('create1')" type="button">
         ＋ Добавить объявление
       </button>
     </section>
@@ -637,26 +631,26 @@
     </section>
 
     <nav class="bottom-nav">
-      <button onclick="navigateMainTab('home')" type="button">
+      <button onclick="showPage('home')" type="button">
         ⌂
         <small>Главная</small>
       </button>
 
-      <button onclick="navigateMainTab('favorites')" type="button">
+      <button onclick="showPage('favorites')" type="button">
         ♡
         <small>Избранное</small>
       </button>
 
-      <button onclick="openCreatePage()" class="add-btn" type="button">
+      <button onclick="showPage('create1')" class="add-btn" type="button">
         ＋
       </button>
 
-      <button onclick="navigateMainTab('chats')" type="button">
+      <button onclick="showPage('chats')" type="button">
         💬
         <small>Чаты</small>
       </button>
 
-      <button onclick="navigateMainTab('profile')" type="button">
+      <button onclick="showPage('profile')" type="button">
         👤
         <small>Профиль</small>
       </button>
@@ -800,25 +794,6 @@
     </form>
   </dialog>
 
-  <dialog id="listingLimitDialog" class="listing-limit-dialog">
-    <div class="dialog-heading">
-      <div>
-        <small>Лимит объявлений</small>
-        <h3>Свободных мест нет</h3>
-      </div>
-      <button type="button" class="dialog-close" onclick="closeListingLimitDialog()" aria-label="Закрыть">×</button>
-    </div>
-    <p id="listingLimitSummary" class="listing-limit-summary"></p>
-    <div class="listing-limit-offer">
-      <span aria-hidden="true">🏪</span>
-      <p id="listingLimitOffer"></p>
-    </div>
-    <div class="dialog-actions">
-      <button type="button" class="outline" onclick="closeListingLimitDialog()">Понятно</button>
-      <button type="button" class="primary" onclick="contactSupportForListingLimit()">Написать в поддержку</button>
-    </div>
-  </dialog>
-
   <dialog id="reportDialog" class="report-dialog">
     <form method="dialog" onsubmit="submitProductReport(event)">
       <div class="dialog-heading">
@@ -853,9 +828,8 @@
     </form>
   </dialog>
 
-  <div id="appToast" class="app-toast" role="status" aria-live="polite" hidden></div>
-  <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">←</div>
+  <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">‹</div>
 
-  <script src="script.js?v=1.13.8"></script>
+  <script src="script.js?v=1.13.5"></script>
 </body>
 </html>
