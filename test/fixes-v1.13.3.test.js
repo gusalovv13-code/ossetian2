@@ -7,10 +7,10 @@ const html = await readFile(new URL("../public/index.html", import.meta.url), "u
 const css = await readFile(new URL("../public/style.css", import.meta.url), "utf8");
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 
-test("версия и кеш обновлены до 1.13.3", () => {
-  assert.equal(packageJson.version, "1.13.3");
-  assert.match(html, /style\.css\?v=1\.13\.3/);
-  assert.match(html, /script\.js\?v=1\.13\.3/);
+test("версия и кеш обновлены до 1.13.4", () => {
+  assert.equal(packageJson.version, "1.13.4");
+  assert.match(html, /style\.css\?v=1\.13\.4/);
+  assert.match(html, /script\.js\?v=1\.13\.4/);
 });
 
 test("Mini App не запрашивает fullscreen и защищена от вытягивания вниз", () => {

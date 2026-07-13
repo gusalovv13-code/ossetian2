@@ -1089,6 +1089,73 @@ async function loadFavorites({ force = false } = {}) {
    NAVIGATION
 ======================= */
 
+const PAGE_TRANSITION_MS = 230;
+let pageTransitionTimer = null;
+let pageTransitionSequence = 0;
+
+function prefersReducedPageMotion() {
+  return Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches);
+}
+
+function clearPageTransitionClasses(pageEl) {
+  if (!pageEl) return;
+  pageEl.classList.remove(
+    "page-transitioning",
+    "page-enter-forward",
+    "page-enter-back"
+  );
+}
+
+function animatePageEntry(targetPage, direction = "forward") {
+  const sequence = ++pageTransitionSequence;
+  const phone = document.querySelector(".phone");
+
+  document.querySelectorAll(".page").forEach(clearPageTransitionClasses);
+  phone?.classList.remove("is-page-switching");
+
+  if (pageTransitionTimer) {
+    window.clearTimeout(pageTransitionTimer);
+    pageTransitionTimer = null;
+  }
+
+  if (!targetPage || prefersReducedPageMotion()) return;
+
+  const directionClass = direction === "back" ? "page-enter-back" : "page-enter-forward";
+
+  targetPage.classList.add("page-transitioning", directionClass);
+  phone?.classList.add("is-page-switching");
+
+  const cleanup = () => {
+    if (sequence !== pageTransitionSequence) return;
+    clearPageTransitionClasses(targetPage);
+    phone?.classList.remove("is-page-switching");
+    if (pageTransitionTimer) {
+      window.clearTimeout(pageTransitionTimer);
+      pageTransitionTimer = null;
+    }
+  };
+
+  const handleAnimationEnd = event => {
+    if (event.target !== targetPage) return;
+    targetPage.removeEventListener("animationend", handleAnimationEnd);
+    cleanup();
+  };
+
+  targetPage.addEventListener("animationend", handleAnimationEnd);
+  pageTransitionTimer = window.setTimeout(() => {
+    targetPage.removeEventListener("animationend", handleAnimationEnd);
+    cleanup();
+  }, PAGE_TRANSITION_MS + 90);
+}
+
+function animatePageTitle(titleEl) {
+  if (!titleEl || prefersReducedPageMotion()) return;
+  titleEl.classList.remove("is-changing");
+  void titleEl.offsetWidth;
+  titleEl.classList.add("is-changing");
+  window.setTimeout(() => titleEl.classList.remove("is-changing"), 220);
+}
+
 function resetPageScroll(pageId) {
   const scrollToTop = () => {
     window.scrollTo(0, 0);
@@ -1110,7 +1177,7 @@ function resetPageScroll(pageId) {
   window.setTimeout(scrollToTop, 80);
 }
 
-function showPage(page, addToHistory = true, preserveCreateSession = false) {
+function showPage(page, addToHistory = true, preserveCreateSession = false, transitionDirection = null) {
   if (
     page === "create1" &&
     addToHistory &&
@@ -1120,20 +1187,29 @@ function showPage(page, addToHistory = true, preserveCreateSession = false) {
     clearCreateForm();
   }
 
-  if (addToHistory && state.page !== page) {
-    state.history.push(state.page);
+  const previousPage = state.page;
+  const pageChanged = previousPage !== page;
+
+  if (addToHistory && pageChanged) {
+    state.history.push(previousPage);
   }
 
   state.page = page;
 
   document.querySelectorAll(".page").forEach(pageEl => {
     pageEl.classList.remove("active");
+    clearPageTransitionClasses(pageEl);
   });
 
   const targetPage = document.getElementById(page);
 
   if (targetPage) {
     targetPage.classList.add("active");
+
+    if (pageChanged) {
+      const direction = transitionDirection || (addToHistory ? "forward" : "back");
+      animatePageEntry(targetPage, direction);
+    }
   }
 
   const titles = {
@@ -1160,6 +1236,7 @@ function showPage(page, addToHistory = true, preserveCreateSession = false) {
     titleEl.innerText = isEditingPage
       ? "Редактирование объявления"
       : titles[page] || "Алания Маркет";
+    if (pageChanged) animatePageTitle(titleEl);
   }
 
   updateBottomNav();
@@ -1205,12 +1282,12 @@ function goBack() {
   const prev = state.history.pop();
 
   if (prev) {
-    showPage(prev, false);
+    showPage(prev, false, false, "back");
     return;
   }
 
   if (state.page !== "home") {
-    showPage("home", false);
+    showPage("home", false, false, "back");
     return;
   }
 

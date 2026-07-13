@@ -8,11 +8,11 @@ const server = fs.readFileSync(new URL("../server.js", import.meta.url), "utf8")
 const css = fs.readFileSync(new URL("../public/style.css", import.meta.url), "utf8");
 const packageJson = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
-test("версия и кеш обновлены до 1.13.3", () => {
-  assert.equal(packageJson.version, "1.13.3");
-  assert.match(server, /const APP_VERSION = "1\.13\.3"/);
-  assert.match(html, /style\.css\?v=1\.13\.3/);
-  assert.match(html, /script\.js\?v=1\.13\.3/);
+test("версия и кеш обновлены до 1.13.4", () => {
+  assert.equal(packageJson.version, "1.13.4");
+  assert.match(server, /const APP_VERSION = "1\.13\.4"/);
+  assert.match(html, /style\.css\?v=1\.13\.4/);
+  assert.match(html, /script\.js\?v=1\.13\.4/);
 });
 
 test("фильтры каталога используют зависимые выпадающие списки", () => {

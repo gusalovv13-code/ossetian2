@@ -5800,3 +5800,120 @@ body.dark-mode .product-meta-stats {
     flex-wrap: wrap;
   }
 }
+
+/* ===== v1.13.4: SMOOTH PAGE TRANSITIONS ===== */
+.page.active.page-transitioning {
+  transform-origin: 50% 12%;
+  backface-visibility: hidden;
+  will-change: opacity, transform;
+}
+
+.page.active.page-enter-forward {
+  animation: market-page-enter-forward 230ms cubic-bezier(.22, .78, .28, 1) both;
+}
+
+.page.active.page-enter-back {
+  animation: market-page-enter-back 215ms cubic-bezier(.22, .78, .28, 1) both;
+}
+
+@keyframes market-page-enter-forward {
+  from {
+    opacity: .18;
+    transform: translate3d(16px, 0, 0) scale(.994);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes market-page-enter-back {
+  from {
+    opacity: .2;
+    transform: translate3d(-13px, 0, 0) scale(.996);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+.topbar-title.is-changing {
+  animation: market-title-change 190ms ease-out both;
+}
+
+@keyframes market-title-change {
+  from {
+    opacity: .35;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.bottom-nav button {
+  transition: transform 170ms ease, opacity 170ms ease, color 170ms ease, background-color 170ms ease;
+}
+
+.bottom-nav button.active:not(.add-btn) {
+  transform: translateY(-1px);
+}
+
+.bottom-nav .add-btn {
+  transition: transform 190ms cubic-bezier(.22, .78, .28, 1), box-shadow 190ms ease;
+}
+
+.bottom-nav .add-btn.active {
+  transform: translateY(-2px) scale(1.035);
+}
+
+dialog[open] {
+  animation: market-dialog-enter 185ms cubic-bezier(.22, .78, .28, 1) both;
+}
+
+dialog[open]::backdrop {
+  animation: market-backdrop-enter 170ms ease-out both;
+}
+
+.photo-lightbox:not([hidden]) {
+  animation: market-lightbox-enter 180ms ease-out both;
+}
+
+@keyframes market-dialog-enter {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes market-backdrop-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes market-lightbox-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page.active.page-enter-forward,
+  .page.active.page-enter-back,
+  .topbar-title.is-changing,
+  dialog[open],
+  dialog[open]::backdrop,
+  .photo-lightbox:not([hidden]) {
+    animation: none !important;
+  }
+
+  .bottom-nav button,
+  .bottom-nav .add-btn {
+    transition: none !important;
+  }
+}
