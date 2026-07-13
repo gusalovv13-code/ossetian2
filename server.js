@@ -14,7 +14,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.12.9";
+const APP_VERSION = "1.13.0";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -789,7 +789,7 @@ async function readRemoteImageBuffer(source) {
     for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
       response = await fetch(currentUrl, {
         signal: controller.signal,
-        headers: { "User-Agent": "OssetianMarket/1.12.9" },
+        headers: { "User-Agent": "OssetianMarket/1.13.0" },
         redirect: "manual"
       });
 
@@ -2312,8 +2312,10 @@ app.get("/api/products", async (req, res) => {
     const category = PRODUCT_CATEGORIES.has(requestedCategory) ? requestedCategory : "";
     const city = normalizeText(req.query.city, 80);
     const district = normalizeText(req.query.district, 80);
+    const itemType = normalizeText(req.query.itemType, 80);
     const brand = normalizeText(req.query.brand, 80);
     const model = normalizeText(req.query.model, 80);
+    const year = normalizeText(req.query.year, 20);
     const minPrice = Math.max(0, Number(String(req.query.minPrice || "").replace(/[^0-9]/g, "")) || 0);
     const maxPrice = Math.max(0, Number(String(req.query.maxPrice || "").replace(/[^0-9]/g, "")) || 0);
     const requestedSort = normalizeText(req.query.sort, 20);
@@ -2380,18 +2382,24 @@ app.get("/api/products", async (req, res) => {
       conditions.push(`LOWER(COALESCE(p.district, '')) LIKE $${values.length}`);
     }
 
-    const addVehicleOrDeviceFilter = value => {
+    const addStructuredFilter = (value, keys = []) => {
       if (!value) return;
+      values.push(value.toLowerCase());
+      const exactParameter = `$${values.length}`;
       values.push(`%${value.toLowerCase()}%`);
-      const parameter = `$${values.length}`;
+      const fallbackParameter = `$${values.length}`;
+      const jsonChecks = keys.map(key => `LOWER(COALESCE(p.specifications->>'${key}', '')) = ${exactParameter}`);
       conditions.push(`(
-        LOWER(COALESCE(p.name, '')) LIKE ${parameter}
-        OR LOWER(COALESCE(p.description, '')) LIKE ${parameter}
-        OR LOWER(COALESCE(p.specifications::text, '')) LIKE ${parameter}
+        ${jsonChecks.join("\n        OR ")}
+        OR LOWER(COALESCE(p.name, '')) LIKE ${fallbackParameter}
+        OR LOWER(COALESCE(p.description, '')) LIKE ${fallbackParameter}
+        OR LOWER(COALESCE(p.specifications::text, '')) LIKE ${fallbackParameter}
       )`);
     };
-    addVehicleOrDeviceFilter(brand);
-    addVehicleOrDeviceFilter(model);
+    addStructuredFilter(itemType, ["Тип товара", "Подкатегория", "Тип"]);
+    addStructuredFilter(brand, ["Марка / бренд", "Марка", "Бренд"]);
+    addStructuredFilter(model, ["Модель"]);
+    addStructuredFilter(year, ["Год выпуска", "Год"]);
 
     if (minPrice) {
       values.push(minPrice);
@@ -2434,7 +2442,7 @@ app.get("/api/products", async (req, res) => {
     res.json({
       ok: true,
       products: visibleRows.map(mapProductSummary),
-      filters: { search, category, city, district, brand, model, minPrice, maxPrice, sort },
+      filters: { search, category, city, district, itemType, brand, model, year, minPrice, maxPrice, sort },
       pagination: {
         page,
         limit,

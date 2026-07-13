@@ -12,7 +12,7 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=1.12.9" />
+  <link rel="stylesheet" href="style.css?v=1.13.0" />
 </head>
 
 <body>
@@ -115,18 +115,39 @@
       </label>
       <label>
         <span>Район</span>
-        <input id="filterDistrict" maxlength="80" placeholder="Например, Северо-Западный" />
+        <select id="filterDistrict">
+          <option value="">Все районы</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="filter-grid two-columns">
+      <label>
+        <span>Тип товара</span>
+        <select id="filterItemType">
+          <option value="">Все типы</option>
+        </select>
+      </label>
+      <label>
+        <span>Год выпуска</span>
+        <select id="filterYear">
+          <option value="">Любой год</option>
+        </select>
       </label>
     </div>
 
     <div class="filter-grid two-columns">
       <label>
         <span>Марка / бренд</span>
-        <input id="filterBrand" maxlength="80" placeholder="BMW, Apple, Samsung..." />
+        <select id="filterBrand">
+          <option value="">Все марки и бренды</option>
+        </select>
       </label>
       <label>
         <span>Модель</span>
-        <input id="filterModel" maxlength="80" placeholder="X5, iPhone 15, Galaxy S24..." />
+        <select id="filterModel">
+          <option value="">Все модели</option>
+        </select>
       </label>
     </div>
 
@@ -264,6 +285,40 @@
         <option value="Животные">Животные</option>
       </select>
 
+      <section id="adStructuredFields" class="structured-fields-card" hidden>
+        <div class="structured-fields-heading">
+          <div>
+            <b>Точные характеристики</b>
+            <small>Они попадут в фильтры и помогут покупателям найти объявление.</small>
+          </div>
+          <span>Для поиска</span>
+        </div>
+
+        <div class="filter-grid two-columns">
+          <label>
+            <span>Тип товара</span>
+            <select id="adItemType"></select>
+          </label>
+          <label>
+            <span>Год выпуска</span>
+            <select id="adYear"></select>
+          </label>
+        </div>
+
+        <div class="filter-grid two-columns">
+          <label>
+            <span>Марка / бренд</span>
+            <select id="adBrand"></select>
+            <input id="adBrandCustom" maxlength="80" placeholder="Введите марку или бренд" hidden />
+          </label>
+          <label>
+            <span>Модель</span>
+            <select id="adModel"></select>
+            <input id="adModelCustom" maxlength="80" placeholder="Введите модель" hidden />
+          </label>
+        </div>
+      </section>
+
       <label for="adCondition">Состояние товара</label>
       <select id="adCondition">
         <option value="new">Новое</option>
@@ -345,7 +400,10 @@
       </select>
 
       <label for="adDistrict">Район</label>
-      <input id="adDistrict" maxlength="80" placeholder="Например, Северо-Западный" enterkeyhint="done" />
+      <select id="adDistrict">
+        <option value="">Выберите район</option>
+      </select>
+      <input id="adDistrictCustom" maxlength="80" placeholder="Введите район" enterkeyhint="done" hidden />
 
       <div class="toggle-row">
         <span>Возможен торг</span>
@@ -740,6 +798,6 @@
 
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">‹</div>
 
-  <script src="script.js?v=1.12.9"></script>
+  <script src="script.js?v=1.13.0"></script>
 </body>
 </html>

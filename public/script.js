@@ -109,6 +109,89 @@ const FEATURE_REQUEST_COLORS = new Set(["purple", "green", "gold"]);
 const DATA_CACHE_TTL_MS = 30_000;
 const PRODUCT_DETAILS_CACHE_TTL_MS = 60_000;
 
+const OTHER_OPTION_VALUE = "__other__";
+const STRUCTURED_SPECIFICATION_KEYS = new Set([
+  "тип товара", "подкатегория", "марка / бренд", "марка", "бренд", "модель", "год выпуска", "год"
+]);
+
+const CITY_DISTRICTS = Object.freeze({
+  "Владикавказ": ["Иристонский", "Промышленный", "Северо-Западный", "Затеречный"],
+  "Беслан": ["Центр"],
+  "Алагир": ["Центр"],
+  "Ардон": ["Центр"],
+  "Дигора": ["Центр"],
+  "Моздок": ["Центр"],
+  "Чикола": ["Центр"]
+});
+
+const PRODUCT_TAXONOMY = Object.freeze({
+  "Авто": {
+    types: ["Легковой автомобиль", "Кроссовер / внедорожник", "Коммерческий транспорт", "Мотоцикл", "Автозапчасть"],
+    brandsByType: {
+      "Легковой автомобиль": ["Audi", "BMW", "Chevrolet", "Ford", "Honda", "Hyundai", "Kia", "Lada", "Lexus", "Mazda", "Mercedes-Benz", "Mitsubishi", "Nissan", "Opel", "Peugeot", "Renault", "Skoda", "Subaru", "Toyota", "Volkswagen"],
+      "Кроссовер / внедорожник": ["Audi", "BMW", "Chevrolet", "Ford", "Honda", "Hyundai", "Jeep", "Kia", "Lada", "Land Rover", "Lexus", "Mazda", "Mercedes-Benz", "Mitsubishi", "Nissan", "Porsche", "Renault", "Subaru", "Toyota", "UAZ", "Volkswagen"],
+      "Коммерческий транспорт": ["Ford", "GAZ", "Hyundai", "Iveco", "Mercedes-Benz", "Peugeot", "Renault", "Volkswagen"],
+      "Мотоцикл": ["BMW", "Ducati", "Harley-Davidson", "Honda", "Kawasaki", "KTM", "Suzuki", "Yamaha"],
+      "Автозапчасть": ["Audi", "BMW", "Chevrolet", "Ford", "Honda", "Hyundai", "Kia", "Lada", "Lexus", "Mazda", "Mercedes-Benz", "Mitsubishi", "Nissan", "Renault", "Skoda", "Toyota", "UAZ", "Volkswagen"]
+    },
+    modelsByBrand: {
+      "Audi": ["A3", "A4", "A5", "A6", "A7", "A8", "Q3", "Q5", "Q7", "Q8"],
+      "BMW": ["1 серия", "3 серия", "5 серия", "7 серия", "X1", "X3", "X5", "X6", "X7", "M3", "M5"],
+      "Chevrolet": ["Aveo", "Cobalt", "Cruze", "Lacetti", "Niva", "Tahoe"],
+      "Ford": ["Explorer", "Focus", "Kuga", "Mondeo", "Transit"],
+      "Honda": ["Accord", "Civic", "CR-V", "Pilot"],
+      "Hyundai": ["Creta", "Elantra", "Santa Fe", "Solaris", "Sonata", "Tucson"],
+      "Kia": ["Cerato", "K5", "Rio", "Seltos", "Sorento", "Sportage"],
+      "Lada": ["2107", "2114", "Granta", "Kalina", "Largus", "Niva Legend", "Niva Travel", "Priora", "Vesta"],
+      "Land Rover": ["Defender", "Discovery", "Range Rover", "Range Rover Evoque", "Range Rover Sport"],
+      "Lexus": ["ES", "GX", "LX", "NX", "RX"],
+      "Mazda": ["3", "6", "CX-5", "CX-9"],
+      "Mercedes-Benz": ["A-Class", "C-Class", "E-Class", "S-Class", "CLA", "CLS", "GLA", "GLC", "GLE", "GLS", "G-Class", "Sprinter", "Vito"],
+      "Mitsubishi": ["ASX", "L200", "Outlander", "Pajero", "Pajero Sport"],
+      "Nissan": ["Almera", "Patrol", "Qashqai", "Teana", "X-Trail"],
+      "Opel": ["Astra", "Corsa", "Insignia", "Mokka", "Zafira"],
+      "Porsche": ["Cayenne", "Macan", "Panamera"],
+      "Renault": ["Arkana", "Duster", "Kaptur", "Logan", "Sandero"],
+      "Skoda": ["Karoq", "Kodiaq", "Octavia", "Rapid", "Superb"],
+      "Subaru": ["Forester", "Impreza", "Legacy", "Outback", "XV"],
+      "Toyota": ["Camry", "Corolla", "Highlander", "Hilux", "Land Cruiser", "Land Cruiser Prado", "RAV4", "Yaris"],
+      "UAZ": ["Буханка", "Патриот", "Пикап", "Хантер"],
+      "Volkswagen": ["Golf", "Jetta", "Passat", "Polo", "Tiguan", "Touareg", "Transporter"]
+    }
+  },
+  "Электроника": {
+    types: ["Смартфон", "Кнопочный телефон", "Планшет", "Ноутбук", "Компьютер", "Телевизор", "Наушники", "Смарт-часы", "Игровая приставка", "Фотоаппарат", "Другое"],
+    brandsByType: {
+      "Смартфон": ["Apple", "Google", "Honor", "Huawei", "Infinix", "Nokia", "OnePlus", "Oppo", "Realme", "Samsung", "Tecno", "Vivo", "Xiaomi"],
+      "Кнопочный телефон": ["Nokia", "Philips", "Samsung", "Texet"],
+      "Планшет": ["Apple", "Honor", "Huawei", "Lenovo", "Samsung", "Xiaomi"],
+      "Ноутбук": ["Acer", "Apple", "Asus", "Dell", "HP", "Huawei", "Lenovo", "MSI", "Samsung"],
+      "Компьютер": ["Acer", "Apple", "Asus", "Dell", "HP", "Lenovo", "MSI"],
+      "Телевизор": ["Haier", "Hisense", "LG", "Samsung", "Sony", "TCL", "Xiaomi"],
+      "Наушники": ["Apple", "Bose", "Huawei", "JBL", "Marshall", "Samsung", "Sony", "Xiaomi"],
+      "Смарт-часы": ["Amazfit", "Apple", "Garmin", "Huawei", "Samsung", "Xiaomi"],
+      "Игровая приставка": ["Microsoft", "Nintendo", "Sony"],
+      "Фотоаппарат": ["Canon", "Fujifilm", "Nikon", "Panasonic", "Sony"],
+      "Другое": ["Acer", "Apple", "Asus", "Bosch", "Canon", "Dell", "Haier", "Honor", "HP", "Huawei", "JBL", "Lenovo", "LG", "Nikon", "Samsung", "Sony", "Xiaomi"]
+    },
+    modelsByBrand: {
+      "Apple": ["iPhone 11", "iPhone 12", "iPhone 13", "iPhone 13 Pro", "iPhone 13 Pro Max", "iPhone 14", "iPhone 14 Pro", "iPhone 14 Pro Max", "iPhone 15", "iPhone 15 Plus", "iPhone 15 Pro", "iPhone 15 Pro Max", "iPhone 16", "iPhone 16 Plus", "iPhone 16 Pro", "iPhone 16 Pro Max"],
+      "Google": ["Pixel 7", "Pixel 7 Pro", "Pixel 8", "Pixel 8 Pro", "Pixel 9", "Pixel 9 Pro"],
+      "Honor": ["Honor 90", "Honor 200", "Honor 200 Pro", "Magic6 Pro", "X8b", "X9b"],
+      "Huawei": ["Mate 60 Pro", "Nova 12", "P60 Pro", "Pura 70", "Pura 70 Pro"],
+      "Infinix": ["GT 20 Pro", "Hot 40", "Note 40", "Note 40 Pro", "Zero 30"],
+      "Nokia": ["105", "110", "150", "2660 Flip", "G42"],
+      "OnePlus": ["OnePlus 11", "OnePlus 12", "Nord 4", "Nord CE4"],
+      "Oppo": ["A58", "A78", "Find X7 Ultra", "Reno 11", "Reno 12"],
+      "Realme": ["12 Pro", "12 Pro+", "C67", "GT 6"],
+      "Samsung": ["Galaxy A15", "Galaxy A25", "Galaxy A34", "Galaxy A35", "Galaxy A54", "Galaxy A55", "Galaxy S22", "Galaxy S23", "Galaxy S23 Ultra", "Galaxy S24", "Galaxy S24 Ultra", "Galaxy Z Flip6", "Galaxy Z Fold6"],
+      "Tecno": ["Camon 30", "Pova 6", "Pova 6 Pro", "Spark 20", "Spark 20 Pro"],
+      "Vivo": ["V29", "V30", "V30 Pro", "Y36", "Y100"],
+      "Xiaomi": ["Xiaomi 13T", "Xiaomi 13T Pro", "Xiaomi 14", "Xiaomi 14 Ultra", "Redmi 13", "Redmi Note 13", "Redmi Note 13 Pro", "Redmi Note 13 Pro+", "POCO F6", "POCO X6 Pro"]
+    }
+  }
+});
+
 const tg = window.Telegram?.WebApp || null;
 let telegramAvatarObjectUrl = null;
 let productSearchTimer = null;
@@ -161,8 +244,10 @@ const state = {
     maxPrice: "",
     city: "",
     district: "",
+    itemType: "",
     brand: "",
     model: "",
+    year: "",
     sort: "newest"
   },
   openedProductId: null,
@@ -391,9 +476,201 @@ function renderProductDetailAds() {
   root.innerHTML = ads.map(ad => renderAdCard(ad, "detail")).join("");
 }
 
+
+function uniqueSorted(values = []) {
+  return [...new Set(values.map(value => String(value || "").trim()).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right, "ru", { sensitivity: "base", numeric: true }));
+}
+
+function getYearOptions() {
+  const currentYear = new Date().getFullYear();
+  const years = [];
+  for (let year = currentYear; year >= 1980; year -= 1) years.push(String(year));
+  years.push("До 1980");
+  return years;
+}
+
+function setSelectOptions(select, options, { placeholder = "Выберите", selected = "", allowOther = false, otherLabel = "Другое", sortOptions = true } = {}) {
+  if (!select) return "";
+  const normalizedOptions = sortOptions
+    ? uniqueSorted(options)
+    : [...new Set(options.map(value => String(value || "").trim()).filter(Boolean))];
+  const selectedText = String(selected || "").trim();
+  const exactValue = normalizedOptions.find(value => value.toLocaleLowerCase("ru") === selectedText.toLocaleLowerCase("ru"));
+  const items = [`<option value="">${escapeHTML(placeholder)}</option>`]
+    .concat(normalizedOptions.map(value => `<option value="${escapeHTML(value)}">${escapeHTML(value)}</option>`));
+  if (allowOther) items.push(`<option value="${OTHER_OPTION_VALUE}">${escapeHTML(otherLabel)}</option>`);
+  if (selectedText && !exactValue && !allowOther) {
+    items.push(`<option value="${escapeHTML(selectedText)}">${escapeHTML(selectedText)}</option>`);
+  }
+  select.innerHTML = items.join("");
+  select.value = exactValue || (selectedText && allowOther ? OTHER_OPTION_VALUE : selectedText || "");
+  return select.value;
+}
+
+function updateCustomSelectInput(selectId, inputId) {
+  const select = document.getElementById(selectId);
+  const input = document.getElementById(inputId);
+  if (!select || !input) return;
+  const show = select.value === OTHER_OPTION_VALUE;
+  input.hidden = !show;
+  input.disabled = !show;
+  if (show) input.setAttribute("aria-required", "true");
+  else input.removeAttribute("aria-required");
+}
+
+function readSelectWithCustom(selectId, inputId) {
+  const select = document.getElementById(selectId);
+  const value = String(select?.value || "").trim();
+  if (value !== OTHER_OPTION_VALUE) return value;
+  return String(document.getElementById(inputId)?.value || "").trim();
+}
+
+function getTaxonomiesFor(category = "Все", itemType = "") {
+  const entries = Object.entries(PRODUCT_TAXONOMY)
+    .filter(([name, taxonomy]) => category === "Все" || name === category)
+    .filter(([, taxonomy]) => !itemType || taxonomy.types.includes(itemType));
+  return entries.map(([, taxonomy]) => taxonomy);
+}
+
+function getItemTypeOptions(category = "Все") {
+  return uniqueSorted(getTaxonomiesFor(category).flatMap(taxonomy => taxonomy.types));
+}
+
+function getBrandOptions(category = "Все", itemType = "") {
+  const taxonomies = getTaxonomiesFor(category, itemType);
+  return uniqueSorted(taxonomies.flatMap(taxonomy => {
+    if (itemType && taxonomy.brandsByType[itemType]) return taxonomy.brandsByType[itemType];
+    return Object.values(taxonomy.brandsByType).flat();
+  }));
+}
+
+function getModelOptions(category = "Все", itemType = "", brand = "") {
+  if (!brand) return [];
+  if (category === "Электроника" && itemType && !["Смартфон", "Кнопочный телефон"].includes(itemType)) return [];
+  if (category === "Авто" && ["Мотоцикл", "Автозапчасть"].includes(itemType)) return [];
+  return uniqueSorted(getTaxonomiesFor(category, itemType).flatMap(taxonomy => taxonomy.modelsByBrand[brand] || []));
+}
+
+function getDistrictOptions(city = "") {
+  return uniqueSorted(CITY_DISTRICTS[city] || []);
+}
+
+function refreshCatalogFilterOptions(values = {}) {
+  const city = values.city ?? document.getElementById("filterCity")?.value ?? "";
+  const itemType = values.itemType ?? document.getElementById("filterItemType")?.value ?? "";
+  const brand = values.brand ?? document.getElementById("filterBrand")?.value ?? "";
+  setSelectOptions(document.getElementById("filterDistrict"), getDistrictOptions(city), {
+    placeholder: "Все районы", selected: values.district ?? document.getElementById("filterDistrict")?.value ?? ""
+  });
+  setSelectOptions(document.getElementById("filterItemType"), getItemTypeOptions(state.category), {
+    placeholder: "Все типы", selected: itemType
+  });
+  const selectedType = document.getElementById("filterItemType")?.value || itemType;
+  setSelectOptions(document.getElementById("filterBrand"), getBrandOptions(state.category, selectedType), {
+    placeholder: "Все марки и бренды", selected: brand
+  });
+  const selectedBrand = document.getElementById("filterBrand")?.value || brand;
+  setSelectOptions(document.getElementById("filterModel"), getModelOptions(state.category, selectedType, selectedBrand), {
+    placeholder: selectedBrand ? "Все модели" : "Сначала выберите бренд", selected: values.model ?? document.getElementById("filterModel")?.value ?? ""
+  });
+  const modelSelect = document.getElementById("filterModel");
+  if (modelSelect) modelSelect.disabled = !selectedBrand;
+  setSelectOptions(document.getElementById("filterYear"), getYearOptions(), {
+    placeholder: "Любой год", selected: values.year ?? document.getElementById("filterYear")?.value ?? "", sortOptions: false
+  });
+}
+
+function refreshAdDistrictOptions(selected = "") {
+  const city = document.getElementById("adLocation")?.value || "Владикавказ";
+  const select = document.getElementById("adDistrict");
+  const custom = document.getElementById("adDistrictCustom");
+  const existing = String(selected || readSelectWithCustom("adDistrict", "adDistrictCustom") || "").trim();
+  setSelectOptions(select, getDistrictOptions(city), {
+    placeholder: "Выберите район", selected: existing, allowOther: true, otherLabel: "Другой район"
+  });
+  if (select?.value === OTHER_OPTION_VALUE && custom) custom.value = existing;
+  else if (custom) custom.value = "";
+  updateCustomSelectInput("adDistrict", "adDistrictCustom");
+}
+
+function refreshAdStructuredFields(values = {}) {
+  const category = document.getElementById("adCategory")?.value || "";
+  const root = document.getElementById("adStructuredFields");
+  const enabled = Boolean(PRODUCT_TAXONOMY[category]);
+  if (root) root.hidden = !enabled;
+  if (!enabled) return;
+
+  const currentType = values.itemType ?? readSelectWithCustom("adItemType", "adItemTypeCustom") ?? "";
+  const currentBrand = values.brand ?? readSelectWithCustom("adBrand", "adBrandCustom") ?? "";
+  const currentModel = values.model ?? readSelectWithCustom("adModel", "adModelCustom") ?? "";
+  const currentYear = values.year ?? document.getElementById("adYear")?.value ?? "";
+
+  setSelectOptions(document.getElementById("adItemType"), getItemTypeOptions(category), {
+    placeholder: "Выберите тип", selected: currentType
+  });
+  const selectedType = document.getElementById("adItemType")?.value || currentType;
+  setSelectOptions(document.getElementById("adBrand"), getBrandOptions(category, selectedType), {
+    placeholder: selectedType ? "Выберите марку / бренд" : "Сначала выберите тип", selected: currentBrand, allowOther: true, otherLabel: "Другая марка / бренд"
+  });
+  const brandSelect = document.getElementById("adBrand");
+  if (brandSelect) brandSelect.disabled = !selectedType;
+  if (brandSelect?.value === OTHER_OPTION_VALUE) document.getElementById("adBrandCustom").value = currentBrand;
+  updateCustomSelectInput("adBrand", "adBrandCustom");
+
+  const selectedBrand = readSelectWithCustom("adBrand", "adBrandCustom");
+  setSelectOptions(document.getElementById("adModel"), getModelOptions(category, selectedType, selectedBrand), {
+    placeholder: selectedBrand ? "Выберите модель" : "Сначала выберите бренд", selected: currentModel, allowOther: Boolean(selectedBrand), otherLabel: "Другая модель"
+  });
+  const modelSelect = document.getElementById("adModel");
+  if (modelSelect) modelSelect.disabled = !selectedBrand;
+  if (modelSelect?.value === OTHER_OPTION_VALUE) document.getElementById("adModelCustom").value = currentModel;
+  updateCustomSelectInput("adModel", "adModelCustom");
+
+  setSelectOptions(document.getElementById("adYear"), getYearOptions(), {
+    placeholder: "Выберите год", selected: currentYear, sortOptions: false
+  });
+}
+
+function getSpecificationValue(specifications, aliases = []) {
+  if (!specifications || typeof specifications !== "object") return "";
+  const wanted = new Set(aliases.map(alias => String(alias).toLocaleLowerCase("ru")));
+  const entry = Object.entries(specifications).find(([key]) => wanted.has(String(key).trim().toLocaleLowerCase("ru")));
+  return entry ? String(entry[1] || "").trim() : "";
+}
+
+function getStructuredAdValues() {
+  const category = document.getElementById("adCategory")?.value || "";
+  if (!PRODUCT_TAXONOMY[category]) return { itemType: "", brand: "", model: "", year: "" };
+  return {
+    itemType: document.getElementById("adItemType")?.value || "",
+    brand: readSelectWithCustom("adBrand", "adBrandCustom"),
+    model: readSelectWithCustom("adModel", "adModelCustom"),
+    year: document.getElementById("adYear")?.value || ""
+  };
+}
+
+function getStructuredAdValidationError(ad) {
+  if (!PRODUCT_TAXONOMY[ad.category]) return "";
+  if (!ad.itemType) return "Выберите тип товара";
+
+  if (ad.category === "Авто") {
+    if (!ad.brand) return "Выберите марку автомобиля";
+    if (!["Автозапчасть"].includes(ad.itemType) && !ad.model) return "Выберите модель автомобиля";
+    if (!["Автозапчасть", "Мотоцикл"].includes(ad.itemType) && !ad.year) return "Выберите год выпуска автомобиля";
+  }
+
+  if (ad.category === "Электроника") {
+    if (!ad.brand) return "Выберите бренд устройства";
+    if (["Смартфон", "Кнопочный телефон"].includes(ad.itemType) && !ad.model) return "Выберите модель телефона";
+  }
+
+  return "";
+}
+
 function getActiveCatalogFilterCount() {
   const filters = state.filters || {};
-  return [filters.minPrice, filters.maxPrice, filters.city, filters.district, filters.brand, filters.model]
+  return [filters.minPrice, filters.maxPrice, filters.city, filters.district, filters.itemType, filters.brand, filters.model, filters.year]
     .filter(value => String(value || "").trim()).length + (filters.sort && filters.sort !== "newest" ? 1 : 0);
 }
 
@@ -449,27 +726,27 @@ function getProductsCacheKey() {
     filters.maxPrice,
     String(filters.city || "").toLowerCase(),
     String(filters.district || "").toLowerCase(),
+    String(filters.itemType || "").toLowerCase(),
     String(filters.brand || "").toLowerCase(),
     String(filters.model || "").toLowerCase(),
+    String(filters.year || "").toLowerCase(),
     filters.sort || "newest"
   ].join("|");
 }
 
 function syncCatalogFiltersUI() {
   const filters = state.filters || {};
-  const values = {
+  const directValues = {
     filterMinPrice: filters.minPrice,
     filterMaxPrice: filters.maxPrice,
     filterCity: filters.city,
-    filterDistrict: filters.district,
-    filterBrand: filters.brand,
-    filterModel: filters.model,
     filterSort: filters.sort || "newest"
   };
-  Object.entries(values).forEach(([id, value]) => {
+  Object.entries(directValues).forEach(([id, value]) => {
     const element = document.getElementById(id);
     if (element) element.value = value || "";
   });
+  refreshCatalogFilterOptions(filters);
   updateCatalogFilterBadge();
 }
 
@@ -498,8 +775,10 @@ function applyCatalogFiltersFromUI() {
     maxPrice,
     city: value("filterCity"),
     district: value("filterDistrict"),
+    itemType: value("filterItemType"),
     brand: value("filterBrand"),
     model: value("filterModel"),
+    year: value("filterYear"),
     sort: value("filterSort") || "newest"
   };
   state.productsLoadError = "";
@@ -511,7 +790,7 @@ function applyCatalogFiltersFromUI() {
 }
 
 function resetCatalogFilters() {
-  state.filters = { minPrice: "", maxPrice: "", city: "", district: "", brand: "", model: "", sort: "newest" };
+  state.filters = { minPrice: "", maxPrice: "", city: "", district: "", itemType: "", brand: "", model: "", year: "", sort: "newest" };
   syncCatalogFiltersUI();
   state.catalogPagination = { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE, hasMore: true };
   loadProducts({ force: true });
@@ -559,8 +838,10 @@ async function loadProducts({ force = false, append = false } = {}) {
   if (filters.maxPrice) params.set("maxPrice", filters.maxPrice);
   if (filters.city) params.set("city", filters.city);
   if (filters.district) params.set("district", filters.district);
+  if (filters.itemType) params.set("itemType", filters.itemType);
   if (filters.brand) params.set("brand", filters.brand);
   if (filters.model) params.set("model", filters.model);
+  if (filters.year) params.set("year", filters.year);
   if (filters.sort && filters.sort !== "newest") params.set("sort", filters.sort);
 
   try {
@@ -1000,10 +1281,11 @@ function parseSpecificationsText(value) {
   return result;
 }
 
-function specificationsToText(specifications) {
+function specificationsToText(specifications, { excludeStructured = false } = {}) {
   if (!specifications || typeof specifications !== "object") return "";
 
   return Object.entries(specifications)
+    .filter(([key]) => !excludeStructured || !STRUCTURED_SPECIFICATION_KEYS.has(String(key).trim().toLocaleLowerCase("ru")))
     .map(([key, value]) => `${key}: ${value}`)
     .join("\n");
 }
@@ -2382,6 +2664,12 @@ async function submitProductReport(event) {
 
 function getAdFormData() {
   const specificationsText = document.getElementById("adSpecifications")?.value || "";
+  const specifications = parseSpecificationsText(specificationsText);
+  const structured = getStructuredAdValues();
+  if (structured.itemType) specifications["Тип товара"] = structured.itemType;
+  if (structured.brand) specifications["Марка / бренд"] = structured.brand;
+  if (structured.model) specifications["Модель"] = structured.model;
+  if (structured.year) specifications["Год выпуска"] = structured.year;
 
   return {
     title: document.getElementById("adTitle")?.value.trim() || "",
@@ -2390,10 +2678,14 @@ function getAdFormData() {
     condition: document.getElementById("adCondition")?.value || "used",
     desc: document.getElementById("adDesc")?.value.trim() || "",
     location: document.getElementById("adLocation")?.value || "Владикавказ",
-    district: document.getElementById("adDistrict")?.value.trim() || "",
+    district: readSelectWithCustom("adDistrict", "adDistrictCustom"),
     negotiable: document.getElementById("adNegotiable")?.checked === true,
     delivery: document.getElementById("adDelivery")?.checked === true,
-    specifications: parseSpecificationsText(specificationsText),
+    specifications,
+    itemType: structured.itemType,
+    brand: structured.brand,
+    model: structured.model,
+    year: structured.year,
     phone: document.getElementById("adPhone")?.value.trim() || "",
     allowMessages: document.getElementById("adAllowMessages")?.checked !== false
   };
@@ -2433,7 +2725,8 @@ function isCreateStep1Valid() {
     priceNumber > 0 &&
     priceNumber <= MAX_PRICE &&
     ad.category &&
-    ad.desc
+    ad.desc &&
+    !getStructuredAdValidationError(ad)
   );
 }
 
@@ -2623,6 +2916,13 @@ async function publishAd(status = "active") {
       return;
     }
 
+    const structuredError = getStructuredAdValidationError(ad);
+    if (structuredError) {
+      alert(structuredError);
+      showPage("create1");
+      return;
+    }
+
     if (!ad.desc) {
       alert("Добавьте описание");
       return;
@@ -2734,6 +3034,13 @@ function clearCreateForm() {
   const condition = document.getElementById("adCondition");
   const location = document.getElementById("adLocation");
   const district = document.getElementById("adDistrict");
+  const districtCustom = document.getElementById("adDistrictCustom");
+  const itemType = document.getElementById("adItemType");
+  const brand = document.getElementById("adBrand");
+  const brandCustom = document.getElementById("adBrandCustom");
+  const model = document.getElementById("adModel");
+  const modelCustom = document.getElementById("adModelCustom");
+  const year = document.getElementById("adYear");
   const negotiable = document.getElementById("adNegotiable");
   const delivery = document.getElementById("adDelivery");
   const specifications = document.getElementById("adSpecifications");
@@ -2749,6 +3056,15 @@ function clearCreateForm() {
   if (condition) condition.value = "used";
   if (location) location.selectedIndex = 0;
   if (district) district.value = "";
+  if (districtCustom) districtCustom.value = "";
+  if (itemType) itemType.value = "";
+  if (brand) brand.value = "";
+  if (brandCustom) brandCustom.value = "";
+  if (model) model.value = "";
+  if (modelCustom) modelCustom.value = "";
+  if (year) year.value = "";
+  refreshAdStructuredFields();
+  refreshAdDistrictOptions();
   if (negotiable) negotiable.checked = false;
   if (delivery) delivery.checked = false;
   if (specifications) specifications.value = "";
@@ -2806,6 +3122,7 @@ async function editAd(id) {
   const condition = document.getElementById("adCondition");
   const location = document.getElementById("adLocation");
   const district = document.getElementById("adDistrict");
+  const districtCustom = document.getElementById("adDistrictCustom");
   const negotiable = document.getElementById("adNegotiable");
   const delivery = document.getElementById("adDelivery");
   const specifications = document.getElementById("adSpecifications");
@@ -2823,10 +3140,17 @@ async function editAd(id) {
     );
     location.value = hasLocation ? product.location : "Другое";
   }
-  if (district) district.value = product.district || "";
+  refreshAdStructuredFields({
+    itemType: getSpecificationValue(product.specifications, ["Тип товара", "Подкатегория", "Тип"]),
+    brand: getSpecificationValue(product.specifications, ["Марка / бренд", "Марка", "Бренд"]),
+    model: getSpecificationValue(product.specifications, ["Модель"]),
+    year: getSpecificationValue(product.specifications, ["Год выпуска", "Год"])
+  });
+  refreshAdDistrictOptions(product.district || "");
+  if (districtCustom && district?.value !== OTHER_OPTION_VALUE) districtCustom.value = "";
   if (negotiable) negotiable.checked = Boolean(product.negotiable);
   if (delivery) delivery.checked = Boolean(product.delivery);
-  if (specifications) specifications.value = specificationsToText(product.specifications);
+  if (specifications) specifications.value = specificationsToText(product.specifications, { excludeStructured: true });
   if (phone) phone.value = product.phone || "";
   if (allowMessages) allowMessages.checked = product.allowMessages !== false;
 
@@ -3089,6 +3413,9 @@ function initEvents() {
       event.target.value = event.target.value.replace(/[^0-9]/g, "").slice(0, 10);
     });
   });
+  document.getElementById("filterCity")?.addEventListener("change", () => refreshCatalogFilterOptions({ district: "" }));
+  document.getElementById("filterItemType")?.addEventListener("change", () => refreshCatalogFilterOptions({ brand: "", model: "" }));
+  document.getElementById("filterBrand")?.addEventListener("change", () => refreshCatalogFilterOptions({ model: "" }));
 
   const addPhotoBtn = document.getElementById("addPhotoBtn");
   const photoInput = document.getElementById("photoInput");
@@ -3168,6 +3495,11 @@ function initEvents() {
     });
 
     state.category = button.dataset.category || "Все";
+    state.filters.itemType = "";
+    state.filters.brand = "";
+    state.filters.model = "";
+    state.filters.year = "";
+    syncCatalogFiltersUI();
     state.page = "catalog";
     state.productsCacheKey = "";
     state.productsLoadedAt = 0;
@@ -3209,14 +3541,47 @@ function initEvents() {
     updatePreviewCard();
   });
 
+  document.getElementById("adCategory")?.addEventListener("change", () => {
+    refreshAdStructuredFields({ itemType: "", brand: "", model: "", year: "" });
+  });
+  document.getElementById("adItemType")?.addEventListener("change", () => {
+    refreshAdStructuredFields({ brand: "", model: "" });
+  });
+  document.getElementById("adBrand")?.addEventListener("change", event => {
+    updateCustomSelectInput("adBrand", "adBrandCustom");
+    if (event.target.value === OTHER_OPTION_VALUE) {
+      setSelectOptions(document.getElementById("adModel"), [], {
+        placeholder: "Сначала введите бренд"
+      });
+      const modelSelect = document.getElementById("adModel");
+      if (modelSelect) modelSelect.disabled = true;
+      updateCustomSelectInput("adModel", "adModelCustom");
+      return;
+    }
+    refreshAdStructuredFields({ model: "" });
+  });
+  document.getElementById("adBrandCustom")?.addEventListener("change", event => {
+    refreshAdStructuredFields({ brand: event.target.value.trim(), model: "" });
+  });
+  document.getElementById("adModel")?.addEventListener("change", () => updateCustomSelectInput("adModel", "adModelCustom"));
+  document.getElementById("adLocation")?.addEventListener("change", () => refreshAdDistrictOptions(""));
+  document.getElementById("adDistrict")?.addEventListener("change", () => updateCustomSelectInput("adDistrict", "adDistrictCustom"));
+
   [
     "adTitle",
     "adPrice",
     "adDesc",
     "adCategory",
+    "adItemType",
+    "adBrand",
+    "adBrandCustom",
+    "adModel",
+    "adModelCustom",
+    "adYear",
     "adCondition",
     "adLocation",
     "adDistrict",
+    "adDistrictCustom",
     "adNegotiable",
     "adDelivery",
     "adSpecifications",
@@ -3236,7 +3601,7 @@ function initEvents() {
     });
   });
 
-  ["adTitle", "adPrice", "adDesc", "adDistrict", "adPhone", "searchInput"].forEach(id => {
+  ["adTitle", "adPrice", "adDesc", "adBrandCustom", "adModelCustom", "adDistrictCustom", "adPhone", "searchInput"].forEach(id => {
     const el = document.getElementById(id);
 
     el?.addEventListener("keydown", hideKeyboardOnEnter);
@@ -3257,6 +3622,8 @@ function initEvents() {
     if (lightbox && !lightbox.hidden) closePhotoLightbox();
   });
 
+  refreshAdStructuredFields();
+  refreshAdDistrictOptions();
   renderPhotoPreview();
   updateCreateButtons();
   updateListingQuality();

@@ -5322,3 +5322,112 @@ body.dark-mode .seller-sold-icon {
     font-size: 10px;
   }
 }
+
+
+/* ===== v1.13.0: DEPENDENT TAXONOMY SELECTS ===== */
+.catalog-filters select:disabled,
+.structured-fields-card select:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+.structured-fields-card {
+  margin: 14px 0;
+  padding: 14px;
+  border: 1px solid #dddafc;
+  border-radius: 17px;
+  background: linear-gradient(145deg, #faf9ff, #f4f2ff);
+}
+
+.structured-fields-card[hidden] {
+  display: none;
+}
+
+.structured-fields-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.structured-fields-heading > div {
+  display: grid;
+  gap: 3px;
+}
+
+.structured-fields-heading b {
+  font-size: 14px;
+  color: #302d55;
+}
+
+.structured-fields-heading small {
+  color: #74758a;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.structured-fields-heading > span {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: #e7e3ff;
+  color: #564ccf;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.structured-fields-card label {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 10px;
+}
+
+.structured-fields-card label > span {
+  color: #5e6574;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.structured-fields-card select,
+.structured-fields-card input {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+}
+
+.structured-fields-card input[hidden],
+#adDistrictCustom[hidden] {
+  display: none;
+}
+
+.structured-fields-card input:not([hidden]),
+#adDistrictCustom:not([hidden]) {
+  margin-top: 7px;
+}
+
+body.dark-mode .structured-fields-card {
+  border-color: #45405f;
+  background: linear-gradient(145deg, #25232f, #211f2b);
+}
+
+body.dark-mode .structured-fields-heading b {
+  color: #f0edff;
+}
+
+body.dark-mode .structured-fields-heading small,
+body.dark-mode .structured-fields-card label > span {
+  color: #aaa8ba;
+}
+
+body.dark-mode .structured-fields-heading > span {
+  background: #393351;
+  color: #c2bbff;
+}
+
+@media (max-width: 430px) {
+  .structured-fields-card .filter-grid.two-columns {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+}
