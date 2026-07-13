@@ -5,8 +5,9 @@ import fs from "node:fs";
 const server = fs.readFileSync(new URL("../server.js", import.meta.url), "utf8");
 const script = fs.readFileSync(new URL("../public/script.js", import.meta.url), "utf8");
 const html = fs.readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
-const env = fs.readFileSync(new URL("../.env", import.meta.url), "utf8");
 const envExample = fs.readFileSync(new URL("../.env.example", import.meta.url), "utf8");
+const envPath = new URL("../.env", import.meta.url);
+const env = fs.existsSync(envPath) ? fs.readFileSync(envPath, "utf8") : envExample;
 const packageJson = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
 test("username бота os_15market_bot уже настроен", () => {
@@ -40,7 +41,7 @@ test("старые клиенты получают ссылку с фотопр�
   assert.match(script, /https:\/\/t\.me\/share\/url/);
 });
 
-test("кеш фронтенда обновлён до 1.13.5", () => {
-  assert.match(html, /style\.css\?v=1\.13\.5/);
-  assert.match(html, /script\.js\?v=1\.13\.5/);
+test("кеш фронтенда обновлён до 1.13.8", () => {
+  assert.match(html, /style\.css\?v=1\.13\.8/);
+  assert.match(html, /script\.js\?v=1\.13\.8/);
 });

@@ -5929,3 +5929,237 @@ html.telegram-fullscreen .topbar-title {
 html.telegram-not-fullscreen .topbar-title {
   transform: translateY(0);
 }
+
+/* ===== v1.13.6: navigation, quotas, keyboard and camera ===== */
+/* Страница больше не начинает анимацию с прозрачности: это убирает чёрную вспышку. */
+.page.active {
+  content-visibility: visible;
+  contain: none;
+  min-height: calc(100vh - 150px);
+  background: inherit;
+}
+
+.page.active.page-transitioning,
+.page.active.page-enter-forward,
+.page.active.page-enter-back {
+  opacity: 1 !important;
+}
+
+@keyframes market-page-enter-forward {
+  from {
+    opacity: 1;
+    transform: translate3d(10px, 0, 0) scale(.997);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes market-page-enter-back {
+  from {
+    opacity: 1;
+    transform: translate3d(-8px, 0, 0) scale(.998);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+.product-list > .product-card,
+.product-list > .catalog-ad-card {
+  content-visibility: auto;
+  contain-intrinsic-size: 112px;
+}
+
+/* Во время открытия клавиатуры меню скрывается под ней, а не поднимается над клавиатурой. */
+.bottom-nav {
+  transition: opacity 150ms ease, transform 180ms ease, visibility 150ms ease;
+}
+
+html.keyboard-open .bottom-nav {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  transform: translate(-50%, calc(100% + 28px)) !important;
+}
+
+/* Узкая зона свайпа и индикатор, который выходит из левого края. */
+.swipe-back-indicator {
+  display: flex !important;
+  left: 0;
+  width: 42px;
+  height: 42px;
+  font-size: 22px;
+  transform: translate3d(var(--swipe-x, -22px), -50%, 0) scale(.94);
+  transition: opacity 120ms ease, transform 120ms ease;
+  background: rgba(25, 25, 30, .76);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, .22);
+}
+
+.swipe-back-indicator.active {
+  opacity: 1;
+  transform: translate3d(var(--swipe-x, 0px), -50%, 0) scale(1);
+  transition: none;
+}
+
+.swipe-back-indicator.completing {
+  opacity: 0;
+  transform: translate3d(52px, -50%, 0) scale(1.04);
+  transition: opacity 90ms ease, transform 90ms ease;
+}
+
+.photo-source-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.photo-source-actions button {
+  min-height: 46px;
+}
+
+.profile-phone-copy {
+  width: 100%;
+  border: 0;
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: #f2f1ff;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.profile-phone-copy small {
+  color: #635bff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+body.dark-mode .profile-phone-copy {
+  background: #292633;
+}
+
+.app-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(92px + env(safe-area-inset-bottom, 0px));
+  z-index: 12000;
+  max-width: min(360px, calc(100vw - 32px));
+  padding: 11px 16px;
+  border-radius: 999px;
+  background: rgba(28, 28, 30, .94);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+  opacity: 0;
+  transform: translate(-50%, 10px);
+  transition: opacity 160ms ease, transform 160ms ease;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .24);
+  pointer-events: none;
+}
+
+.app-toast.visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.listing-limit-dialog {
+  width: min(420px, calc(100vw - 28px));
+  border: 0;
+  border-radius: 22px;
+  padding: 20px;
+  color: #1f2430;
+}
+
+.listing-limit-summary {
+  margin: 8px 0 14px;
+  line-height: 1.5;
+}
+
+.listing-limit-offer {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 13px;
+  border-radius: 16px;
+  background: #f2f0ff;
+}
+
+.listing-limit-offer span {
+  font-size: 24px;
+}
+
+.listing-limit-offer p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+body.dark-mode .listing-limit-dialog {
+  background: #1c1c1e;
+  color: #f2f2f7;
+}
+
+body.dark-mode .listing-limit-offer {
+  background: #2b273d;
+}
+
+.admin-user-actions {
+  display: grid;
+  gap: 8px;
+  min-width: 132px;
+}
+
+.admin-limit-control {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.admin-limit-control > span {
+  grid-column: 1 / -1;
+  color: #6b7280;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.admin-limit-control input {
+  width: 64px;
+  min-height: 36px;
+  border: 1px solid #d9dce5;
+  border-radius: 10px;
+  padding: 7px;
+  background: #fff;
+  color: inherit;
+}
+
+.admin-limit-control .admin-action-button {
+  min-height: 36px;
+  padding: 7px 9px;
+}
+
+body.dark-mode .admin-limit-control input {
+  background: #121620;
+  border-color: #343b4c;
+  color: #f3f4f6;
+}
+
+@media (max-width: 390px) {
+  .photo-source-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-user-actions {
+    width: 100%;
+    grid-column: 1 / -1;
+  }
+}
