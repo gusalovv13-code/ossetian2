@@ -4057,25 +4057,64 @@ function lockTelegramVerticalSwipes() {
   }
 }
 
+function syncTelegramFullscreenState() {
+  const isFullscreen = Boolean(tg?.isFullscreen);
+  document.documentElement.classList.toggle("telegram-fullscreen", isFullscreen);
+  document.documentElement.classList.toggle("telegram-not-fullscreen", !isFullscreen);
+}
+
+function requestTelegramFullscreen() {
+  if (!tg) return false;
+
+  const supportsFullscreen =
+    typeof tg.requestFullscreen === "function" &&
+    (typeof tg.isVersionAtLeast !== "function" || tg.isVersionAtLeast("8.0"));
+
+  if (!supportsFullscreen) {
+    syncTelegramFullscreenState();
+    return false;
+  }
+
+  try {
+    if (!tg.isFullscreen) tg.requestFullscreen();
+    syncTelegramFullscreenState();
+    return true;
+  } catch (error) {
+    console.warn("Не удалось открыть Mini App в полноэкранном режиме:", error);
+    syncTelegramFullscreenState();
+    return false;
+  }
+}
+
 function initTelegramAppUI() {
   if (!tg) return;
 
-  // Полноэкранный режим намеренно не запрашиваем: на части устройств Telegram
-  // показывает большую чёрную область при протягивании Mini App вниз.
-  lockTelegramVerticalSwipes();
   tg.ready();
   tg.expand();
   lockTelegramVerticalSwipes();
+  requestTelegramFullscreen();
 
   applyTheme(document.body.classList.contains("dark-mode"), false);
 
   setTimeout(() => {
     tg.expand();
     lockTelegramVerticalSwipes();
+    requestTelegramFullscreen();
   }, 250);
 
   setTimeout(lockTelegramVerticalSwipes, 900);
-  tg.onEvent?.("viewportChanged", lockTelegramVerticalSwipes);
+  tg.onEvent?.("viewportChanged", () => {
+    lockTelegramVerticalSwipes();
+    syncTelegramFullscreenState();
+  });
+  tg.onEvent?.("fullscreenChanged", syncTelegramFullscreenState);
+  tg.onEvent?.("fullscreenFailed", event => {
+    if (event?.error !== "ALREADY_FULLSCREEN") {
+      console.warn("Telegram не включил полноэкранный режим:", event?.error || "unknown");
+    }
+    syncTelegramFullscreenState();
+  });
+  tg.onEvent?.("activated", requestTelegramFullscreen);
 
   if (tg.BackButton) {
     tg.BackButton.onClick(goBack);

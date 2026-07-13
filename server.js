@@ -14,7 +14,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.13.4";
+const APP_VERSION = "1.13.5";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -794,7 +794,7 @@ async function readRemoteImageBuffer(source) {
     for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
       response = await fetch(currentUrl, {
         signal: controller.signal,
-        headers: { "User-Agent": "OssetianMarket/1.13.4" },
+        headers: { "User-Agent": "OssetianMarket/1.13.5" },
         redirect: "manual"
       });
 

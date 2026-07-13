@@ -5917,3 +5917,15 @@ dialog[open]::backdrop {
     transition: none !important;
   }
 }
+
+/* ===== v1.13.5: RESTORE TELEGRAM FULLSCREEN HEADER ===== */
+/* В fullscreen заголовок приложения располагается в прозрачной панели Telegram. */
+html.telegram-fullscreen .topbar-title {
+  transform: translateY(-30px);
+}
+
+/* На старых клиентах без fullscreen заголовок остаётся внутри приложения,
+   а не прячется под непрозрачной системной панелью Telegram. */
+html.telegram-not-fullscreen .topbar-title {
+  transform: translateY(0);
+}

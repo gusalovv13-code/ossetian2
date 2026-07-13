@@ -7,16 +7,18 @@ const html = await readFile(new URL("../public/index.html", import.meta.url), "u
 const css = await readFile(new URL("../public/style.css", import.meta.url), "utf8");
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 
-test("версия и кеш обновлены до 1.13.4", () => {
-  assert.equal(packageJson.version, "1.13.4");
-  assert.match(html, /style\.css\?v=1\.13\.4/);
-  assert.match(html, /script\.js\?v=1\.13\.4/);
+test("версия и кеш обновлены до 1.13.5", () => {
+  assert.equal(packageJson.version, "1.13.5");
+  assert.match(html, /style\.css\?v=1\.13\.5/);
+  assert.match(html, /script\.js\?v=1\.13\.5/);
 });
 
-test("Mini App не запрашивает fullscreen и защищена от вытягивания вниз", () => {
+test("Mini App открывается в fullscreen и остаётся защищена от вытягивания вниз", () => {
   const initBlock = script.match(/function initTelegramAppUI\(\) \{[\s\S]*?\n\}/)?.[0] || "";
-  assert.doesNotMatch(initBlock, /requestTelegramFullscreen\(/);
-  assert.doesNotMatch(script, /web_app_request_fullscreen/);
+  assert.match(initBlock, /requestTelegramFullscreen\(\)/);
+  assert.match(script, /function requestTelegramFullscreen/);
+  assert.match(script, /tg\.requestFullscreen\(\)/);
+  assert.match(script, /fullscreenChanged/);
   assert.match(script, /function lockTelegramVerticalSwipes/);
   assert.match(script, /viewportChanged/);
   assert.match(script, /function initAppOverscrollGuard/);

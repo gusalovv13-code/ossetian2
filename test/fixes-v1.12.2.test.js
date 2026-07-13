@@ -29,6 +29,6 @@ test("клиент повторяет загрузку фото и не пока
   assert.match(clientSource, /retry=\$\{Date\.now\(\)\}/);
   assert.match(clientSource, /Фото недоступно/);
   assert.doesNotMatch(clientSource, /images\.unsplash\.com\/photo-1516321318423/);
-  assert.match(htmlSource, /script\.js\?v=1\.13\.4/);
-  assert.match(htmlSource, /style\.css\?v=1\.13\.4/);
+  assert.match(htmlSource, /script\.js\?v=1\.13\.5/);
+  assert.match(htmlSource, /style\.css\?v=1\.13\.5/);
 });
