@@ -1,4 +1,4 @@
-# Алания Маркет 2026 — v1.13.0
+# Алания Маркет 2026 — v1.13.1
 
 Telegram Mini App локального маркетплейса на Node.js, Express и PostgreSQL.
 

@@ -1585,7 +1585,7 @@ function getProductCard(product, options = {}) {
   const price = escapeHTML(formatPrice(product.price) || product.price || "");
   const previousPrice = escapeHTML(formatPrice(product.previousPrice) || product.previousPrice || "");
   const priceDropMarkup = product.priceDropped
-    ? `<span class="price-drop-card-badge">Цена снизилась${product.priceDropPercent ? ` −${Number(product.priceDropPercent)}%` : ""}</span>`
+    ? `<span class="price-drop-card-badge">Скидка${product.priceDropPercent ? ` −${Number(product.priceDropPercent)}%` : ""}</span>`
     : "";
   const status = product.status || "active";
   const isSoldHistory = options.ownerActions && status === "sold";
@@ -1655,7 +1655,7 @@ function getProductCard(product, options = {}) {
         ${featureRequestBadge}
         ${priceDropMarkup}
         <h4>${name}</h4>
-        <div class="card-price-row"><b>${price}</b>${product.priceDropped && previousPrice ? `<s>${previousPrice}</s>` : ""}</div>
+        <div class="card-price-row">${product.priceDropped && previousPrice ? `<s>${previousPrice}</s>` : ""}<b class="${product.priceDropped ? "discounted-price" : ""}">${price}</b></div>
         <p>${location} · ${getTimeAgo(isSoldHistory ? historyTime : product.createdAt)}</p>
         ${options.showStatus ? `<p class="product-status status-${escapeHTML(status)}">${escapeHTML(product.moderationStatus === "blocked" ? getProductStatusLabel(status, product) : (product.hidden && status !== "sold" ? "Скрыто модератором" : getProductStatusLabel(status, product)))}</p>` : ""}
         ${options.showStatus && product.moderationStatus === "blocked" && product.moderationReason ? `<p class="moderation-owner-reason">${escapeHTML(product.moderationReason)}</p>` : ""}
@@ -2336,7 +2336,7 @@ function renderProductDetails(product) {
   if (nameEl) nameEl.textContent = product.name || "Без названия";
   if (priceEl) {
     priceEl.innerHTML = product.priceDropped
-      ? `<span>${escapeHTML(product.price || "Цена не указана")}</span><s>${escapeHTML(product.previousPrice || "")}</s><em>Цена снизилась${product.priceDropPercent ? ` на ${Number(product.priceDropPercent)}%` : ""}</em>`
+      ? `<s>${escapeHTML(product.previousPrice || "")}</s><span class="discounted-price">${escapeHTML(product.price || "Цена не указана")}</span><em>Скидка${product.priceDropPercent ? ` −${Number(product.priceDropPercent)}%` : ""}</em>`
       : escapeHTML(product.price || "Цена не указана");
   }
   if (productPriceHistory) {
@@ -2384,7 +2384,7 @@ function renderProductDetails(product) {
       product.negotiable ? "Возможен торг" : "Цена без торга",
       product.delivery ? "Есть доставка" : "Самовывоз",
       product.district ? `Район: ${product.district}` : "",
-      product.priceDropped ? `Цена снижена${product.priceDropPercent ? ` на ${Number(product.priceDropPercent)}%` : ""}` : "",
+      product.priceDropped ? `Скидка${product.priceDropPercent ? ` −${Number(product.priceDropPercent)}%` : ""}` : "",
       product.isFeatured ? "Платное выделение" : "",
       product.expiresAt ? `Активно до ${formatProductDate(product.expiresAt)}` : ""
     ].filter(Boolean);
@@ -2662,6 +2662,69 @@ async function submitProductReport(event) {
    CREATE AD
 ======================= */
 
+function getDiscountFormState() {
+  const editor = document.getElementById("adDiscountEditor");
+  const enabledInput = document.getElementById("adDiscountEnabled");
+  const originalPriceInput = document.getElementById("adPrice");
+  const discountPriceInput = document.getElementById("adDiscountPrice");
+  const isEditing = Boolean(state.editingProductId);
+  const enabled = Boolean(isEditing && editor && !editor.hidden && enabledInput?.checked);
+
+  return {
+    enabled,
+    originalPrice: originalPriceInput?.value.trim() || "",
+    discountPrice: discountPriceInput?.value.trim() || ""
+  };
+}
+
+function getDiscountValidationError(ad) {
+  if (!ad.discountEnabled) return "";
+
+  const originalAmount = getPriceNumber(ad.originalPrice);
+  const discountAmount = getPriceNumber(ad.discountPrice);
+
+  if (originalAmount <= 0) return "Укажите обычную цену товара";
+  if (discountAmount <= 0) return "Укажите цену со скидкой";
+  if (discountAmount >= originalAmount) {
+    return "Цена со скидкой должна быть ниже обычной цены";
+  }
+
+  return "";
+}
+
+function updateDiscountEditor() {
+  const editor = document.getElementById("adDiscountEditor");
+  const enabledInput = document.getElementById("adDiscountEnabled");
+  const fields = document.getElementById("adDiscountFields");
+  const preview = document.getElementById("adDiscountPreview");
+  const originalPreview = document.getElementById("adOriginalPricePreview");
+  const discountPreview = document.getElementById("adDiscountPricePreview");
+  const percentPreview = document.getElementById("adDiscountPercentPreview");
+
+  if (!editor || !enabledInput || !fields) return;
+
+  const isEditing = Boolean(state.editingProductId);
+  editor.hidden = !isEditing;
+  enabledInput.disabled = !isEditing;
+
+  const form = getDiscountFormState();
+  fields.hidden = !form.enabled;
+
+  const originalAmount = getPriceNumber(form.originalPrice);
+  const discountAmount = getPriceNumber(form.discountPrice);
+  const validDiscount = form.enabled && originalAmount > 0 && discountAmount > 0 && discountAmount < originalAmount;
+
+  if (preview) preview.hidden = !validDiscount;
+  if (validDiscount) {
+    if (originalPreview) originalPreview.textContent = formatPrice(originalAmount);
+    if (discountPreview) discountPreview.textContent = formatPrice(discountAmount);
+    if (percentPreview) {
+      const percent = Math.max(1, Math.round(((originalAmount - discountAmount) / originalAmount) * 100));
+      percentPreview.textContent = `Скидка −${percent}%`;
+    }
+  }
+}
+
 function getAdFormData() {
   const specificationsText = document.getElementById("adSpecifications")?.value || "";
   const specifications = parseSpecificationsText(specificationsText);
@@ -2671,9 +2734,15 @@ function getAdFormData() {
   if (structured.model) specifications["Модель"] = structured.model;
   if (structured.year) specifications["Год выпуска"] = structured.year;
 
+  const discount = getDiscountFormState();
+  const effectivePrice = discount.enabled ? discount.discountPrice : discount.originalPrice;
+
   return {
     title: document.getElementById("adTitle")?.value.trim() || "",
-    price: document.getElementById("adPrice")?.value.trim() || "",
+    price: effectivePrice,
+    originalPrice: discount.originalPrice,
+    discountPrice: discount.discountPrice,
+    discountEnabled: discount.enabled,
     category: document.getElementById("adCategory")?.value || "",
     condition: document.getElementById("adCondition")?.value || "used",
     desc: document.getElementById("adDesc")?.value.trim() || "",
@@ -2726,7 +2795,8 @@ function isCreateStep1Valid() {
     priceNumber <= MAX_PRICE &&
     ad.category &&
     ad.desc &&
-    !getStructuredAdValidationError(ad)
+    !getStructuredAdValidationError(ad) &&
+    !getDiscountValidationError(ad)
   );
 }
 
@@ -2854,16 +2924,21 @@ function updatePreviewCard() {
     ad.delivery ? "доставка" : "самовывоз"
   ].join(" · ");
 
+  const previewPriceMarkup = ad.discountEnabled && !getDiscountValidationError(ad)
+    ? `<div class="preview-discount-price"><s>${escapeHTML(formatPrice(ad.originalPrice) || ad.originalPrice)}</s><b>${escapeHTML(formatPrice(ad.price) || ad.price)}</b><span>Скидка</span></div>`
+    : `<b>${escapeHTML(formatPrice(ad.price) || ad.price || "Цена не указана")}</b>`;
+
   preview.innerHTML = `
     <img src="${escapeHTML(safeImageUrl(previewImage))}" alt="Предпросмотр">
     <div>
       <h4>${escapeHTML(ad.title || "Название товара")}</h4>
-      <b>${escapeHTML(formatPrice(ad.price) || ad.price || "Цена не указана")}</b>
+      ${previewPriceMarkup}
       <p>${escapeHTML(ad.category || "Категория")} · ${escapeHTML(location)}</p>
       <p>${escapeHTML(options)}</p>
     </div>
   `;
 
+  updateDiscountEditor();
   updateListingQuality();
 }
 
@@ -2911,6 +2986,13 @@ async function publishAd(status = "active") {
       return;
     }
 
+    const discountError = getDiscountValidationError(ad);
+    if (discountError) {
+      alert(discountError);
+      showPage("create1");
+      return;
+    }
+
     if (!ad.category) {
       alert("Выберите категорию");
       return;
@@ -2945,6 +3027,8 @@ async function publishAd(status = "active") {
       body: JSON.stringify({
         name: ad.title,
         price: formatPrice(priceNumber),
+        discountEnabled: ad.discountEnabled,
+        originalPrice: ad.discountEnabled ? formatPrice(getPriceNumber(ad.originalPrice)) : "",
         category: ad.category,
         desc: ad.desc,
         image: mainImage,
@@ -3000,7 +3084,7 @@ async function publishAd(status = "active") {
     if (data.moderation?.blocked) {
       alert(`Объявление сохранено, но автоматически заблокировано. Причина: ${data.moderation.reason || "нарушение правил публикации"}. Исправьте текст или дождитесь решения модератора.`);
     } else if (data.priceChange?.dropped) {
-      alert("Изменения сохранены. На объявлении появилась отметка «Цена снизилась» ✅");
+      alert("Скидка сохранена. Старая цена зачёркнута, новая отмечена зелёной меткой ✅");
     } else if (wasEditing) {
       alert("Изменения сохранены ✅");
     } else {
@@ -3029,6 +3113,9 @@ async function publishAd(status = "active") {
 function clearCreateForm() {
   const title = document.getElementById("adTitle");
   const price = document.getElementById("adPrice");
+  const discountEnabled = document.getElementById("adDiscountEnabled");
+  const discountPrice = document.getElementById("adDiscountPrice");
+  const discountEditor = document.getElementById("adDiscountEditor");
   const desc = document.getElementById("adDesc");
   const category = document.getElementById("adCategory");
   const condition = document.getElementById("adCondition");
@@ -3051,6 +3138,9 @@ function clearCreateForm() {
 
   if (title) title.value = "";
   if (price) price.value = "";
+  if (discountEnabled) discountEnabled.checked = false;
+  if (discountPrice) discountPrice.value = "";
+  if (discountEditor) discountEditor.hidden = true;
   if (desc) desc.value = "";
   if (category) category.selectedIndex = 0;
   if (condition) condition.value = "used";
@@ -3084,6 +3174,7 @@ function clearCreateForm() {
   if (saveDraftBtn) saveDraftBtn.innerText = "Сохранить как черновик";
 
   renderPhotoPreview();
+  updateDiscountEditor();
   updateCreateButtons();
   updateListingQuality();
 }
@@ -3117,6 +3208,9 @@ async function editAd(id) {
 
   const title = document.getElementById("adTitle");
   const price = document.getElementById("adPrice");
+  const discountEnabled = document.getElementById("adDiscountEnabled");
+  const discountPrice = document.getElementById("adDiscountPrice");
+  const discountEditor = document.getElementById("adDiscountEditor");
   const desc = document.getElementById("adDesc");
   const category = document.getElementById("adCategory");
   const condition = document.getElementById("adCondition");
@@ -3130,7 +3224,10 @@ async function editAd(id) {
   const allowMessages = document.getElementById("adAllowMessages");
 
   if (title) title.value = product.name || "";
-  if (price) price.value = product.price || "";
+  if (price) price.value = product.priceDropped && product.previousPrice ? product.previousPrice : (product.price || "");
+  if (discountEnabled) discountEnabled.checked = Boolean(product.priceDropped && product.previousPrice);
+  if (discountPrice) discountPrice.value = product.priceDropped ? (product.price || "") : "";
+  if (discountEditor) discountEditor.hidden = false;
   if (desc) desc.value = product.desc || "";
   if (category) category.value = product.category || "";
   if (condition) condition.value = product.condition || "used";
@@ -3160,6 +3257,7 @@ async function editAd(id) {
 
   showPage("create1", true, true);
   renderPhotoPreview();
+  updateDiscountEditor();
   updatePreviewCard();
   updateCreateButtons();
 
@@ -3541,6 +3639,28 @@ function initEvents() {
     updatePreviewCard();
   });
 
+  const adDiscountPriceInput = document.getElementById("adDiscountPrice");
+  adDiscountPriceInput?.addEventListener("input", event => {
+    normalizePriceInput(event.target);
+    updateDiscountEditor();
+  });
+  adDiscountPriceInput?.addEventListener("focus", event => {
+    event.target.value = String(event.target.value || "").replace(/[^\d]/g, "");
+  });
+  adDiscountPriceInput?.addEventListener("blur", event => {
+    normalizePriceInput(event.target);
+    const priceNumber = getPriceNumber(event.target.value);
+    if (priceNumber > 0) event.target.value = formatPrice(priceNumber);
+    updateDiscountEditor();
+    updateCreateButtons();
+    updatePreviewCard();
+  });
+  document.getElementById("adDiscountEnabled")?.addEventListener("change", () => {
+    updateDiscountEditor();
+    updateCreateButtons();
+    updatePreviewCard();
+  });
+
   document.getElementById("adCategory")?.addEventListener("change", () => {
     refreshAdStructuredFields({ itemType: "", brand: "", model: "", year: "" });
   });
@@ -3570,6 +3690,8 @@ function initEvents() {
   [
     "adTitle",
     "adPrice",
+    "adDiscountEnabled",
+    "adDiscountPrice",
     "adDesc",
     "adCategory",
     "adItemType",
@@ -3601,7 +3723,7 @@ function initEvents() {
     });
   });
 
-  ["adTitle", "adPrice", "adDesc", "adBrandCustom", "adModelCustom", "adDistrictCustom", "adPhone", "searchInput"].forEach(id => {
+  ["adTitle", "adPrice", "adDiscountPrice", "adDesc", "adBrandCustom", "adModelCustom", "adDistrictCustom", "adPhone", "searchInput"].forEach(id => {
     const el = document.getElementById(id);
 
     el?.addEventListener("keydown", hideKeyboardOnEnter);
@@ -4203,13 +4325,17 @@ async function openSellerProfile(userId) {
         const image = escapeHTML(safeImageUrl(getProductImages(product)[0]));
         const name = escapeHTML(product.name || "Без названия");
         const price = escapeHTML(formatPrice(product.price) || product.price || "Цена не указана");
+        const previousPrice = escapeHTML(formatPrice(product.previousPrice) || product.previousPrice || "");
+        const sellerPriceMarkup = product.priceDropped && previousPrice
+          ? `<span class="seller-product-discount"><s>${previousPrice}</s><strong>${price}</strong><em>Скидка${product.priceDropPercent ? ` −${Number(product.priceDropPercent)}%` : ""}</em></span>`
+          : price;
         const location = escapeHTML([product.location || "Владикавказ", product.district].filter(Boolean).join(", "));
         return `
           <button class="seller-product-card" type="button" onclick="openProduct('${productId}')">
             <img src="${image}" class="seller-product-image" alt="${name}" loading="lazy" decoding="async" onerror="handleImageError(this)">
             <span class="seller-product-info">
               <span class="seller-product-name">${name}</span>
-              <span class="seller-product-price">${price}</span>
+              <span class="seller-product-price">${sellerPriceMarkup}</span>
               <span class="seller-product-city">📍 ${location}</span>
             </span>
           </button>`;
@@ -4468,7 +4594,7 @@ function renderAdminProducts(products = []) {
                 ? `<span class="admin-badge warning">⚑ ${Number(product.report_count)}</span>`
                 : ""}
               ${product.moderation_status === "blocked" ? '<span class="admin-badge danger">Автоблокировка</span>' : ""}
-              ${product.previous_price ? '<span class="admin-badge price-drop">Цена снижена</span>' : ""}
+              ${product.previous_price ? '<span class="admin-badge price-drop">Скидка</span>' : ""}
               ${product.featured_paid && product.featured_until && new Date(product.featured_until).getTime() > Date.now() ? '<span class="admin-badge featured">★ Выделено</span>' : ""}
               ${Number(product.pending_feature_requests) > 0 ? '<span class="admin-badge warning">★ Есть отдельная заявка</span>' : ""}
               ${product.status === "archived" ? '<span class="admin-badge">Архив</span>' : ""}

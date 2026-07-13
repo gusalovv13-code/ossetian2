@@ -14,7 +14,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.13.0";
+const APP_VERSION = "1.13.1";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -684,6 +684,9 @@ async function getPublicProductShareRow(productId) {
         p.id,
         p.name,
         p.price,
+        p.price_amount,
+        p.previous_price,
+        p.previous_price_amount,
         p.description,
         p.location,
         p.updated_at,
@@ -789,7 +792,7 @@ async function readRemoteImageBuffer(source) {
     for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
       response = await fetch(currentUrl, {
         signal: controller.signal,
-        headers: { "User-Agent": "OssetianMarket/1.13.0" },
+        headers: { "User-Agent": "OssetianMarket/1.13.1" },
         redirect: "manual"
       });
 
@@ -1708,8 +1711,13 @@ app.post(
 
       const title = normalizeText(row.name, 120) || "Объявление";
       const price = normalizeText(row.price, 60) || "Цена не указана";
+      const previousPrice = normalizeText(row.previous_price, 60);
+      const hasDiscount =
+        parsePriceAmount(previousPrice) > parsePriceAmount(price) &&
+        parsePriceAmount(price) > 0;
+      const priceLine = hasDiscount ? `Скидка: ${previousPrice} → ${price}` : price;
       const location = normalizeText(row.location, 80);
-      const captionLines = [title, price];
+      const captionLines = [title, priceLine];
       if (location) captionLines.push(location);
       captionLines.push("", telegramLink);
       const caption = captionLines.join("\n").slice(0, 1024);
@@ -1730,7 +1738,7 @@ app.post(
             photo_url: photoUrl,
             thumbnail_url: photoUrl,
             title,
-            description: [price, location].filter(Boolean).join(" • ").slice(0, 256),
+            description: [priceLine, location].filter(Boolean).join(" • ").slice(0, 256),
             caption,
             reply_markup: replyMarkup
           }
@@ -1738,7 +1746,7 @@ app.post(
             type: "article",
             id: `product_${productId}`.slice(0, 64),
             title,
-            description: [price, location].filter(Boolean).join(" • ").slice(0, 256),
+            description: [priceLine, location].filter(Boolean).join(" • ").slice(0, 256),
             input_message_content: {
               message_text: caption
             },
@@ -1792,8 +1800,13 @@ app.get("/share/product/:id", async (req, res) => {
     const shareUrl = `${origin}/share/product/${encodeURIComponent(productId)}?v=${version}`;
     const title = normalizeText(row.name, 120) || "Объявление";
     const price = normalizeText(row.price, 60) || "Цена не указана";
+    const previousPrice = normalizeText(row.previous_price, 60);
+    const hasDiscount =
+      parsePriceAmount(previousPrice) > parsePriceAmount(price) &&
+      parsePriceAmount(price) > 0;
+    const priceLine = hasDiscount ? `Скидка: ${previousPrice} → ${price}` : price;
     const description = normalizeText(
-      `${price}${row.location ? ` • ${row.location}` : ""}${row.description ? ` — ${String(row.description).replace(/\s+/g, " ")}` : ""}`,
+      `${priceLine}${row.location ? ` • ${row.location}` : ""}${row.description ? ` — ${String(row.description).replace(/\s+/g, " ")}` : ""}`,
       280
     );
     const imageMeta = imageUrl ? `
@@ -1832,7 +1845,7 @@ app.get("/share/product/:id", async (req, res) => {
   <main>
     ${imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(title)}">` : ""}
     <h1>${escapeHtml(title)}</h1>
-    <p>${escapeHtml(price)}</p>
+    <p>${escapeHtml(priceLine)}</p>
     <a href="${escapeHtml(telegramLink)}">Открыть в Telegram</a>
   </main>
   <script>
@@ -2629,7 +2642,7 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     const {
       name, price, category, desc, image, thumbnail, images, location, phone,
       allowMessages, condition, negotiable, delivery, district,
-      specifications, status
+      specifications, status, discountEnabled, originalPrice
     } = req.body;
 
     if (!productId) return res.status(400).json({ ok: false, error: "Некорректный ID товара" });
@@ -2637,6 +2650,10 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     const cleanName = normalizeText(name, 120);
     const cleanPrice = formatStoredPrice(price);
     const cleanPriceAmount = parsePriceAmount(cleanPrice);
+    const hasDiscountControl = Object.prototype.hasOwnProperty.call(req.body || {}, "discountEnabled");
+    const requestedDiscountEnabled = hasDiscountControl && normalizeBoolean(discountEnabled);
+    const cleanOriginalPrice = formatStoredPrice(originalPrice);
+    const cleanOriginalPriceAmount = parsePriceAmount(cleanOriginalPrice);
     const cleanCategory = normalizeText(category, 60);
     const cleanDescription = normalizeText(desc, 5000);
     const cleanLocation = normalizeText(location, 80) || "Владикавказ";
@@ -2651,6 +2668,12 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     }
     if (!cleanName || !cleanPrice || !cleanDescription) {
       return res.status(400).json({ ok: false, error: "Проверьте название, цену и описание" });
+    }
+    if (requestedDiscountEnabled && (!cleanOriginalPrice || cleanOriginalPriceAmount <= cleanPriceAmount)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Цена со скидкой должна быть ниже обычной цены"
+      });
     }
 
     const cleanImages = (Array.isArray(images) ? images : [])
@@ -2682,7 +2705,40 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     const cleanThumbnail = requestedThumbnail || (!mainImageChanged ? existing.thumbnail : "") || cleanImages[0] || "";
     const oldPriceAmount = Number(existing.price_amount) || parsePriceAmount(existing.price);
     const priceChanged = oldPriceAmount > 0 && oldPriceAmount !== cleanPriceAmount;
-    const priceDropped = priceChanged && cleanPriceAmount < oldPriceAmount;
+    const automaticPriceDropped = priceChanged && cleanPriceAmount < oldPriceAmount;
+
+    let finalPreviousPrice = existing.previous_price || "";
+    let finalPreviousPriceAmount = Number(existing.previous_price_amount) || parsePriceAmount(existing.previous_price);
+    let finalPriceDroppedAt = existing.price_dropped_at || null;
+
+    if (hasDiscountControl) {
+      if (requestedDiscountEnabled) {
+        finalPreviousPrice = cleanOriginalPrice;
+        finalPreviousPriceAmount = cleanOriginalPriceAmount;
+        const sameDiscount =
+          Number(existing.previous_price_amount) === cleanOriginalPriceAmount &&
+          oldPriceAmount === cleanPriceAmount;
+        finalPriceDroppedAt = sameDiscount && existing.price_dropped_at
+          ? existing.price_dropped_at
+          : new Date();
+      } else {
+        finalPreviousPrice = "";
+        finalPreviousPriceAmount = null;
+        finalPriceDroppedAt = null;
+      }
+    } else if (automaticPriceDropped) {
+      finalPreviousPrice = existing.price;
+      finalPreviousPriceAmount = oldPriceAmount;
+      finalPriceDroppedAt = new Date();
+    }
+
+    const priceDropped = Boolean(
+      Number(finalPreviousPriceAmount) > cleanPriceAmount && cleanPriceAmount > 0
+    );
+    const discountMetadataChanged =
+      String(existing.previous_price || "") !== String(finalPreviousPrice || "") ||
+      (Number(existing.previous_price_amount) || 0) !== (Number(finalPreviousPriceAmount) || 0);
+
     const moderation = await evaluateProductModeration({
       name: cleanName,
       desc: cleanDescription,
@@ -2701,21 +2757,21 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
             description = $7, image = $8, images = $9::jsonb, location = $10,
             phone = $11, allow_messages = $12, condition = $13, negotiable = $14,
             delivery = $15, district = $16, specifications = $17::jsonb, status = $18,
-            previous_price = CASE WHEN $19 THEN price ELSE previous_price END,
-            previous_price_amount = CASE WHEN $19 THEN COALESCE(price_amount, $20) ELSE previous_price_amount END,
-            price_dropped_at = CASE WHEN $19 THEN NOW() ELSE price_dropped_at END,
-            moderation_status = $21, moderation_reason = $22,
-            moderation_matches = $23::jsonb,
-            moderation_target_status = $25,
+            previous_price = $19,
+            previous_price_amount = $20,
+            price_dropped_at = $21,
+            moderation_status = $22, moderation_reason = $23,
+            moderation_matches = $24::jsonb,
+            moderation_target_status = $26,
             hidden = CASE
-              WHEN $24 THEN TRUE
+              WHEN $25 THEN TRUE
               WHEN COALESCE(auto_hidden, FALSE) = TRUE THEN FALSE
               ELSE hidden
             END,
-            auto_hidden = $24,
-            thumbnail = $26,
+            auto_hidden = $25,
+            thumbnail = $27,
             published_at = CASE WHEN $18 = 'active' AND COALESCE(status, '') <> 'active' THEN NOW() ELSE published_at END,
-            expires_at = CASE WHEN $18 = 'active' AND COALESCE(status, '') <> 'active' THEN NOW() + ($27::int * INTERVAL '1 day') ELSE expires_at END,
+            expires_at = CASE WHEN $18 = 'active' AND COALESCE(status, '') <> 'active' THEN NOW() + ($28::int * INTERVAL '1 day') ELSE expires_at END,
             archived_at = CASE WHEN $18 = 'active' THEN NULL ELSE archived_at END,
             updated_at = NOW()
         WHERE id = $1 AND owner_id = $2
@@ -2726,7 +2782,8 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
         cleanCategory, cleanDescription, cleanImages[0] || "", JSON.stringify(cleanImages),
         cleanLocation, cleanPhone, allowMessages !== false, cleanCondition,
         normalizeBoolean(negotiable), normalizeBoolean(delivery), cleanDistrict,
-        JSON.stringify(cleanSpecifications), finalStatus, priceDropped, oldPriceAmount,
+        JSON.stringify(cleanSpecifications), finalStatus,
+        finalPreviousPrice, finalPreviousPriceAmount, finalPriceDroppedAt,
         moderation.blocked ? "blocked" : "approved", moderation.reason,
         JSON.stringify(moderation.matches), moderation.blocked,
         requestedStatus, cleanThumbnail, PRODUCT_ARCHIVE_DAYS
@@ -2764,7 +2821,11 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
       ok: true,
       product: mapProduct(result.rows[0]),
       moderation: { blocked: moderation.blocked, reason: moderation.reason },
-      priceChange: { changed: priceChanged, dropped: priceDropped }
+      priceChange: {
+        changed: priceChanged || discountMetadataChanged,
+        dropped: priceDropped,
+        discountEnabled: priceDropped
+      }
     });
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});

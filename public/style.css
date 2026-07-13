@@ -5431,3 +5431,162 @@ body.dark-mode .structured-fields-heading > span {
     gap: 0;
   }
 }
+
+/* ===== v1.13.1: EXPLICIT DISCOUNTS ===== */
+.discount-editor {
+  margin: 10px 0 16px;
+  padding: 13px;
+  border: 1px solid #bbf7d0;
+  border-radius: 16px;
+  background: linear-gradient(145deg, #f0fdf4, #ecfdf5);
+}
+
+.discount-editor[hidden],
+.discount-fields[hidden],
+.discount-inline-preview[hidden] {
+  display: none !important;
+}
+
+.discount-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+  cursor: pointer;
+}
+
+.discount-toggle input {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  margin: 1px 0 0;
+  accent-color: #16a34a;
+}
+
+.discount-toggle > span {
+  display: grid;
+  gap: 3px;
+}
+
+.discount-toggle b {
+  color: #166534;
+  font-size: 14px;
+}
+
+.discount-toggle small,
+.discount-help {
+  color: #4b7b5d;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.discount-fields {
+  display: grid;
+  gap: 7px;
+  margin-top: 13px;
+  padding-top: 12px;
+  border-top: 1px solid #bbf7d0;
+}
+
+.discount-fields > label {
+  margin: 0;
+  color: #166534;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.discount-fields input {
+  width: 100%;
+  margin: 0;
+  border-color: #86efac;
+  background: white;
+}
+
+.discount-inline-preview,
+.preview-discount-price,
+.seller-product-discount {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.discount-inline-preview {
+  padding: 10px 11px;
+  border-radius: 12px;
+  background: white;
+}
+
+.discount-inline-preview s,
+.preview-discount-price s,
+.seller-product-discount s {
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.discount-inline-preview strong,
+.preview-discount-price b,
+.seller-product-discount strong,
+.card-price-row .discounted-price,
+#productPrice .discounted-price {
+  color: #15803d;
+  font-weight: 850;
+}
+
+.discount-inline-preview span,
+.preview-discount-price span,
+.seller-product-discount em {
+  display: inline-flex;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #15803d;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.card-price-row b {
+  display: inline !important;
+  margin: 0 !important;
+}
+
+.card-price-row s {
+  order: -1;
+}
+
+.seller-product-discount {
+  margin-top: 2px;
+}
+
+.seller-product-discount strong,
+.seller-product-discount s,
+.seller-product-discount em {
+  display: inline-flex;
+}
+
+body.dark-mode .discount-editor {
+  border-color: rgba(74, 222, 128, .35);
+  background: linear-gradient(145deg, rgba(20, 83, 45, .38), rgba(6, 78, 59, .28));
+}
+
+body.dark-mode .discount-toggle b,
+body.dark-mode .discount-fields > label {
+  color: #86efac;
+}
+
+body.dark-mode .discount-toggle small,
+body.dark-mode .discount-help {
+  color: #a7d7b7;
+}
+
+body.dark-mode .discount-fields,
+body.dark-mode .discount-fields input {
+  border-color: rgba(74, 222, 128, .35);
+}
+
+body.dark-mode .discount-fields input,
+body.dark-mode .discount-inline-preview {
+  background: #25232f;
+}

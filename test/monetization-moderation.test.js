@@ -7,11 +7,13 @@ const clientSource = await readFile(new URL("../public/script.js", import.meta.u
 const htmlSource = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 const cssSource = await readFile(new URL("../public/style.css", import.meta.url), "utf8");
 
-test("снижение цены хранится отдельно и показывается пользователю", () => {
+test("скидка хранится отдельно и показывается пользователю", () => {
   assert.match(serverSource, /CREATE TABLE IF NOT EXISTS product_price_history/);
-  assert.match(serverSource, /previous_price = CASE WHEN \$19 THEN price/);
+  assert.match(serverSource, /previous_price = \$19/);
+  assert.match(serverSource, /requestedDiscountEnabled/);
   assert.match(serverSource, /priceDropped/);
-  assert.match(clientSource, /Цена снизилась/);
+  assert.match(clientSource, /Скидка/);
+  assert.match(htmlSource, /id="adDiscountEnabled"/);
   assert.match(htmlSource, /id="productPriceHistory"/);
   assert.match(cssSource, /\.price-drop-card-badge/);
 });
@@ -23,7 +25,7 @@ test("автомодерация проверяет ссылки, контакт
   assert.match(serverSource, /block_emails/);
   assert.match(serverSource, /CREATE TABLE IF NOT EXISTS moderation_rules/);
   assert.match(serverSource, /CREATE TABLE IF NOT EXISTS moderation_events/);
-  assert.match(serverSource, /moderation_status = \$21/);
+  assert.match(serverSource, /moderation_status = \$22/);
 });
 
 test("заблокированное объявление не может само вернуться в каталог", () => {
