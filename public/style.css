@@ -5122,8 +5122,10 @@ body.dark-mode #myAdsList .owner-product-card.sold-history-card .sold-history-no
 
 .profile-contact-list span,
 .profile-contact-list a,
+.profile-contact-list button,
 .seller-contact-list span,
-.seller-contact-list a {
+.seller-contact-list a,
+.seller-contact-list button {
   max-width: 100%;
   padding: 7px 10px;
   border-radius: 999px;
@@ -5282,8 +5284,10 @@ body.dark-mode .catalog-filters select {
 
 body.dark-mode .profile-contact-list span,
 body.dark-mode .profile-contact-list a,
+body.dark-mode .profile-contact-list button,
 body.dark-mode .seller-contact-list span,
 body.dark-mode .seller-contact-list a,
+body.dark-mode .seller-contact-list button,
 body.dark-mode .seller-sold-card {
   border-color: #3a3e47;
   background: #2b2e35;
@@ -6022,28 +6026,36 @@ html.keyboard-open .bottom-nav {
 }
 
 .profile-phone-copy {
-  width: 100%;
+  width: auto;
+  max-width: 100%;
+  min-height: 0;
   border: 0;
-  border-radius: 12px;
-  padding: 10px 12px;
-  display: flex;
+  border-radius: 999px;
+  padding: 7px 10px;
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  background: #f2f1ff;
-  color: inherit;
-  text-align: left;
+  justify-content: center;
+  gap: 4px;
+  background: #f0f2f7;
+  color: #525a6a;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.2;
+  text-align: center;
+  overflow-wrap: anywhere;
+  appearance: none;
+  -webkit-appearance: none;
   cursor: pointer;
 }
 
-.profile-phone-copy small {
-  color: #635bff;
-  font-size: 11px;
-  font-weight: 700;
+.profile-phone-copy:active {
+  transform: scale(.97);
+  opacity: .86;
 }
 
 body.dark-mode .profile-phone-copy {
-  background: #292633;
+  background: #2b2e35;
+  color: #c9cdd5;
 }
 
 .app-toast {

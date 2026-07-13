@@ -14,7 +14,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.13.8";
+const APP_VERSION = "1.13.9";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -1237,43 +1237,96 @@ async function fetchTelegramJson(method, searchParams) {
     url.searchParams.set(key, String(value));
   }
 
-  const response = await fetch(url);
-  const data = await response.json();
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(12_000),
+    headers: { "User-Agent": `OssetianMarket/${APP_VERSION}` }
+  });
 
-  if (!response.ok || !data.ok) {
-    throw new Error(`Telegram Bot API method ${method} failed`);
+  let data = null;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error(`Telegram Bot API method ${method} returned invalid JSON`);
+  }
+
+  if (!response.ok || !data?.ok) {
+    throw new Error(data?.description || `Telegram Bot API method ${method} failed`);
   }
 
   return data.result;
 }
 
-async function resolveTelegramAvatarUrl(user) {
-  if (user.photoUrl) {
-    return user.photoUrl;
+async function resolveTelegramAvatarUrls(user, storedAvatar = "") {
+  const candidates = [];
+  const addCandidate = value => {
+    const candidate = String(value || "").trim();
+    if (/^https:\/\//i.test(candidate) && !candidates.includes(candidate)) {
+      candidates.push(candidate);
+    }
+  };
+
+  addCandidate(user?.photoUrl);
+  addCandidate(storedAvatar);
+
+  try {
+    const profilePhotos = await fetchTelegramJson("getUserProfilePhotos", {
+      user_id: user.id,
+      limit: 1
+    });
+
+    const photos = profilePhotos?.photos || [];
+    const sizes = Array.isArray(photos[0]) ? photos[0] : [];
+    const biggestPhoto = sizes[sizes.length - 1];
+
+    if (biggestPhoto?.file_id) {
+      const file = await fetchTelegramJson("getFile", {
+        file_id: biggestPhoto.file_id
+      });
+
+      if (file?.file_path) {
+        addCandidate(`https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`);
+      }
+    }
+  } catch (error) {
+    console.warn("Telegram profile photo fallback failed:", error?.message || error);
   }
 
-  const profilePhotos = await fetchTelegramJson("getUserProfilePhotos", {
-    user_id: user.id,
-    limit: 1
+  return candidates;
+}
+
+async function fetchTelegramAvatarBuffer(avatarUrl) {
+  const response = await fetch(avatarUrl, {
+    redirect: "follow",
+    signal: AbortSignal.timeout(15_000),
+    headers: {
+      "User-Agent": `OssetianMarket/${APP_VERSION}`,
+      Accept: "image/*"
+    }
   });
 
-  const photos = profilePhotos?.photos || [];
-
-  if (photos.length === 0) {
-    return null;
+  if (!response.ok) {
+    throw new Error(`Avatar HTTP ${response.status}`);
   }
 
-  const sizes = photos[0];
-  const biggestPhoto = sizes[sizes.length - 1];
-  const file = await fetchTelegramJson("getFile", {
-    file_id: biggestPhoto.file_id
-  });
-
-  if (!file?.file_path) {
-    return null;
+  const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+  if (contentType && !contentType.startsWith("image/")) {
+    throw new Error("Avatar response is not an image");
   }
 
-  return `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
+  const contentLength = Number(response.headers.get("content-length") || 0);
+  if (contentLength > 5 * 1024 * 1024) {
+    throw new Error("Avatar is too large");
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (!buffer.length || buffer.length > 5 * 1024 * 1024) {
+    throw new Error("Invalid avatar size");
+  }
+
+  return {
+    buffer,
+    contentType: contentType.startsWith("image/") ? contentType : "image/jpeg"
+  };
 }
 
 async function initDb(db = pool) {
@@ -2417,48 +2470,38 @@ app.patch("/api/me/profile", requireTelegramAuth, syncTelegramUser, async (req, 
 
 app.get("/api/avatar", requireTelegramAuth, syncTelegramUser, async (req, res) => {
   try {
-    const avatarUrl = await resolveTelegramAvatarUrl(req.telegramUser);
+    const storedAvatarResult = await pool.query(
+      `SELECT avatar FROM users WHERE telegram_id = $1 LIMIT 1`,
+      [String(req.telegramUser.id)]
+    );
+    const storedAvatar = storedAvatarResult.rows[0]?.avatar || "";
+    const avatarUrls = await resolveTelegramAvatarUrls(req.telegramUser, storedAvatar);
 
-    if (!avatarUrl) {
+    if (avatarUrls.length === 0) {
       return res.status(404).json({
         ok: false,
         error: "Фото профиля не найдено"
       });
     }
 
-    const avatarResponse = await fetch(avatarUrl);
-
-    if (!avatarResponse.ok) {
-      return res.status(502).json({
-        ok: false,
-        error: "Не удалось загрузить фото Telegram"
-      });
+    let lastError = null;
+    for (const avatarUrl of avatarUrls) {
+      try {
+        const avatar = await fetchTelegramAvatarBuffer(avatarUrl);
+        res.setHeader("Content-Type", avatar.contentType);
+        res.setHeader("Cache-Control", "private, no-store");
+        return res.send(avatar.buffer);
+      } catch (error) {
+        lastError = error;
+        console.warn("Avatar candidate failed:", error?.message || error);
+      }
     }
 
-    const contentLength = Number(avatarResponse.headers.get("content-length") || 0);
-
-    if (contentLength > 5 * 1024 * 1024) {
-      return res.status(413).json({
-        ok: false,
-        error: "Фото Telegram слишком большое"
-      });
-    }
-
-    const avatarBuffer = Buffer.from(await avatarResponse.arrayBuffer());
-
-    if (avatarBuffer.length > 5 * 1024 * 1024) {
-      return res.status(413).json({
-        ok: false,
-        error: "Фото Telegram слишком большое"
-      });
-    }
-
-    res.setHeader(
-      "Content-Type",
-      avatarResponse.headers.get("content-type") || "image/jpeg"
-    );
-    res.setHeader("Cache-Control", "private, max-age=300");
-    return res.send(avatarBuffer);
+    console.error("All Telegram avatar candidates failed:", lastError);
+    return res.status(502).json({
+      ok: false,
+      error: "Не удалось загрузить фото Telegram"
+    });
   } catch (error) {
     console.error("Avatar API error:", error);
 

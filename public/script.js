@@ -4660,15 +4660,73 @@ async function initTelegramUser() {
   }
 }
 
+function preloadProfileAvatar(source, altText) {
+  return new Promise((resolve, reject) => {
+    const image = document.createElement("img");
+    let settled = false;
+
+    const finish = callback => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeoutId);
+      image.onload = null;
+      image.onerror = null;
+      callback();
+    };
+
+    const timeoutId = window.setTimeout(() => {
+      finish(() => {
+        image.src = "";
+        reject(new Error("Превышено время загрузки фото профиля"));
+      });
+    }, 10_000);
+
+    image.onload = () => finish(() => resolve(image));
+    image.onerror = () => finish(() => reject(new Error("Фото профиля не загрузилось")));
+    image.alt = altText || "Фото профиля";
+    image.className = "telegram-avatar-img";
+    image.decoding = "async";
+    image.src = source;
+  });
+}
+
 async function loadTelegramAvatar(firstName, fullName) {
   const avatar = document.querySelector(".profile-card .avatar");
 
   if (!avatar || !state.telegramUser?.id) return;
 
+  const showFallback = () => {
+    avatar.replaceChildren();
+    avatar.innerText = firstName[0]?.toUpperCase() || "?";
+  };
+
+  const directPhotoUrl = safeImageUrl(state.telegramUser.photoUrl || "");
+  if (directPhotoUrl && directPhotoUrl !== DEFAULT_IMAGE) {
+    try {
+      const directImage = await preloadProfileAvatar(directPhotoUrl, fullName);
+      avatar.replaceChildren(directImage);
+      return;
+    } catch (error) {
+      console.warn("Прямая ссылка Telegram на аватар недоступна, используем серверный резерв:", error);
+    }
+  }
+
+  let newObjectUrl = "";
+
   try {
-    const response = await fetch("/api/avatar", {
-      headers: getTelegramAuthHeaders()
-    });
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 15_000);
+    let response;
+
+    try {
+      response = await fetch(`/api/avatar?_=${Date.now()}`, {
+        headers: getTelegramAuthHeaders(),
+        cache: "no-store",
+        signal: controller.signal
+      });
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
 
     if (!response.ok) {
       throw new Error(`Статус загрузки аватара: ${response.status}`);
@@ -4680,22 +4738,20 @@ async function loadTelegramAvatar(firstName, fullName) {
       throw new Error("Сервер вернул не изображение");
     }
 
+    newObjectUrl = URL.createObjectURL(avatarBlob);
+    const image = await preloadProfileAvatar(newObjectUrl, fullName);
+
     if (telegramAvatarObjectUrl) {
       URL.revokeObjectURL(telegramAvatarObjectUrl);
     }
 
-    telegramAvatarObjectUrl = URL.createObjectURL(avatarBlob);
-
-    const image = document.createElement("img");
-    image.src = telegramAvatarObjectUrl;
-    image.alt = fullName || "Фото профиля";
-    image.className = "telegram-avatar-img";
-
+    telegramAvatarObjectUrl = newObjectUrl;
+    newObjectUrl = "";
     avatar.replaceChildren(image);
   } catch (error) {
+    if (newObjectUrl) URL.revokeObjectURL(newObjectUrl);
     console.error("Не удалось загрузить аватар:", error);
-    avatar.replaceChildren();
-    avatar.innerText = firstName[0]?.toUpperCase() || "?";
+    showFallback();
   }
 }
 
@@ -4712,7 +4768,7 @@ function renderOwnProfileDetails() {
   if (contacts) {
     const rows = [];
     if (user.city) rows.push(`<span>📍 ${escapeHTML(user.city)}</span>`);
-    if (user.phone) rows.push(`<button type="button" class="profile-phone-copy" onclick="copyPhoneNumber(decodeURIComponent('${escapeHTML(encodeURIComponent(user.phone))}'))">📞 ${escapeHTML(user.phone)} <small>Копировать</small></button>`);
+    if (user.phone) rows.push(`<button type="button" class="profile-phone-copy" aria-label="Скопировать номер ${escapeHTML(user.phone)}" title="Нажмите, чтобы скопировать номер" onclick="copyPhoneNumber(decodeURIComponent('${escapeHTML(encodeURIComponent(user.phone))}'))">📞 ${escapeHTML(user.phone)}</button>`);
     const contactUsername = user.contactUsername || user.username || "";
     if (contactUsername) rows.push(`<span>✈️ @${escapeHTML(contactUsername)}</span>`);
     contacts.innerHTML = rows.join("");
@@ -4917,7 +4973,7 @@ async function openSellerProfile(userId) {
     if (sellerContacts) {
       const contactRows = [];
       if (user.city) contactRows.push(`<span>📍 ${escapeHTML(user.city)}</span>`);
-      if (user.phone) contactRows.push(`<button type="button" class="profile-phone-copy" onclick="copyPhoneNumber(decodeURIComponent('${escapeHTML(encodeURIComponent(user.phone))}'))">📞 ${escapeHTML(user.phone)} <small>Копировать</small></button>`);
+      if (user.phone) contactRows.push(`<button type="button" class="profile-phone-copy" aria-label="Скопировать номер ${escapeHTML(user.phone)}" title="Нажмите, чтобы скопировать номер" onclick="copyPhoneNumber(decodeURIComponent('${escapeHTML(encodeURIComponent(user.phone))}'))">📞 ${escapeHTML(user.phone)}</button>`);
       if (username) contactRows.push(`<span>✈️ @${escapeHTML(username)}</span>`);
       sellerContacts.innerHTML = contactRows.join("");
     }
