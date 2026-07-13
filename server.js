@@ -14,7 +14,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.13.6";
+const APP_VERSION = "1.13.7";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -97,15 +97,40 @@ if (!DATABASE_URL) {
   process.exit(1);
 }
 
+const DB_POOL_MAX = Math.max(2, Math.min(20, Number(process.env.DB_POOL_MAX) || 5));
+const DB_CONNECTION_TIMEOUT_MS = Math.max(
+  5_000,
+  Math.min(60_000, Number(process.env.DB_CONNECTION_TIMEOUT_MS) || 20_000)
+);
+const DB_INIT_MAX_ATTEMPTS = Math.max(
+  1,
+  Math.min(20, Number(process.env.DB_INIT_MAX_ATTEMPTS) || 8)
+);
+const DB_INIT_RETRY_BASE_MS = Math.max(
+  500,
+  Math.min(30_000, Number(process.env.DB_INIT_RETRY_BASE_MS) || 2_000)
+);
+const DB_INIT_RETRY_MAX_MS = Math.max(
+  DB_INIT_RETRY_BASE_MS,
+  Math.min(60_000, Number(process.env.DB_INIT_RETRY_MAX_MS) || 30_000)
+);
 const pool = new Pool({
   connectionString: DATABASE_URL,
   ssl: DATABASE_SSL ? { rejectUnauthorized: false } : false,
-  max: 15,
+  max: DB_POOL_MAX,
   idleTimeoutMillis: 30_000,
-  connectionTimeoutMillis: 7_000,
+  connectionTimeoutMillis: DB_CONNECTION_TIMEOUT_MS,
   statement_timeout: 15_000,
   query_timeout: 15_000,
-  keepAlive: true
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 10_000,
+  application_name: `ossetian-market-${APP_VERSION}`
+});
+
+pool.on("error", error => {
+  // Ошибка на простаивающем соединении не должна аварийно завершать процесс.
+  // Пул удалит повреждённый клиент и создаст новый при следующем запросе.
+  console.error("Unexpected PostgreSQL pool error:", error);
 });
 
 const requireTelegramAuth = createTelegramAuthMiddleware({
@@ -899,7 +924,7 @@ async function readRemoteImageBuffer(source) {
     for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
       response = await fetch(currentUrl, {
         signal: controller.signal,
-        headers: { "User-Agent": "OssetianMarket/1.13.6" },
+        headers: { "User-Agent": "OssetianMarket/1.13.7" },
         redirect: "manual"
       });
 
@@ -1191,8 +1216,8 @@ async function resolveTelegramAvatarUrl(user) {
   return `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
 }
 
-async function initDb() {
-  await pool.query(`
+async function initDb(db = pool) {
+  await db.query(`
     CREATE TABLE IF NOT EXISTS products (
       id TEXT PRIMARY KEY,
       owner_id TEXT NOT NULL,
@@ -1213,27 +1238,27 @@ async function initDb() {
     );
   `);
 
-  await pool.query(`
+  await db.query(`
     ALTER TABLE products
     ADD COLUMN IF NOT EXISTS phone TEXT DEFAULT '';
   `);
 
-  await pool.query(`
+  await db.query(`
     ALTER TABLE products
     ADD COLUMN IF NOT EXISTS allow_messages BOOLEAN DEFAULT true;
   `);
 
-  await pool.query(`
+  await db.query(`
     ALTER TABLE products
     ADD COLUMN IF NOT EXISTS images JSONB DEFAULT '[]'::jsonb;
   `);
 
-  await pool.query(`
+  await db.query(`
     ALTER TABLE products
     ADD COLUMN IF NOT EXISTS thumbnail TEXT DEFAULT '';
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS users (
       telegram_id TEXT PRIMARY KEY,
       username TEXT,
@@ -1245,53 +1270,53 @@ async function initDb() {
     );
   `);
 
-  await pool.query(`
+  await db.query(`
     ALTER TABLE users
     ADD COLUMN IF NOT EXISTS username TEXT;
   `);
 
-  await pool.query(`
+  await db.query(`
     ALTER TABLE users
     ADD COLUMN IF NOT EXISTS first_name TEXT;
   `);
 
-  await pool.query(`
+  await db.query(`
     ALTER TABLE users
     ADD COLUMN IF NOT EXISTS last_name TEXT;
   `);
 
-  await pool.query(`
+  await db.query(`
     ALTER TABLE users
     ADD COLUMN IF NOT EXISTS avatar TEXT;
   `);
 
-  await pool.query(`
+  await db.query(`
     ALTER TABLE users
     ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ DEFAULT NOW();
   `);
 
-  await pool.query(`
+  await db.query(`
     ALTER TABLE users
     ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
   `);
-  await pool.query(`
+  await db.query(`
     ALTER TABLE users
     ADD COLUMN IF NOT EXISTS banned BOOLEAN DEFAULT FALSE;
   `);
 
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_description TEXT DEFAULT '';`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS city TEXT DEFAULT '';`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT DEFAULT '';`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_username TEXT DEFAULT '';`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_normalized TEXT DEFAULT '';`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS listing_limit INTEGER DEFAULT ${DEFAULT_LISTING_LIMIT};`);
-  await pool.query(`
+  await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_description TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS city TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_username TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
+  await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_normalized TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS listing_limit INTEGER DEFAULT ${DEFAULT_LISTING_LIMIT};`);
+  await db.query(`
     UPDATE users
     SET listing_limit = ${DEFAULT_LISTING_LIMIT}
     WHERE listing_limit IS NULL OR listing_limit < 1 OR listing_limit > ${MAX_LISTING_LIMIT};
   `);
-  await pool.query(`
+  await db.query(`
     UPDATE users
     SET phone_normalized = CASE
       WHEN LENGTH(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g')) = 10
@@ -1305,7 +1330,7 @@ async function initDb() {
   `);
   // В старой БД одинаковый телефон мог быть сохранён у нескольких профилей.
   // Сохраняем привязку у самого раннего профиля, а дубликаты очищаем до создания индекса.
-  await pool.query(`
+  await db.query(`
     WITH ranked AS (
       SELECT telegram_id,
              ROW_NUMBER() OVER (
@@ -1320,18 +1345,18 @@ async function initDb() {
     FROM ranked r
     WHERE u.telegram_id = r.telegram_id AND r.duplicate_number > 1;
   `);
-  await pool.query(`
+  await db.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone_normalized_unique
     ON users (phone_normalized)
     WHERE phone_normalized <> '';
   `);
 
-  await pool.query(`
+  await db.query(`
     ALTER TABLE products
     ADD COLUMN IF NOT EXISTS hidden BOOLEAN DEFAULT FALSE;
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS admin_logs (
       id TEXT PRIMARY KEY,
       admin_id TEXT NOT NULL,
@@ -1343,22 +1368,22 @@ async function initDb() {
 
   // Ранние сборки создавали id как SERIAL. Приводим старую БД к одной схеме,
   // чтобы журнал действий не ломался после обновления приложения.
-  await pool.query(`
+  await db.query(`
     ALTER TABLE admin_logs
     ALTER COLUMN id DROP DEFAULT;
   `);
 
-  await pool.query(`
+  await db.query(`
     ALTER TABLE admin_logs
     ALTER COLUMN id TYPE TEXT USING id::text;
   `);
 
-  await pool.query(`
+  await db.query(`
     ALTER TABLE admin_logs
     ADD COLUMN IF NOT EXISTS details TEXT DEFAULT '';
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS favorites (
       user_id TEXT NOT NULL,
       product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
@@ -1367,7 +1392,7 @@ async function initDb() {
     );
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS product_images (
       id TEXT PRIMARY KEY,
       product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
@@ -1381,22 +1406,22 @@ async function initDb() {
   // Existing installations may already have product_images from an older release.
   // CREATE TABLE IF NOT EXISTS does not add new columns to such a table, so every
   // media route must be backed by explicit idempotent migrations.
-  await pool.query(`
+  await db.query(`
     ALTER TABLE product_images
     ADD COLUMN IF NOT EXISTS preview_url TEXT DEFAULT '';
   `);
 
-  await pool.query(`
+  await db.query(`
     ALTER TABLE product_images
     ADD COLUMN IF NOT EXISTS position INTEGER DEFAULT 0;
   `);
 
-  await pool.query(`
+  await db.query(`
     ALTER TABLE product_images
     ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS product_feature_requests (
       id TEXT PRIMARY KEY,
       product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
@@ -1411,105 +1436,105 @@ async function initDb() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
-  await pool.query(`
+  await db.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_product_feature_requests_pending
     ON product_feature_requests (product_id, owner_id)
     WHERE status = 'pending';
   `);
 
-  await pool.query(`
+  await db.query(`
     ALTER TABLE product_feature_requests
     ADD COLUMN IF NOT EXISTS reviewed_by TEXT DEFAULT '';
   `);
-  await pool.query(`
+  await db.query(`
     ALTER TABLE product_feature_requests
     ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
   `);
-  await pool.query(`
+  await db.query(`
     ALTER TABLE product_feature_requests
     ADD COLUMN IF NOT EXISTS admin_note TEXT DEFAULT '';
   `);
-  await pool.query(`ALTER TABLE product_feature_requests ALTER COLUMN color SET DEFAULT 'purple';`);
-  await pool.query(`UPDATE product_feature_requests SET color = 'purple' WHERE COALESCE(color, '') NOT IN ('purple', 'green', 'gold');`);
+  await db.query(`ALTER TABLE product_feature_requests ALTER COLUMN color SET DEFAULT 'purple';`);
+  await db.query(`UPDATE product_feature_requests SET color = 'purple' WHERE COALESCE(color, '') NOT IN ('purple', 'green', 'gold');`);
 
-  await pool.query(`
+  await db.query(`
     CREATE INDEX IF NOT EXISTS idx_product_feature_requests_status_created
     ON product_feature_requests (status, created_at DESC);
   `);
 
-  await pool.query(`
+  await db.query(`
     ALTER TABLE products
     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
   `);
 
-  await pool.query(`
+  await db.query(`
     ALTER TABLE products
     ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
   `);
 
-  await pool.query(`
+  await db.query(`
     ALTER TABLE products
     ADD COLUMN IF NOT EXISTS condition TEXT DEFAULT 'used';
   `);
 
-  await pool.query(`
+  await db.query(`
     ALTER TABLE products
     ADD COLUMN IF NOT EXISTS negotiable BOOLEAN DEFAULT FALSE;
   `);
 
-  await pool.query(`
+  await db.query(`
     ALTER TABLE products
     ADD COLUMN IF NOT EXISTS delivery BOOLEAN DEFAULT FALSE;
   `);
 
-  await pool.query(`
+  await db.query(`
     ALTER TABLE products
     ADD COLUMN IF NOT EXISTS district TEXT DEFAULT '';
   `);
 
-  await pool.query(`
+  await db.query(`
     ALTER TABLE products
     ADD COLUMN IF NOT EXISTS specifications JSONB DEFAULT '{}'::jsonb;
   `);
 
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS price_amount BIGINT;`);
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS previous_price TEXT DEFAULT '';`);
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS previous_price_amount BIGINT;`);
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS price_dropped_at TIMESTAMPTZ;`);
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS moderation_status TEXT DEFAULT 'approved';`);
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS moderation_reason TEXT DEFAULT '';`);
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS moderation_matches JSONB DEFAULT '[]'::jsonb;`);
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS auto_hidden BOOLEAN DEFAULT FALSE;`);
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS moderation_target_status TEXT DEFAULT 'active';`);
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;`);
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS sold_at TIMESTAMPTZ;`);
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS media_purged_at TIMESTAMPTZ;`);
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;`);
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;`);
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_until TIMESTAMPTZ;`);
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_color TEXT DEFAULT 'purple';`);
-  await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_paid BOOLEAN DEFAULT FALSE;`);
-  await pool.query(`ALTER TABLE products ALTER COLUMN featured_color SET DEFAULT 'purple';`);
-  await pool.query(`UPDATE products SET featured_color = 'purple' WHERE COALESCE(featured_color, '') NOT IN ('purple', 'green', 'gold');`);
-  await pool.query(`
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS price_amount BIGINT;`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS previous_price TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS previous_price_amount BIGINT;`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS price_dropped_at TIMESTAMPTZ;`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS moderation_status TEXT DEFAULT 'approved';`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS moderation_reason TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS moderation_matches JSONB DEFAULT '[]'::jsonb;`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS auto_hidden BOOLEAN DEFAULT FALSE;`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS moderation_target_status TEXT DEFAULT 'active';`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS sold_at TIMESTAMPTZ;`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS media_purged_at TIMESTAMPTZ;`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_until TIMESTAMPTZ;`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_color TEXT DEFAULT 'purple';`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_paid BOOLEAN DEFAULT FALSE;`);
+  await db.query(`ALTER TABLE products ALTER COLUMN featured_color SET DEFAULT 'purple';`);
+  await db.query(`UPDATE products SET featured_color = 'purple' WHERE COALESCE(featured_color, '') NOT IN ('purple', 'green', 'gold');`);
+  await db.query(`
     UPDATE products
     SET published_at = COALESCE(published_at, created_at, NOW()),
         expires_at = COALESCE(expires_at, COALESCE(published_at, created_at, NOW()) + ($1::int * INTERVAL '1 day'))
     WHERE COALESCE(status, 'active') = 'active';
   `, [PRODUCT_ARCHIVE_DAYS]);
 
-  await pool.query(`
+  await db.query(`
     UPDATE products
     SET price_amount = NULLIF(regexp_replace(price, '[^0-9]', '', 'g'), '')::BIGINT
     WHERE price_amount IS NULL;
   `);
-  await pool.query(`
+  await db.query(`
     UPDATE products
     SET moderation_status = 'approved'
     WHERE moderation_status IS NULL OR moderation_status = '';
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS product_price_history (
       id TEXT PRIMARY KEY,
       product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
@@ -1522,7 +1547,7 @@ async function initDb() {
     );
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS moderation_settings (
       id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id = TRUE),
       enabled BOOLEAN DEFAULT TRUE,
@@ -1533,13 +1558,13 @@ async function initDb() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
-  await pool.query(`
+  await db.query(`
     INSERT INTO moderation_settings (id)
     VALUES (TRUE)
     ON CONFLICT (id) DO NOTHING;
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS moderation_rules (
       id TEXT PRIMARY KEY,
       pattern TEXT NOT NULL,
@@ -1551,12 +1576,12 @@ async function initDb() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
-  await pool.query(`
+  await db.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_moderation_rules_unique_pattern
     ON moderation_rules (LOWER(pattern), match_type);
   `);
 
-  const moderationRuleCount = await pool.query(
+  const moderationRuleCount = await db.query(
     `SELECT COUNT(*)::int AS count FROM moderation_rules`
   );
   if ((moderationRuleCount.rows[0]?.count || 0) === 0) {
@@ -1569,7 +1594,7 @@ async function initDb() {
       ['default-ammunition', 'боевые патроны', 'phrase']
     ];
     for (const [id, pattern, matchType] of defaultModerationRules) {
-      await pool.query(
+      await db.query(
         `
           INSERT INTO moderation_rules (id, pattern, match_type, note, created_by)
           VALUES ($1, $2, $3, 'Базовое правило проекта', 'system')
@@ -1580,7 +1605,7 @@ async function initDb() {
     }
   }
 
-  await pool.query(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS moderation_events (
       id TEXT PRIMARY KEY,
       product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
@@ -1596,7 +1621,7 @@ async function initDb() {
     );
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS advertising_campaigns (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
@@ -1623,10 +1648,10 @@ async function initDb() {
     );
   `);
 
-  await pool.query(`ALTER TABLE advertising_campaigns ADD COLUMN IF NOT EXISTS billing_model TEXT DEFAULT 'flat';`);
-  await pool.query(`ALTER TABLE advertising_campaigns ADD COLUMN IF NOT EXISTS rate_amount NUMERIC(12,2) DEFAULT 0;`);
-  await pool.query(`ALTER TABLE advertising_campaigns ADD COLUMN IF NOT EXISTS is_paid BOOLEAN DEFAULT FALSE;`);
-  await pool.query(`
+  await db.query(`ALTER TABLE advertising_campaigns ADD COLUMN IF NOT EXISTS billing_model TEXT DEFAULT 'flat';`);
+  await db.query(`ALTER TABLE advertising_campaigns ADD COLUMN IF NOT EXISTS rate_amount NUMERIC(12,2) DEFAULT 0;`);
+  await db.query(`ALTER TABLE advertising_campaigns ADD COLUMN IF NOT EXISTS is_paid BOOLEAN DEFAULT FALSE;`);
+  await db.query(`
     UPDATE advertising_campaigns
     SET
       status = CASE
@@ -1641,7 +1666,7 @@ async function initDb() {
       END;
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS advertising_events (
       id TEXT PRIMARY KEY,
       campaign_id TEXT NOT NULL REFERENCES advertising_campaigns(id) ON DELETE CASCADE,
@@ -1653,7 +1678,7 @@ async function initDb() {
     );
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS reports (
       id TEXT PRIMARY KEY,
       product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
@@ -1668,76 +1693,76 @@ async function initDb() {
     );
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE INDEX IF NOT EXISTS idx_reports_status_created_at
     ON reports (status, created_at DESC);
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE INDEX IF NOT EXISTS idx_reports_product_id
     ON reports (product_id);
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_reports_unique_pending
     ON reports (product_id, reporter_id)
     WHERE status = 'pending';
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE INDEX IF NOT EXISTS idx_products_status_created_at
     ON products (status, created_at DESC);
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE INDEX IF NOT EXISTS idx_products_owner_created_at
     ON products (owner_id, created_at DESC);
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE INDEX IF NOT EXISTS idx_favorites_user_id
     ON favorites (user_id);
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE INDEX IF NOT EXISTS idx_products_category_location
     ON products (category, location, created_at DESC);
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE INDEX IF NOT EXISTS idx_products_price_filters
     ON products (price_amount, created_at DESC)
     WHERE status = 'active' AND hidden = FALSE AND moderation_status = 'approved';
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE INDEX IF NOT EXISTS idx_products_owner_status_history
     ON products (owner_id, status, sold_at DESC, created_at DESC);
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE INDEX IF NOT EXISTS idx_products_moderation_status
     ON products (moderation_status, created_at DESC);
   `);
-  await pool.query(`
+  await db.query(`
     CREATE INDEX IF NOT EXISTS idx_price_history_product
     ON product_price_history (product_id, created_at DESC);
   `);
-  await pool.query(`
+  await db.query(`
     CREATE INDEX IF NOT EXISTS idx_moderation_events_status
     ON moderation_events (status, created_at DESC);
   `);
-  await pool.query(`
+  await db.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_moderation_events_unique_pending
     ON moderation_events (product_id)
     WHERE status = 'pending';
   `);
-  await pool.query(`
+  await db.query(`
     CREATE INDEX IF NOT EXISTS idx_ad_campaigns_delivery
     ON advertising_campaigns (status, placement, priority DESC, created_at DESC);
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE INDEX IF NOT EXISTS idx_products_public_feed
     ON products (created_at DESC)
     WHERE status = 'active'
@@ -1745,22 +1770,162 @@ async function initDb() {
       AND moderation_status = 'approved';
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE INDEX IF NOT EXISTS idx_product_images_product_position
     ON product_images (product_id, position);
   `);
-  await pool.query(`
+  await db.query(`
     CREATE INDEX IF NOT EXISTS idx_products_expiry
     ON products (expires_at)
     WHERE status = 'active';
   `);
-  await pool.query(`
+  await db.query(`
     CREATE INDEX IF NOT EXISTS idx_products_featured
     ON products (featured_until DESC)
     WHERE featured_paid = TRUE;
   `);
 
   console.log("Database initialized");
+}
+
+
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function getDatabaseErrorCode(error) {
+  let current = error;
+  for (let depth = 0; current && depth < 5; depth += 1) {
+    if (current.code) return String(current.code);
+    current = current.cause;
+  }
+  return "";
+}
+
+function isRetryableDatabaseError(error) {
+  const code = getDatabaseErrorCode(error);
+  const retryableCodes = new Set([
+    "ECONNRESET",
+    "ECONNREFUSED",
+    "ETIMEDOUT",
+    "EPIPE",
+    "ENETUNREACH",
+    "EHOSTUNREACH",
+    "08000",
+    "08001",
+    "08003",
+    "08004",
+    "08006",
+    "08007",
+    "08P01",
+    "53300",
+    "53400",
+    "55P03",
+    "57P01",
+    "57P02",
+    "57P03"
+  ]);
+
+  if (retryableCodes.has(code)) return true;
+
+  const message = String(error?.message || "").toLowerCase();
+  return [
+    "connection terminated unexpectedly",
+    "connection closed unexpectedly",
+    "server closed the connection unexpectedly",
+    "terminating connection",
+    "timeout expired",
+    "connection timeout",
+    "read econnreset",
+    "socket hang up"
+  ].some(fragment => message.includes(fragment));
+}
+
+async function initializeDatabaseOnce() {
+  let client;
+  let failure = null;
+
+  try {
+    client = await pool.connect();
+    await client.query("SELECT 1");
+
+    // Миграции могут быть тяжелее обычных API-запросов на уже заполненной базе.
+    // Для них используем отдельный таймаут, не меняя лимит обычных запросов.
+    await client.query("SET statement_timeout TO 120000");
+    await client.query("SET lock_timeout TO 20000");
+
+    const migrationDb = {
+      query(text, values) {
+        if (typeof text === "string") {
+          return client.query({ text, values, query_timeout: 120_000 });
+        }
+
+        return client.query({
+          ...text,
+          values: values ?? text.values,
+          query_timeout: text.query_timeout ?? 120_000
+        });
+      }
+    };
+
+    await initDb(migrationDb);
+  } catch (error) {
+    failure = error;
+    throw error;
+  } finally {
+    if (client) {
+      if (!failure) {
+        try {
+          await client.query("RESET statement_timeout");
+          await client.query("RESET lock_timeout");
+        } catch (resetError) {
+          failure = resetError;
+          console.warn("Could not reset PostgreSQL migration settings:", resetError?.message || resetError);
+        }
+      }
+
+      // Передача ошибки в release() заставляет pg-pool уничтожить повреждённое
+      // соединение вместо возвращения его обратно в пул.
+      client.release(failure || undefined);
+    }
+  }
+}
+
+async function initDbWithRetry() {
+  let lastError;
+
+  for (let attempt = 1; attempt <= DB_INIT_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      await initializeDatabaseOnce();
+      if (attempt > 1) {
+        console.log(`Database connection restored on attempt ${attempt}/${DB_INIT_MAX_ATTEMPTS}`);
+      }
+      return;
+    } catch (error) {
+      lastError = error;
+      const retryable = isRetryableDatabaseError(error);
+      const hasMoreAttempts = attempt < DB_INIT_MAX_ATTEMPTS;
+
+      console.error(
+        `Database init attempt ${attempt}/${DB_INIT_MAX_ATTEMPTS} failed` +
+          `${getDatabaseErrorCode(error) ? ` [${getDatabaseErrorCode(error)}]` : ""}:`,
+        error?.message || error
+      );
+
+      if (!retryable || !hasMoreAttempts) break;
+
+      const delayMs = Math.min(
+        DB_INIT_RETRY_MAX_MS,
+        DB_INIT_RETRY_BASE_MS * (2 ** (attempt - 1))
+      );
+      const jitterMs = Math.floor(Math.random() * Math.min(1_000, Math.ceil(delayMs * 0.2)));
+      const totalDelayMs = delayMs + jitterMs;
+      console.log(`Retrying PostgreSQL initialization in ${totalDelayMs} ms...`);
+      await wait(totalDelayMs);
+    }
+  }
+
+  throw lastError;
 }
 
 app.get("/api/version", (req, res) => {
@@ -5169,7 +5334,7 @@ async function runProductLifecycleMaintenance() {
 
 console.log(`[Ossetian Market] starting version ${APP_VERSION}; ads, highlighting and feature-request admin flow enabled`);
 
-initDb()
+initDbWithRetry()
   .then(async () => {
     await runProductLifecycleMaintenance();
     const lifecycleTimer = setInterval(runProductLifecycleMaintenance, 60 * 60 * 1000);
