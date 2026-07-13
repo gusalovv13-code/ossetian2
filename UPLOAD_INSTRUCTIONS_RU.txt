@@ -1,0 +1,21 @@
+ЗАГРУЗИТЕ ЭТИ ФАЙЛЫ В КОРЕНЬ РЕПОЗИТОРИЯ GitHub:
+
+- server.js
+- package.json
+- package-lock.json
+
+Важно:
+1. Откройте https://github.com/gusalovv13-code/ossetian2
+2. Перейдите в корень ветки main.
+3. Нажмите Add file -> Upload files.
+4. Перетащите ТРИ ФАЙЛА из этой папки, а не сам ZIP.
+5. GitHub должен показать, что server.js, package.json и package-lock.json заменяются.
+6. Нажмите Commit changes.
+7. Убедитесь, что появился НОВЫЙ commit, не 12d1fb5.
+8. Затем в Render: Manual Deploy -> Clear build cache & deploy.
+
+Правильный лог после обновления:
+> ossetian-market@1.13.7 start
+[Ossetian Market] starting version 1.13.7
+
+Не загружайте .env в GitHub.
