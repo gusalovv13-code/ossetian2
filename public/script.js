@@ -2511,10 +2511,14 @@ function renderProductDetails(product) {
 
   if (productMeta) {
     productMeta.innerHTML = `
-      <div><span>Опубликовано</span><b>${escapeHTML(formatProductDate(createdAt))}</b></div>
-      ${hasMeaningfulUpdate ? `<div><span>Обновлено</span><b>${escapeHTML(formatProductDate(updatedAt))}</b></div>` : ""}
-      <div><span>Просмотры</span><b>👁 ${Number(product.views) || 0}</b></div>
-      <div><span>В избранном</span><b>♥ ${Number(product.favoriteCount) || 0}</b></div>
+      <div class="product-meta-dates">
+        <span><small>Опубликовано</small><b>${escapeHTML(formatProductDate(createdAt))}</b></span>
+        ${hasMeaningfulUpdate ? `<span><small>Обновлено</small><b>${escapeHTML(formatProductDate(updatedAt))}</b></span>` : ""}
+      </div>
+      <div class="product-meta-stats">
+        <span aria-label="Просмотры"><i aria-hidden="true">👁</i><b>${Number(product.views) || 0}</b><small>просмотров</small></span>
+        <span aria-label="В избранном"><i aria-hidden="true">♥</i><b>${Number(product.favoriteCount) || 0}</b><small>в избранном</small></span>
+      </div>
     `;
   }
 
@@ -2629,9 +2633,14 @@ function renderProductDetails(product) {
 
   if (reportButton) {
     const isOwnProduct = String(product.ownerId || "") === String(state.telegramUser?.id || "");
-    reportButton.hidden = isOwnProduct;
+    // Кнопка всегда остаётся видимой и в браузере, и внутри Telegram Mini App.
+    // Для собственного объявления обработчик покажет понятное предупреждение.
+    reportButton.hidden = false;
     reportButton.disabled = !isAvailable;
-    reportButton.title = isOwnProduct ? "Нельзя пожаловаться на своё объявление" : "Сообщить модератору о нарушении";
+    reportButton.classList.toggle("is-own-product", isOwnProduct);
+    reportButton.title = isOwnProduct
+      ? "Нельзя пожаловаться на своё объявление"
+      : "Сообщить модератору о нарушении";
   }
 
   if (sellerProductsButton) {
@@ -3912,55 +3921,88 @@ function initEvents() {
   updateListingQuality();
 }
 
+function initAppOverscrollGuard() {
+  const scroller = document.querySelector(".phone");
+  if (!scroller) return;
+
+  let startY = 0;
+  let tracking = false;
+
+  const ignoresBoundaryGuard = target => Boolean(
+    target?.closest?.(".photo-lightbox, dialog, input, textarea, select, .product-thumbs, .related-products, .categories, .tabs")
+  );
+
+  scroller.addEventListener("touchstart", event => {
+    tracking = event.touches?.length === 1 && !ignoresBoundaryGuard(event.target);
+    if (!tracking) return;
+
+    startY = event.touches[0].clientY;
+
+    const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    if (maxScroll > 1) {
+      if (scroller.scrollTop <= 0) scroller.scrollTop = 1;
+      else if (scroller.scrollTop >= maxScroll) scroller.scrollTop = maxScroll - 1;
+    }
+  }, { passive: true });
+
+  scroller.addEventListener("touchmove", event => {
+    if (!tracking || event.touches?.length !== 1) return;
+
+    const deltaY = event.touches[0].clientY - startY;
+    const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    const pullingPastTop = scroller.scrollTop <= 1 && deltaY > 0;
+    const pullingPastBottom = scroller.scrollTop >= maxScroll - 1 && deltaY < 0;
+
+    if (pullingPastTop || pullingPastBottom) {
+      event.preventDefault();
+    }
+  }, { passive: false });
+
+  const stopTracking = () => {
+    tracking = false;
+  };
+
+  scroller.addEventListener("touchend", stopTracking, { passive: true });
+  scroller.addEventListener("touchcancel", stopTracking, { passive: true });
+}
+
 /* =======================
    TELEGRAM MINI APP UX
 ======================= */
 
+function lockTelegramVerticalSwipes() {
+  if (!tg || typeof tg.disableVerticalSwipes !== "function") return;
+
+  try {
+    tg.disableVerticalSwipes();
+  } catch (error) {
+    console.warn("Не удалось отключить вертикальное сворачивание Mini App:", error);
+  }
+}
+
 function initTelegramAppUI() {
   if (!tg) return;
 
+  // Полноэкранный режим намеренно не запрашиваем: на части устройств Telegram
+  // показывает большую чёрную область при протягивании Mini App вниз.
+  lockTelegramVerticalSwipes();
   tg.ready();
   tg.expand();
-
-  if (typeof tg.disableVerticalSwipes === "function") {
-    tg.disableVerticalSwipes();
-  }
+  lockTelegramVerticalSwipes();
 
   applyTheme(document.body.classList.contains("dark-mode"), false);
 
-  requestTelegramFullscreen();
-
   setTimeout(() => {
     tg.expand();
-    requestTelegramFullscreen();
-  }, 300);
+    lockTelegramVerticalSwipes();
+  }, 250);
+
+  setTimeout(lockTelegramVerticalSwipes, 900);
+  tg.onEvent?.("viewportChanged", lockTelegramVerticalSwipes);
 
   if (tg.BackButton) {
     tg.BackButton.onClick(goBack);
     updateTelegramBackButton();
-  }
-}
-
-function requestTelegramFullscreen() {
-  try {
-    if (window.TelegramWebviewProxy?.postEvent) {
-      window.TelegramWebviewProxy.postEvent(
-        "web_app_request_fullscreen",
-        JSON.stringify({ blur: false })
-      );
-      return;
-    }
-
-    if (window.external?.notify) {
-      window.external.notify(
-        JSON.stringify({
-          eventType: "web_app_request_fullscreen",
-          eventData: { blur: false }
-        })
-      );
-    }
-  } catch (error) {
-    console.warn("Fullscreen недоступен:", error);
   }
 }
 
@@ -4318,6 +4360,7 @@ async function saveProfile(event) {
 
 async function initApp() {
   initTelegramAppUI();
+  initAppOverscrollGuard();
   initZoomLock();
   initSwipeBack();
   initKeyboardAutoHide();
