@@ -12,7 +12,7 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=1.12.8" />
+  <link rel="stylesheet" href="style.css?v=1.12.9" />
 </head>
 
 <body>
@@ -70,15 +70,79 @@
     </section>
 
    <section id="catalog" class="page">
-  <form id="searchForm" class="search-form" action="javascript:void(0);">
-    <input
-      id="searchInput"
-      class="search"
-      type="search"
-      placeholder="Поиск товаров..."
-      enterkeyhint="done"
-      autocomplete="off"
-    />
+  <div class="catalog-search-row">
+    <form id="searchForm" class="search-form" action="javascript:void(0);">
+      <input
+        id="searchInput"
+        class="search"
+        type="search"
+        placeholder="Марка авто, модель телефона, товар..."
+        enterkeyhint="search"
+        autocomplete="off"
+      />
+    </form>
+    <button id="catalogFiltersToggle" class="catalog-filters-toggle" type="button" aria-expanded="false">
+      ⚙️ <span>Фильтры</span><b id="catalogFilterCount" hidden>0</b>
+    </button>
+  </div>
+
+  <form id="catalogFilters" class="catalog-filters" hidden>
+    <div class="filter-grid two-columns">
+      <label>
+        <span>Цена от</span>
+        <input id="filterMinPrice" type="text" inputmode="numeric" maxlength="10" placeholder="0" />
+      </label>
+      <label>
+        <span>Цена до</span>
+        <input id="filterMaxPrice" type="text" inputmode="numeric" maxlength="10" placeholder="Без ограничения" />
+      </label>
+    </div>
+
+    <div class="filter-grid two-columns">
+      <label>
+        <span>Город</span>
+        <select id="filterCity">
+          <option value="">Все города</option>
+          <option>Владикавказ</option>
+          <option>Беслан</option>
+          <option>Алагир</option>
+          <option>Ардон</option>
+          <option>Дигора</option>
+          <option>Моздок</option>
+          <option>Чикола</option>
+          <option>Другое</option>
+        </select>
+      </label>
+      <label>
+        <span>Район</span>
+        <input id="filterDistrict" maxlength="80" placeholder="Например, Северо-Западный" />
+      </label>
+    </div>
+
+    <div class="filter-grid two-columns">
+      <label>
+        <span>Марка / бренд</span>
+        <input id="filterBrand" maxlength="80" placeholder="BMW, Apple, Samsung..." />
+      </label>
+      <label>
+        <span>Модель</span>
+        <input id="filterModel" maxlength="80" placeholder="X5, iPhone 15, Galaxy S24..." />
+      </label>
+    </div>
+
+    <label>
+      <span>Сортировка</span>
+      <select id="filterSort">
+        <option value="newest">Сначала новые</option>
+        <option value="price_asc">Сначала дешевле</option>
+        <option value="price_desc">Сначала дороже</option>
+      </select>
+    </label>
+
+    <div class="filter-actions">
+      <button id="resetCatalogFilters" class="outline" type="button">Сбросить</button>
+      <button class="primary" type="submit">Показать товары</button>
+    </div>
   </form>
   <div id="searchStatus" class="search-status" aria-live="polite"></div>
 
@@ -298,7 +362,8 @@
         id="adSpecifications"
         maxlength="2000"
         placeholder="Каждая характеристика с новой строки:
-Бренд: Samsung
+Марка / бренд: Samsung
+Модель: Galaxy S24
 Память: 256 ГБ"
       ></textarea>
       <p class="field-hint">До 20 характеристик в формате «Название: значение».</p>
@@ -409,10 +474,13 @@
     </section>
 
     <section id="profile" class="page">
-      <div class="profile-card">
+      <div class="profile-card extended-profile-card">
         <div class="avatar">?</div>
         <h3 id="profileName">Пользователь</h3>
         <p id="profileUsername">Telegram</p>
+        <p id="profileDescription" class="profile-description muted">Добавьте описание профиля</p>
+        <div id="profileContacts" class="profile-contact-list"></div>
+        <button id="editProfileButton" class="outline profile-edit-button" type="button">✏️ Редактировать профиль</button>
       </div>
 
       <button onclick="showPage('myAds')" class="profile-row" type="button">
@@ -443,11 +511,18 @@
 
         <h2 id="sellerProfileName">Продавец</h2>
         <p id="sellerProfileUsername"></p>
+        <p id="sellerProfileDescription" class="seller-profile-description" hidden></p>
+        <div id="sellerProfileContacts" class="seller-contact-list"></div>
+        <button id="sellerMessageButton" class="primary seller-message-button" type="button">💬 Написать продавцу</button>
 
         <div class="seller-stats">
           <div>
-            <b id="sellerProfileCount">📦 0 объявлений</b>
-            <small>Товары</small>
+            <b id="sellerProfileCount">📦 0</b>
+            <small>Активные</small>
+          </div>
+          <div>
+            <b id="sellerSoldCount">✓ 0</b>
+            <small>Продано</small>
           </div>
           <div>
             <b id="sellerStatus">⚪</b>
@@ -456,8 +531,13 @@
         </div>
       </div>
 
-      <h3>Товары продавца</h3>
+      <h3>Активные товары</h3>
       <div id="sellerProducts" class="product-list"></div>
+
+      <section id="sellerSoldSection" class="seller-sold-section" hidden>
+        <h3>Проданные товары</h3>
+        <div id="sellerSoldProducts" class="seller-sold-products"></div>
+      </section>
     </section>
 
     <nav class="bottom-nav">
@@ -590,6 +670,40 @@
     </form>
   </dialog>
 
+  <dialog id="profileEditDialog" class="profile-edit-dialog">
+    <form method="dialog" onsubmit="saveProfile(event)">
+      <div class="dialog-heading">
+        <div>
+          <small>Публичный профиль</small>
+          <h3>Контакты продавца</h3>
+        </div>
+        <button type="button" class="dialog-close" onclick="closeProfileEditor()" aria-label="Закрыть">×</button>
+      </div>
+
+      <label for="profileEditDescription">О себе</label>
+      <textarea id="profileEditDescription" maxlength="600" placeholder="Расскажите, что вы продаёте и как обычно передаёте товары"></textarea>
+
+      <label for="profileEditCity">Город</label>
+      <input id="profileEditCity" maxlength="80" list="profileCityOptions" placeholder="Например, Владикавказ" />
+      <datalist id="profileCityOptions">
+        <option value="Владикавказ"></option><option value="Беслан"></option><option value="Алагир"></option>
+        <option value="Ардон"></option><option value="Дигора"></option><option value="Моздок"></option><option value="Чикола"></option>
+      </datalist>
+
+      <label for="profileEditPhone">Телефон</label>
+      <input id="profileEditPhone" maxlength="30" inputmode="tel" placeholder="+7 999 000-00-00" />
+
+      <label for="profileEditUsername">Telegram для связи</label>
+      <input id="profileEditUsername" maxlength="33" placeholder="username без @" autocomplete="off" />
+      <p class="muted profile-edit-hint">По кнопке «Написать» покупатель сразу перейдёт в этот Telegram-чат.</p>
+
+      <div class="dialog-actions">
+        <button type="button" class="outline" onclick="closeProfileEditor()">Отмена</button>
+        <button id="saveProfileButton" type="submit" class="primary">Сохранить</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="reportDialog" class="report-dialog">
     <form method="dialog" onsubmit="submitProductReport(event)">
       <div class="dialog-heading">
@@ -626,6 +740,6 @@
 
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">‹</div>
 
-  <script src="script.js?v=1.12.8"></script>
+  <script src="script.js?v=1.12.9"></script>
 </body>
 </html>

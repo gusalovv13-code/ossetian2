@@ -14,7 +14,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.12.8";
+const APP_VERSION = "1.12.9";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -474,17 +474,25 @@ function getTelegramDisplayName(user) {
 function mapPublicUser(row) {
   const firstName = row.first_name || "";
   const lastName = row.last_name || "";
+  const username = row.username || row.owner_username || "";
+  const contactUsername = row.contact_username || username;
 
   return {
     id: String(row.telegram_id || row.owner_id || ""),
-    username: row.username || row.owner_username || "",
+    username,
+    contactUsername,
     firstName,
     lastName,
     displayName:
       `${firstName} ${lastName}`.trim() || row.owner_name || "Продавец",
     avatar: row.avatar || "",
+    photoUrl: row.avatar || "",
+    description: row.profile_description || "",
+    city: row.city || "",
+    phone: row.phone || "",
     lastSeen: row.last_seen ? new Date(row.last_seen).getTime() : null,
-    createdAt: row.created_at ? new Date(row.created_at).getTime() : null
+    createdAt: row.created_at ? new Date(row.created_at).getTime() : null,
+    updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : null
   };
 }
 
@@ -781,7 +789,7 @@ async function readRemoteImageBuffer(source) {
     for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
       response = await fetch(currentUrl, {
         signal: controller.signal,
-        headers: { "User-Agent": "OssetianMarket/1.12.8" },
+        headers: { "User-Agent": "OssetianMarket/1.12.9" },
         redirect: "manual"
       });
 
@@ -1160,6 +1168,12 @@ async function initDb() {
     ALTER TABLE users
     ADD COLUMN IF NOT EXISTS banned BOOLEAN DEFAULT FALSE;
   `);
+
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_description TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS city TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_username TEXT DEFAULT '';`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
 
   await pool.query(`
     ALTER TABLE products
@@ -1540,6 +1554,17 @@ async function initDb() {
   `);
 
   await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_products_price_filters
+    ON products (price_amount, created_at DESC)
+    WHERE status = 'active' AND hidden = FALSE AND moderation_status = 'approved';
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_products_owner_status_history
+    ON products (owner_id, status, sold_at DESC, created_at DESC);
+  `);
+
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_products_moderation_status
     ON products (moderation_status, created_at DESC);
   `);
@@ -1593,7 +1618,7 @@ app.get("/api/version", (req, res) => {
     ok: true,
     version: APP_VERSION,
     catalogOrderFix: true,
-    build: "sold-history-and-free-pan"
+    build: "advanced-search-and-seller-profiles"
   });
 });
 
@@ -1882,11 +1907,69 @@ async function syncTelegramUser(req, res, next) {
   next();
 }
 
-app.get("/api/me", requireTelegramAuth, syncTelegramUser, (req, res) => {
-  res.json({
-    ok: true,
-    user: req.telegramUser
-  });
+app.get("/api/me", requireTelegramAuth, syncTelegramUser, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT telegram_id, username, first_name, last_name, avatar, profile_description,
+              city, phone, contact_username, last_seen, created_at, updated_at
+       FROM users WHERE telegram_id = $1 LIMIT 1`,
+      [String(req.telegramUser.id)]
+    );
+
+    const profile = result.rows[0] ? mapPublicUser(result.rows[0]) : {};
+    res.json({
+      ok: true,
+      user: {
+        ...req.telegramUser,
+        ...profile,
+        photoUrl: profile.photoUrl || req.telegramUser.photoUrl || ""
+      }
+    });
+  } catch (error) {
+    console.error("Get own profile error:", error);
+    res.status(500).json({ ok: false, error: "Не удалось получить профиль" });
+  }
+});
+
+app.patch("/api/me/profile", requireTelegramAuth, syncTelegramUser, async (req, res) => {
+  try {
+    const description = normalizeText(req.body?.description, 600);
+    const city = normalizeText(req.body?.city, 80);
+    const phone = normalizeText(req.body?.phone, 30);
+    const contactUsername = normalizeText(req.body?.contactUsername, 40).replace(/^@/, "");
+
+    if (contactUsername && !/^[A-Za-z0-9_]{5,32}$/.test(contactUsername)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Telegram username должен содержать 5–32 латинских символа, цифры или подчёркивания"
+      });
+    }
+
+    if (phone && !/^[+0-9()\s.-]{5,30}$/.test(phone)) {
+      return res.status(400).json({ ok: false, error: "Проверьте формат телефона" });
+    }
+
+    const result = await pool.query(
+      `UPDATE users
+       SET profile_description = $2, city = $3, phone = $4, contact_username = $5, updated_at = NOW()
+       WHERE telegram_id = $1
+       RETURNING telegram_id, username, first_name, last_name, avatar, profile_description,
+                 city, phone, contact_username, last_seen, created_at, updated_at`,
+      [String(req.telegramUser.id), description, city, phone, contactUsername]
+    );
+
+    const preferredUsername = contactUsername || result.rows[0]?.username || req.telegramUser.username || "";
+    await pool.query(
+      `UPDATE products SET owner_username = $2, updated_at = NOW()
+       WHERE owner_id = $1 AND COALESCE(status, 'active') NOT IN ('deleted', 'sold')`,
+      [String(req.telegramUser.id), preferredUsername]
+    );
+
+    res.json({ ok: true, user: mapPublicUser(result.rows[0]) });
+  } catch (error) {
+    console.error("Update own profile error:", error);
+    res.status(500).json({ ok: false, error: "Не удалось сохранить профиль" });
+  }
 });
 
 app.get("/api/avatar", requireTelegramAuth, syncTelegramUser, async (req, res) => {
@@ -1957,7 +2040,8 @@ app.get("/api/users/:id", async (req, res) => {
 
     const userResult = await pool.query(
       `
-        SELECT telegram_id, username, first_name, last_name, avatar, last_seen, created_at
+        SELECT telegram_id, username, first_name, last_name, avatar, profile_description,
+               city, phone, contact_username, last_seen, created_at, updated_at
         FROM users
         WHERE telegram_id = $1
         LIMIT 1;
@@ -2015,7 +2099,7 @@ app.get("/api/users/:id/products", async (req, res) => {
       return res.status(400).json({ ok: false, error: "Некорректный ID продавца" });
     }
 
-    const result = await pool.query(
+    const activeResult = await pool.query(
       `
         SELECT ${PRODUCT_SUMMARY_COLUMNS}
         FROM products p
@@ -2029,8 +2113,24 @@ app.get("/api/users/:id/products", async (req, res) => {
       [userId]
     );
 
+    const soldResult = await pool.query(
+      `
+        SELECT ${PRODUCT_SUMMARY_COLUMNS}
+        FROM products p
+        WHERE p.owner_id = $1
+          AND COALESCE(p.status, 'active') = 'sold'
+        ORDER BY COALESCE(p.sold_at, p.updated_at, p.created_at) DESC
+        LIMIT 30;
+      `,
+      [userId]
+    );
+
     res.setHeader("Cache-Control", "public, max-age=15, stale-while-revalidate=30");
-    res.json({ ok: true, products: result.rows.map(mapProductSummary) });
+    res.json({
+      ok: true,
+      products: activeResult.rows.map(mapProductSummary),
+      soldProducts: soldResult.rows.map(mapProductSummary)
+    });
   } catch (error) {
     console.error("Get seller products error:", error);
     res.status(500).json({ ok: false, error: "Не удалось получить товары продавца" });
@@ -2210,6 +2310,20 @@ app.get("/api/products", async (req, res) => {
     const search = normalizeText(req.query.q, 100);
     const requestedCategory = normalizeText(req.query.category, 60);
     const category = PRODUCT_CATEGORIES.has(requestedCategory) ? requestedCategory : "";
+    const city = normalizeText(req.query.city, 80);
+    const district = normalizeText(req.query.district, 80);
+    const brand = normalizeText(req.query.brand, 80);
+    const model = normalizeText(req.query.model, 80);
+    const minPrice = Math.max(0, Number(String(req.query.minPrice || "").replace(/[^0-9]/g, "")) || 0);
+    const maxPrice = Math.max(0, Number(String(req.query.maxPrice || "").replace(/[^0-9]/g, "")) || 0);
+    const requestedSort = normalizeText(req.query.sort, 20);
+    const sort = ["newest", "price_asc", "price_desc"].includes(requestedSort)
+      ? requestedSort
+      : "newest";
+
+    if (minPrice && maxPrice && minPrice > maxPrice) {
+      return res.status(400).json({ ok: false, error: "Минимальная цена не может быть выше максимальной" });
+    }
 
     const conditions = [
       "COALESCE(p.status, 'active') = $1",
@@ -2242,8 +2356,9 @@ app.get("/api/products", async (req, res) => {
       values.push(search.toLowerCase());
       const fullSearchParameter = `$${values.length}`;
       relevanceSql = `CASE
-        WHEN LOWER(COALESCE(p.name, '')) = ${fullSearchParameter} THEN 4
-        WHEN LOWER(COALESCE(p.name, '')) LIKE '%' || ${fullSearchParameter} || '%' THEN 3
+        WHEN LOWER(COALESCE(p.name, '')) = ${fullSearchParameter} THEN 6
+        WHEN LOWER(COALESCE(p.name, '')) LIKE '%' || ${fullSearchParameter} || '%' THEN 5
+        WHEN LOWER(COALESCE(p.specifications::text, '')) LIKE '%' || ${fullSearchParameter} || '%' THEN 4
         WHEN LOWER(COALESCE(p.category, '')) LIKE '%' || ${fullSearchParameter} || '%' THEN 2
         WHEN LOWER(COALESCE(p.description, '')) LIKE '%' || ${fullSearchParameter} || '%' THEN 1
         ELSE 0
@@ -2255,12 +2370,50 @@ app.get("/api/products", async (req, res) => {
       conditions.push(`p.category = $${values.length}`);
     }
 
+    if (city) {
+      values.push(city.toLowerCase());
+      conditions.push(`LOWER(COALESCE(p.location, '')) = $${values.length}`);
+    }
+
+    if (district) {
+      values.push(`%${district.toLowerCase()}%`);
+      conditions.push(`LOWER(COALESCE(p.district, '')) LIKE $${values.length}`);
+    }
+
+    const addVehicleOrDeviceFilter = value => {
+      if (!value) return;
+      values.push(`%${value.toLowerCase()}%`);
+      const parameter = `$${values.length}`;
+      conditions.push(`(
+        LOWER(COALESCE(p.name, '')) LIKE ${parameter}
+        OR LOWER(COALESCE(p.description, '')) LIKE ${parameter}
+        OR LOWER(COALESCE(p.specifications::text, '')) LIKE ${parameter}
+      )`);
+    };
+    addVehicleOrDeviceFilter(brand);
+    addVehicleOrDeviceFilter(model);
+
+    if (minPrice) {
+      values.push(minPrice);
+      conditions.push(`COALESCE(p.price_amount, 0) >= $${values.length}`);
+    }
+    if (maxPrice) {
+      values.push(maxPrice);
+      conditions.push(`COALESCE(p.price_amount, 0) <= $${values.length}`);
+    }
+
     const whereSql = conditions.join(" AND ");
     const orderBySql = [
       ...(relevanceSql ? [`${relevanceSql} DESC`] : []),
       "p.created_at DESC",
       "p.id DESC"
     ].join(",\n          ");
+    const selectedOrderBySql = sort === "price_asc"
+      ? "COALESCE(p.price_amount, 9223372036854775807) ASC, p.created_at DESC"
+      : sort === "price_desc"
+        ? "COALESCE(p.price_amount, 0) DESC, p.created_at DESC"
+        : orderBySql;
+
     const queryValues = [...values, limit + 1, offset];
     const result = await pool.query(
       `
@@ -2268,7 +2421,7 @@ app.get("/api/products", async (req, res) => {
         FROM products p
         WHERE ${whereSql}
         ORDER BY
-          ${orderBySql}
+          ${selectedOrderBySql}
         LIMIT $${values.length + 1}
         OFFSET $${values.length + 2};
       `,
@@ -2281,6 +2434,7 @@ app.get("/api/products", async (req, res) => {
     res.json({
       ok: true,
       products: visibleRows.map(mapProductSummary),
+      filters: { search, category, city, district, brand, model, minPrice, maxPrice, sort },
       pagination: {
         page,
         limit,

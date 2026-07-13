@@ -156,6 +156,15 @@ const state = {
   history: [],
   search: "",
   category: "Все",
+  filters: {
+    minPrice: "",
+    maxPrice: "",
+    city: "",
+    district: "",
+    brand: "",
+    model: "",
+    sort: "newest"
+  },
   openedProductId: null,
   telegramUser: null,
   products: [],
@@ -166,6 +175,8 @@ const state = {
   productsLoadError: "",
   myProducts: [],
   sellerProducts: [],
+  sellerSoldProducts: [],
+  openedSeller: null,
   favoriteProducts: [],
   favorites: [],
   myProductsLoadedAt: 0,
@@ -380,11 +391,34 @@ function renderProductDetailAds() {
   root.innerHTML = ads.map(ad => renderAdCard(ad, "detail")).join("");
 }
 
+function getActiveCatalogFilterCount() {
+  const filters = state.filters || {};
+  return [filters.minPrice, filters.maxPrice, filters.city, filters.district, filters.brand, filters.model]
+    .filter(value => String(value || "").trim()).length + (filters.sort && filters.sort !== "newest" ? 1 : 0);
+}
+
+function updateCatalogFilterBadge() {
+  const count = getActiveCatalogFilterCount();
+  const badge = document.getElementById("catalogFilterCount");
+  const toggle = document.getElementById("catalogFiltersToggle");
+  if (badge) {
+    badge.hidden = count === 0;
+    badge.textContent = String(count);
+  }
+  toggle?.classList.toggle("has-filters", count > 0);
+}
+
 function updateSearchStatus() {
   const root = document.getElementById("searchStatus");
   if (!root) return;
 
-  if (state.productsLoading && state.search.trim()) {
+  const hasCriteria = Boolean(
+    state.search.trim() ||
+    state.category !== "Все" ||
+    getActiveCatalogFilterCount() > 0
+  );
+
+  if (state.productsLoading && hasCriteria) {
     root.textContent = "Ищем объявления…";
     root.className = "search-status is-loading";
     return;
@@ -396,7 +430,7 @@ function updateSearchStatus() {
     return;
   }
 
-  if (state.search.trim() && !state.productsLoading) {
+  if (hasCriteria && !state.productsLoading) {
     root.textContent = `Найдено: ${state.products.length}`;
     root.className = "search-status";
     return;
@@ -407,8 +441,82 @@ function updateSearchStatus() {
 }
 
 function getProductsCacheKey() {
-  return `${state.search.trim().toLowerCase()}|${state.category}`;
+  const filters = state.filters || {};
+  return [
+    state.search.trim().toLowerCase(),
+    state.category,
+    filters.minPrice,
+    filters.maxPrice,
+    String(filters.city || "").toLowerCase(),
+    String(filters.district || "").toLowerCase(),
+    String(filters.brand || "").toLowerCase(),
+    String(filters.model || "").toLowerCase(),
+    filters.sort || "newest"
+  ].join("|");
 }
+
+function syncCatalogFiltersUI() {
+  const filters = state.filters || {};
+  const values = {
+    filterMinPrice: filters.minPrice,
+    filterMaxPrice: filters.maxPrice,
+    filterCity: filters.city,
+    filterDistrict: filters.district,
+    filterBrand: filters.brand,
+    filterModel: filters.model,
+    filterSort: filters.sort || "newest"
+  };
+  Object.entries(values).forEach(([id, value]) => {
+    const element = document.getElementById(id);
+    if (element) element.value = value || "";
+  });
+  updateCatalogFilterBadge();
+}
+
+function toggleCatalogFilters(forceOpen) {
+  const panel = document.getElementById("catalogFilters");
+  const toggle = document.getElementById("catalogFiltersToggle");
+  if (!panel) return;
+  const shouldOpen = typeof forceOpen === "boolean" ? forceOpen : panel.hidden;
+  panel.hidden = !shouldOpen;
+  toggle?.setAttribute("aria-expanded", String(shouldOpen));
+  if (shouldOpen) syncCatalogFiltersUI();
+}
+
+function applyCatalogFiltersFromUI() {
+  const value = id => document.getElementById(id)?.value.trim() || "";
+  const minPrice = value("filterMinPrice").replace(/[^0-9]/g, "");
+  const maxPrice = value("filterMaxPrice").replace(/[^0-9]/g, "");
+
+  if (minPrice && maxPrice && Number(minPrice) > Number(maxPrice)) {
+    alert("Минимальная цена не может быть выше максимальной");
+    return false;
+  }
+
+  state.filters = {
+    minPrice,
+    maxPrice,
+    city: value("filterCity"),
+    district: value("filterDistrict"),
+    brand: value("filterBrand"),
+    model: value("filterModel"),
+    sort: value("filterSort") || "newest"
+  };
+  state.productsLoadError = "";
+  state.catalogPagination = { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE, hasMore: true };
+  updateCatalogFilterBadge();
+  toggleCatalogFilters(false);
+  loadProducts({ force: true });
+  return true;
+}
+
+function resetCatalogFilters() {
+  state.filters = { minPrice: "", maxPrice: "", city: "", district: "", brand: "", model: "", sort: "newest" };
+  syncCatalogFiltersUI();
+  state.catalogPagination = { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE, hasMore: true };
+  loadProducts({ force: true });
+}
+
 
 function isFresh(timestamp, ttl = DATA_CACHE_TTL_MS) {
   return Number(timestamp) > 0 && Date.now() - Number(timestamp) < ttl;
@@ -446,6 +554,14 @@ async function loadProducts({ force = false, append = false } = {}) {
 
   if (state.search.trim()) params.set("q", state.search.trim());
   if (state.category !== "Все") params.set("category", state.category);
+  const filters = state.filters || {};
+  if (filters.minPrice) params.set("minPrice", filters.minPrice);
+  if (filters.maxPrice) params.set("maxPrice", filters.maxPrice);
+  if (filters.city) params.set("city", filters.city);
+  if (filters.district) params.set("district", filters.district);
+  if (filters.brand) params.set("brand", filters.brand);
+  if (filters.model) params.set("model", filters.model);
+  if (filters.sort && filters.sort !== "newest") params.set("sort", filters.sort);
 
   try {
     const data = await apiRequest(`/api/products?${params.toString()}`, {
@@ -666,6 +782,12 @@ function goBack() {
   const lightbox = document.getElementById("photoLightbox");
   if (lightbox && !lightbox.hidden) {
     closePhotoLightbox();
+    return;
+  }
+
+  const profileEditDialog = document.getElementById("profileEditDialog");
+  if (profileEditDialog?.open) {
+    closeProfileEditor();
     return;
   }
 
@@ -2954,6 +3076,20 @@ function initEvents() {
     loadProducts({ force: true });
   });
 
+  document.getElementById("catalogFiltersToggle")?.addEventListener("click", () => toggleCatalogFilters());
+  document.getElementById("catalogFilters")?.addEventListener("submit", event => {
+    event.preventDefault();
+    hideKeyboard();
+    applyCatalogFiltersFromUI();
+  });
+  document.getElementById("resetCatalogFilters")?.addEventListener("click", resetCatalogFilters);
+  document.getElementById("editProfileButton")?.addEventListener("click", openProfileEditor);
+  ["filterMinPrice", "filterMaxPrice"].forEach(id => {
+    document.getElementById(id)?.addEventListener("input", event => {
+      event.target.value = event.target.value.replace(/[^0-9]/g, "").slice(0, 10);
+    });
+  });
+
   const addPhotoBtn = document.getElementById("addPhotoBtn");
   const photoInput = document.getElementById("photoInput");
 
@@ -3386,12 +3522,17 @@ async function initTelegramUser() {
       firstName,
       lastName,
       username,
-      photoUrl: user.photoUrl || ""
+      contactUsername: user.contactUsername || username,
+      description: user.description || "",
+      city: user.city || "",
+      phone: user.phone || "",
+      photoUrl: user.photoUrl || user.avatar || ""
     };
 
     if (avatar) avatar.innerText = firstName[0]?.toUpperCase() || "?";
     if (name) name.innerText = fullName;
     if (nick) nick.innerText = username ? `@${username}` : "без username";
+    renderOwnProfileDetails();
 
     loadTelegramAvatar(firstName, fullName);
     return true;
@@ -3441,6 +3582,86 @@ async function loadTelegramAvatar(firstName, fullName) {
   }
 }
 
+function renderOwnProfileDetails() {
+  const user = state.telegramUser || {};
+  const description = document.getElementById("profileDescription");
+  const contacts = document.getElementById("profileContacts");
+
+  if (description) {
+    description.textContent = user.description || "Добавьте описание профиля";
+    description.classList.toggle("muted", !user.description);
+  }
+
+  if (contacts) {
+    const rows = [];
+    if (user.city) rows.push(`<span>📍 ${escapeHTML(user.city)}</span>`);
+    if (user.phone) rows.push(`<a href="tel:${escapeHTML(normalizePhoneForTel(user.phone))}">📞 ${escapeHTML(user.phone)}</a>`);
+    const contactUsername = user.contactUsername || user.username || "";
+    if (contactUsername) rows.push(`<span>✈️ @${escapeHTML(contactUsername)}</span>`);
+    contacts.innerHTML = rows.join("");
+    contacts.hidden = rows.length === 0;
+  }
+}
+
+function openProfileEditor() {
+  if (!state.telegramUser?.id) {
+    alert("Откройте приложение через Telegram, чтобы изменить профиль");
+    return;
+  }
+
+  const dialog = document.getElementById("profileEditDialog");
+  if (!dialog) return;
+  document.getElementById("profileEditDescription").value = state.telegramUser.description || "";
+  document.getElementById("profileEditCity").value = state.telegramUser.city || "";
+  document.getElementById("profileEditPhone").value = state.telegramUser.phone || "";
+  document.getElementById("profileEditUsername").value = state.telegramUser.contactUsername || state.telegramUser.username || "";
+  if (typeof dialog.showModal === "function") dialog.showModal();
+  else dialog.setAttribute("open", "");
+}
+
+function closeProfileEditor() {
+  const dialog = document.getElementById("profileEditDialog");
+  if (!dialog) return;
+  if (typeof dialog.close === "function") dialog.close();
+  else dialog.removeAttribute("open");
+}
+
+async function saveProfile(event) {
+  event?.preventDefault();
+  const button = document.getElementById("saveProfileButton");
+  if (button?.disabled) return;
+
+  const payload = {
+    description: document.getElementById("profileEditDescription")?.value.trim() || "",
+    city: document.getElementById("profileEditCity")?.value.trim() || "",
+    phone: document.getElementById("profileEditPhone")?.value.trim() || "",
+    contactUsername: document.getElementById("profileEditUsername")?.value.trim().replace(/^@/, "") || ""
+  };
+
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Сохраняем…";
+  }
+
+  try {
+    const data = await apiRequest("/api/me/profile", {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    });
+    state.telegramUser = { ...state.telegramUser, ...(data.user || {}) };
+    renderOwnProfileDetails();
+    closeProfileEditor();
+  } catch (error) {
+    console.error("Save profile error:", error);
+    alert(error.message || "Не удалось сохранить профиль");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Сохранить";
+    }
+  }
+}
+
 /* =======================
    INIT
 ======================= */
@@ -3451,6 +3672,7 @@ async function initApp() {
   initSwipeBack();
   initKeyboardAutoHide();
   initEvents();
+  syncCatalogFiltersUI();
   const adsPromise = loadAds();
   const configPromise = loadConfig();
   await initTelegramUser();
@@ -3475,30 +3697,66 @@ async function initApp() {
   }
 }
 
-async function openSellerProfile(userId) {
-  const sellerName = document.getElementById("sellerProfileName");
-  const sellerUsername = document.getElementById("sellerProfileUsername");
-  const sellerCount = document.getElementById("sellerProfileCount");
-  const sellerProducts = document.getElementById("sellerProducts");
-  const sellerAvatar = document.getElementById("sellerAvatar");
-  const sellerStatus = document.getElementById("sellerStatus");
-  const sellerStatusLabel = document.getElementById("sellerStatusLabel");
-
-  showPage("sellerProfile");
-
-  if (!sellerProducts || !sellerName || !sellerUsername || !sellerCount || !sellerAvatar) {
+function openTelegramSellerChat(user) {
+  const seller = user || state.openedSeller || {};
+  const sellerId = String(seller.id || "");
+  if (sellerId && sellerId === String(state.telegramUser?.id || "")) {
+    alert("Это ваш профиль");
     return;
   }
 
+  const username = String(seller.contactUsername || seller.username || "").replace(/^@/, "");
+  const message = "Здравствуйте! Пишу вам из Алания Маркет.";
+  if (username) {
+    const url = `https://t.me/${encodeURIComponent(username)}?text=${encodeURIComponent(message)}`;
+    if (tg?.openTelegramLink) tg.openTelegramLink(url);
+    else window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+
+  if (sellerId) {
+    window.location.href = `tg://user?id=${encodeURIComponent(sellerId)}`;
+    return;
+  }
+
+  alert("Продавец не указал Telegram для связи");
+}
+
+async function openSellerProfile(userId) {
+  const sellerName = document.getElementById("sellerProfileName");
+  const sellerUsername = document.getElementById("sellerProfileUsername");
+  const sellerDescription = document.getElementById("sellerProfileDescription");
+  const sellerContacts = document.getElementById("sellerProfileContacts");
+  const sellerCount = document.getElementById("sellerProfileCount");
+  const sellerSoldCount = document.getElementById("sellerSoldCount");
+  const sellerProducts = document.getElementById("sellerProducts");
+  const sellerSoldProducts = document.getElementById("sellerSoldProducts");
+  const sellerSoldSection = document.getElementById("sellerSoldSection");
+  const sellerAvatar = document.getElementById("sellerAvatar");
+  const sellerStatus = document.getElementById("sellerStatus");
+  const sellerStatusLabel = document.getElementById("sellerStatusLabel");
+  const messageButton = document.getElementById("sellerMessageButton");
+
+  showPage("sellerProfile");
+
+  if (!sellerProducts || !sellerName || !sellerUsername || !sellerCount || !sellerAvatar) return;
+
   sellerName.textContent = "Продавец";
   sellerUsername.textContent = "";
-  sellerCount.textContent = "📦 Загрузка...";
+  if (sellerDescription) sellerDescription.hidden = true;
+  if (sellerContacts) sellerContacts.innerHTML = "";
+  sellerCount.textContent = "📦 …";
+  if (sellerSoldCount) sellerSoldCount.textContent = "✓ …";
   sellerAvatar.replaceChildren();
   sellerAvatar.textContent = "👤";
   sellerProducts.innerHTML = '<div class="empty-state">Загрузка объявлений...</div>';
+  if (sellerSoldProducts) sellerSoldProducts.innerHTML = "";
+  if (sellerSoldSection) sellerSoldSection.hidden = true;
+  if (messageButton) messageButton.disabled = true;
 
   if (!userId) {
-    sellerCount.textContent = "📦 0 объявлений";
+    sellerCount.textContent = "📦 0";
+    if (sellerSoldCount) sellerSoldCount.textContent = "✓ 0";
     sellerProducts.innerHTML = '<div class="empty-state">Ошибка: продавец не найден</div>';
     return;
   }
@@ -3510,35 +3768,40 @@ async function openSellerProfile(userId) {
     ]);
 
     const user = profileData.user || {};
-    const products = Array.isArray(productsData.products)
-      ? productsData.products
-      : [];
+    const products = Array.isArray(productsData.products) ? productsData.products : [];
+    const soldProducts = Array.isArray(productsData.soldProducts) ? productsData.soldProducts : [];
 
     state.sellerProducts = products;
+    state.sellerSoldProducts = soldProducts;
+    state.openedSeller = user;
 
-    // Обновляем общий кэш, чтобы карточка товара открывалась прямо из профиля.
     for (const product of products) {
       const index = state.products.findIndex(item => item.id === product.id);
-      if (index >= 0) {
-        state.products[index] = product;
-      } else {
-        state.products.push(product);
-      }
+      if (index >= 0) state.products[index] = product;
+      else state.products.push(product);
     }
 
-    const fallbackSeller = products[0] || {};
-    const displayName =
-      user.displayName ||
-      `${user.firstName || ""} ${user.lastName || ""}`.trim() ||
-      fallbackSeller.ownerName ||
-      "Продавец";
-    const username = user.username || fallbackSeller.ownerUsername || "";
+    const fallbackSeller = products[0] || soldProducts[0] || {};
+    const displayName = user.displayName || `${user.firstName || ""} ${user.lastName || ""}`.trim() || fallbackSeller.ownerName || "Продавец";
+    const username = user.contactUsername || user.username || fallbackSeller.ownerUsername || "";
 
     sellerName.textContent = displayName;
-    sellerUsername.textContent = username ? `@${username}` : "Telegram";
-    sellerCount.textContent = `📦 ${products.length} ${
-      products.length === 1 ? "объявление" : "объявлений"
-    }`;
+    sellerUsername.textContent = username ? `@${username}` : "Telegram не указан";
+    sellerCount.textContent = `📦 ${products.length}`;
+    if (sellerSoldCount) sellerSoldCount.textContent = `✓ ${soldProducts.length}`;
+
+    if (sellerDescription) {
+      sellerDescription.hidden = !user.description;
+      sellerDescription.textContent = user.description || "";
+    }
+
+    if (sellerContacts) {
+      const contactRows = [];
+      if (user.city) contactRows.push(`<span>📍 ${escapeHTML(user.city)}</span>`);
+      if (user.phone) contactRows.push(`<a href="tel:${escapeHTML(normalizePhoneForTel(user.phone))}">📞 ${escapeHTML(user.phone)}</a>`);
+      if (username) contactRows.push(`<span>✈️ @${escapeHTML(username)}</span>`);
+      sellerContacts.innerHTML = contactRows.join("");
+    }
 
     const status = getSellerStatus(user.lastSeen);
     if (sellerStatus) sellerStatus.textContent = status.icon;
@@ -3554,45 +3817,66 @@ async function openSellerProfile(userId) {
       sellerAvatar.textContent = displayName[0]?.toUpperCase() || "👤";
     }
 
-    if (products.length === 0) {
-      sellerProducts.innerHTML = `
-        <div class="empty-state">
-          <h3>У продавца пока нет объявлений</h3>
-          <p class="muted">Здесь появятся его новые товары.</p>
-        </div>
-      `;
-      return;
+    if (messageButton) {
+      const isOwnProfile = String(user.id || userId) === String(state.telegramUser?.id || "");
+      messageButton.disabled = isOwnProfile || (!username && !user.id);
+      messageButton.textContent = isOwnProfile ? "Это ваш профиль" : "💬 Написать продавцу";
+      messageButton.onclick = () => openTelegramSellerChat(user);
     }
 
-    sellerProducts.innerHTML = products
-      .map(product => {
+    if (products.length === 0) {
+      sellerProducts.innerHTML = `
+        <div class="empty-state compact-empty-state">
+          <h3>Нет активных объявлений</h3>
+          <p class="muted">Новые товары появятся здесь.</p>
+        </div>`;
+    } else {
+      sellerProducts.innerHTML = products.map(product => {
         const productId = escapeHTML(product.id || "");
         const image = escapeHTML(safeImageUrl(getProductImages(product)[0]));
         const name = escapeHTML(product.name || "Без названия");
         const price = escapeHTML(formatPrice(product.price) || product.price || "Цена не указана");
-        const location = escapeHTML(product.location || "Владикавказ");
-
+        const location = escapeHTML([product.location || "Владикавказ", product.district].filter(Boolean).join(", "));
         return `
-          <div class="seller-product-card" onclick="openProduct('${productId}')">
+          <button class="seller-product-card" type="button" onclick="openProduct('${productId}')">
             <img src="${image}" class="seller-product-image" alt="${name}" loading="lazy" decoding="async" onerror="handleImageError(this)">
-            <div class="seller-product-info">
-              <div class="seller-product-name">${name}</div>
-              <div class="seller-product-price">${price}</div>
-              <div class="seller-product-city">📍 ${location}</div>
-            </div>
-          </div>
-        `;
-      })
-      .join("");
+            <span class="seller-product-info">
+              <span class="seller-product-name">${name}</span>
+              <span class="seller-product-price">${price}</span>
+              <span class="seller-product-city">📍 ${location}</span>
+            </span>
+          </button>`;
+      }).join("");
+    }
+
+    if (sellerSoldSection && sellerSoldProducts) {
+      sellerSoldSection.hidden = soldProducts.length === 0;
+      sellerSoldProducts.innerHTML = soldProducts.map(product => {
+        const name = escapeHTML(product.name || "Проданный товар");
+        const price = escapeHTML(formatPrice(product.price) || product.price || "Цена не указана");
+        const city = escapeHTML(product.location || "Город не указан");
+        const date = escapeHTML(formatProductDate(product.soldAt || product.updatedAt || product.createdAt));
+        return `
+          <div class="seller-sold-card" aria-disabled="true">
+            <span class="seller-sold-icon">✓</span>
+            <span>
+              <b>${name}</b>
+              <small>${price} · ${city}</small>
+              <em>Продано ${date}</em>
+            </span>
+          </div>`;
+      }).join("");
+    }
   } catch (error) {
     console.error("Seller profile error:", error);
-    sellerCount.textContent = "📦 0 объявлений";
+    state.openedSeller = null;
+    sellerCount.textContent = "📦 0";
+    if (sellerSoldCount) sellerSoldCount.textContent = "✓ 0";
     sellerProducts.innerHTML = `
       <div class="empty-state">
         <h3>Не удалось открыть профиль</h3>
         <p class="muted">${escapeHTML(error.message || "Попробуйте ещё раз")}</p>
-      </div>
-    `;
+      </div>`;
   }
 }
 
