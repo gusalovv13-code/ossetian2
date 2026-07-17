@@ -90,6 +90,50 @@ function getSellerStatus(lastSeen) {
   return { icon: "🕘", label: getTimeAgo(Number(lastSeen)) };
 }
 
+
+function normalizeSellerTrust(value = {}) {
+  return {
+    ratingAverage: Math.max(0, Math.min(5, Number(value.ratingAverage) || 0)),
+    ratingCount: Math.max(0, Number(value.ratingCount) || 0),
+    activeListings: Math.max(0, Number(value.activeListings) || 0),
+    soldListings: Math.max(0, Number(value.soldListings) || 0),
+    phoneVerified: Boolean(value.phoneVerified),
+    memberSince: Number(value.memberSince) || null,
+    accountAgeDays: Math.max(0, Number(value.accountAgeDays) || 0),
+    score: Math.max(0, Math.min(100, Number(value.score) || 0)),
+    level: String(value.level || "new"),
+    label: String(value.label || "Новый продавец")
+  };
+}
+
+function getSellerTrustMarkup(value, { compact = false } = {}) {
+  const trust = normalizeSellerTrust(value);
+  const ratingText = trust.ratingCount > 0
+    ? `${trust.ratingAverage.toFixed(1)} · ${trust.ratingCount} ${trust.ratingCount === 1 ? "оценка" : "оценок"}`
+    : "Пока без оценок";
+  const memberText = trust.memberSince
+    ? `На маркете с ${new Date(trust.memberSince).toLocaleDateString("ru-RU", { month: "short", year: "numeric" })}`
+    : "Новый профиль";
+  const badges = [
+    trust.phoneVerified ? "✓ Телефон подтверждён" : "",
+    trust.soldListings > 0 ? `✓ Продано: ${trust.soldListings}` : "",
+    trust.accountAgeDays >= 30 ? "✓ Профиль не новый" : ""
+  ].filter(Boolean);
+
+  return `
+    <div class="seller-trust-summary trust-${escapeHTML(trust.level)} ${compact ? "is-compact" : ""}">
+      <div class="seller-trust-score">
+        <strong>${trust.ratingCount > 0 ? `★ ${escapeHTML(trust.ratingAverage.toFixed(1))}` : "☆ —"}</strong>
+        <span><b>${escapeHTML(trust.label)}</b><small>${escapeHTML(ratingText)}</small></span>
+        <em>${trust.score}%</em>
+      </div>
+      ${compact ? "" : `<div class="seller-trust-meter"><i style="width:${trust.score}%"></i></div>`}
+      ${compact ? "" : `<p>${escapeHTML(memberText)}</p>`}
+      ${badges.length ? `<div class="seller-trust-badges">${badges.map(item => `<span>${escapeHTML(item)}</span>`).join("")}</div>` : ""}
+    </div>
+  `;
+}
+
 const DEFAULT_IMAGE = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
   <svg xmlns="http://www.w3.org/2000/svg" width="960" height="720" viewBox="0 0 960 720">
     <rect width="960" height="720" fill="#1f2024"/>
@@ -317,6 +361,10 @@ const state = {
   openedSeller: null,
   favoriteProducts: [],
   favorites: [],
+  savedSearches: [],
+  savedSearchesLoadedAt: 0,
+  sellerReviews: [],
+  sellerTrust: null,
   myProductsLoadedAt: 0,
   myProductsLoading: false,
   favoritesLoadedAt: 0,
@@ -836,8 +884,27 @@ function updateCatalogFilterBadge() {
   toggle?.classList.toggle("has-filters", count > 0);
 }
 
+function hasCurrentSearchCriteria() {
+  return Boolean(
+    state.search.trim() ||
+    state.category !== "Все" ||
+    getActiveCatalogFilterCount() > 0
+  );
+}
+
+function updateSaveSearchButton() {
+  const button = document.getElementById("saveSearchButton");
+  if (!button) return;
+  button.hidden = !hasCurrentSearchCriteria();
+  button.disabled = !state.telegramUser?.id;
+  button.title = state.telegramUser?.id
+    ? "Сохранить текущий запрос и фильтры"
+    : "Откройте приложение через Telegram";
+}
+
 function updateSearchStatus() {
   const root = document.getElementById("searchStatus");
+  updateSaveSearchButton();
   if (!root) return;
 
   const hasCriteria = Boolean(
@@ -1111,12 +1178,14 @@ async function loadFavorites({ force = false } = {}) {
   if (!state.telegramUser?.id) {
     state.favorites = [];
     state.favoriteProducts = [];
+    state.savedSearches = [];
     state.favoritesLoadedAt = Date.now();
+    state.savedSearchesLoadedAt = Date.now();
     renderFavorites();
     return;
   }
 
-  if (!force && isFresh(state.favoritesLoadedAt)) {
+  if (!force && isFresh(state.favoritesLoadedAt) && isFresh(state.savedSearchesLoadedAt)) {
     renderFavorites();
     return;
   }
@@ -1124,12 +1193,17 @@ async function loadFavorites({ force = false } = {}) {
   state.favoritesLoading = true;
   renderFavorites();
   try {
-    const data = await apiRequest("/api/favorites");
-    state.favorites = data.favorites || [];
-    state.favoriteProducts = data.products || [];
+    const [favoritesData, savedSearchesData] = await Promise.all([
+      apiRequest("/api/favorites"),
+      apiRequest("/api/saved-searches", { cache: "no-store" })
+    ]);
+    state.favorites = favoritesData.favorites || [];
+    state.favoriteProducts = favoritesData.products || [];
+    state.savedSearches = savedSearchesData.savedSearches || [];
     state.favoritesLoadedAt = Date.now();
+    state.savedSearchesLoadedAt = Date.now();
   } catch (error) {
-    console.error("Не удалось загрузить избранное:", error);
+    console.error("Не удалось загрузить избранное и сохранённые поиски:", error);
   } finally {
     state.favoritesLoading = false;
     renderFavorites();
@@ -2319,51 +2393,180 @@ function renderMyAds() {
     .join("");
 }
 
+function getSavedSearchSummary(savedSearch) {
+  const filters = savedSearch?.filters || {};
+  const parts = [];
+  if (savedSearch?.search) parts.push(`«${savedSearch.search}»`);
+  if (savedSearch?.category && savedSearch.category !== "Все") parts.push(savedSearch.category);
+  if (filters.city) parts.push(filters.city);
+  if (filters.minPrice || filters.maxPrice) {
+    parts.push(`${filters.minPrice ? `от ${formatPrice(filters.minPrice)}` : ""}${filters.minPrice && filters.maxPrice ? " " : ""}${filters.maxPrice ? `до ${formatPrice(filters.maxPrice)}` : ""}`.trim());
+  }
+  if (filters.itemType) parts.push(filters.itemType);
+  if (filters.brand) parts.push(filters.brand);
+  if (filters.model) parts.push(filters.model);
+  return parts.join(" · ") || "Поиск с фильтрами";
+}
+
+function getSavedSearchesMarkup() {
+  const searches = Array.isArray(state.savedSearches) ? state.savedSearches : [];
+  return `
+    <section class="saved-searches-section">
+      <div class="saved-searches-heading">
+        <div><h3>Сохранённые поиски</h3><small>Быстро повторяйте нужный запрос</small></div>
+        <b>${searches.length}</b>
+      </div>
+      ${searches.length ? `
+        <div class="saved-searches-list">
+          ${searches.map(item => `
+            <article class="saved-search-card">
+              <button type="button" class="saved-search-open" onclick="applySavedSearch('${escapeHTML(item.id || "")}')">
+                <span>🔎</span>
+                <div><b>${escapeHTML(item.name || "Сохранённый поиск")}</b><small>${escapeHTML(getSavedSearchSummary(item))}</small></div>
+                <i aria-hidden="true">›</i>
+              </button>
+              <button type="button" class="saved-search-delete" aria-label="Удалить сохранённый поиск" onclick="deleteSavedSearch('${escapeHTML(item.id || "")}', event)">×</button>
+            </article>
+          `).join("")}
+        </div>
+      ` : `<div class="saved-searches-empty">Задайте запрос в каталоге и нажмите «Сохранить поиск».</div>`}
+    </section>
+  `;
+}
+
 function renderFavorites() {
   const favoritesPage = document.getElementById("favorites");
-
   if (!favoritesPage || state.page !== "favorites") return;
 
-  const favs = state.favoriteProducts.filter(product =>
-    state.favorites.includes(product.id)
-  );
+  const favs = state.favoriteProducts.filter(product => state.favorites.includes(product.id));
 
   if (!state.telegramUser?.id) {
     favoritesPage.innerHTML = `
       <h2>Избранное</h2>
       <div class="empty-state">
         <h3>Откройте через Telegram</h3>
-        <p class="muted">Избранное привязывается к вашему Telegram-профилю.</p>
+        <p class="muted">Избранное и сохранённые поиски привязываются к вашему профилю.</p>
       </div>
     `;
     return;
   }
 
-  if (state.favoritesLoading && state.favoriteProducts.length === 0) {
+  const savedSearchesMarkup = getSavedSearchesMarkup();
+  if (state.favoritesLoading && state.favoriteProducts.length === 0 && state.savedSearches.length === 0) {
     favoritesPage.innerHTML = `
       <h2>Избранное</h2>
+      ${savedSearchesMarkup}
       <div class="product-list">${getCatalogSkeletonMarkup(4)}</div>
-    `;
-    return;
-  }
-
-  if (favs.length === 0) {
-    favoritesPage.innerHTML = `
-      <h2>Избранное</h2>
-      <div class="empty-state">
-        <h3>Пока пусто</h3>
-        <p class="muted">Добавляйте товары в избранное через сердечко.</p>
-      </div>
     `;
     return;
   }
 
   favoritesPage.innerHTML = `
     <h2>Избранное</h2>
-    <div class="product-list">
-      ${favs.map(product => getProductCard(product)).join("")}
-    </div>
+    ${savedSearchesMarkup}
+    <section class="favorite-products-section">
+      <div class="saved-searches-heading"><div><h3>Сохранённые объявления</h3><small>Товары и вакансии с сердечком</small></div><b>${favs.length}</b></div>
+      ${favs.length ? `<div class="product-list">${favs.map(product => getProductCard(product)).join("")}</div>` : `
+        <div class="empty-state compact-empty-state">
+          <h3>Пока пусто</h3>
+          <p class="muted">Добавляйте объявления через сердечко.</p>
+        </div>
+      `}
+    </section>
   `;
+}
+
+function buildCurrentSavedSearchPayload() {
+  return {
+    search: state.search.trim(),
+    category: state.category || "Все",
+    filters: { ...state.filters }
+  };
+}
+
+async function saveCurrentSearch() {
+  if (!state.telegramUser?.id) {
+    alert("Откройте приложение через Telegram, чтобы сохранять поиски");
+    return;
+  }
+  if (!hasCurrentSearchCriteria()) {
+    alert("Сначала задайте запрос, категорию или фильтры");
+    return;
+  }
+
+  const payload = buildCurrentSavedSearchPayload();
+  const defaultName = payload.search || (payload.category !== "Все" ? payload.category : "Поиск с фильтрами");
+  const enteredName = window.prompt("Название сохранённого поиска", defaultName);
+  if (enteredName === null) return;
+
+  const button = document.getElementById("saveSearchButton");
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Сохраняем…";
+  }
+  try {
+    const data = await apiRequest("/api/saved-searches", {
+      method: "POST",
+      body: JSON.stringify({ ...payload, name: enteredName.trim() || defaultName })
+    });
+    const saved = data.savedSearch;
+    state.savedSearches = [saved, ...state.savedSearches.filter(item => item.id !== saved.id)];
+    state.savedSearchesLoadedAt = Date.now();
+    showToast("Поиск сохранён");
+  } catch (error) {
+    console.error("Save current search error:", error);
+    alert(error.message || "Не удалось сохранить поиск");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "☆ Сохранить поиск";
+    }
+    updateSaveSearchButton();
+  }
+}
+
+function syncCategoryButtons() {
+  document.querySelectorAll(".categories button[data-category]").forEach(button => {
+    const selected = (button.dataset.category || "Все") === state.category;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-pressed", selected ? "true" : "false");
+  });
+}
+
+function applySavedSearch(id) {
+  const saved = state.savedSearches.find(item => item.id === id);
+  if (!saved) return;
+  state.search = saved.search || "";
+  state.category = saved.category || "Все";
+  state.filters = {
+    minPrice: "", maxPrice: "", city: "", district: "", itemType: "", brand: "", model: "", year: "", sort: "newest",
+    ...(saved.filters || {})
+  };
+  const searchInput = document.getElementById("searchInput");
+  if (searchInput) searchInput.value = state.search;
+  syncCategoryButtons();
+  syncCatalogFiltersUI();
+  state.productsCacheKey = "";
+  state.productsLoadedAt = 0;
+  state.catalogPagination = { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE, hasMore: true };
+  showPage("catalog");
+  loadProducts({ force: true });
+}
+
+async function deleteSavedSearch(id, event) {
+  event?.preventDefault();
+  event?.stopPropagation();
+  if (!id) return;
+  try {
+    await apiRequest(`/api/saved-searches/${encodeURIComponent(id)}`, { method: "DELETE" });
+    state.savedSearches = state.savedSearches.filter(item => item.id !== id);
+    state.savedSearchesLoadedAt = Date.now();
+    renderFavorites();
+    showToast("Поиск удалён");
+  } catch (error) {
+    console.error("Delete saved search error:", error);
+    alert(error.message || "Не удалось удалить поиск");
+  }
 }
 
 function renderProfileCounters() {
@@ -2933,6 +3136,7 @@ function renderProductDetails(product) {
   const productSeller = document.getElementById("productSeller");
   const productLocation = document.getElementById("productLocation");
   const productPhoneLine = document.getElementById("productPhoneLine");
+  const productSellerTrust = document.getElementById("productSellerTrust");
   const productMeta = document.getElementById("productMeta");
   const productBadges = document.getElementById("productBadges");
   const productPriceHistory = document.getElementById("productPriceHistory");
@@ -3043,6 +3247,12 @@ function renderProductDetails(product) {
     `;
     productSeller.setAttribute("aria-label", `Открыть профиль продавца ${sellerName}`);
     productSeller.onclick = () => openSellerProfile(product.ownerId);
+  }
+
+  if (productSellerTrust) {
+    const trust = product.sellerTrust;
+    productSellerTrust.hidden = !trust;
+    productSellerTrust.innerHTML = trust ? getSellerTrustMarkup(trust, { compact: true }) : "";
   }
 
   if (productLocation) {
@@ -3297,7 +3507,7 @@ async function openProduct(id) {
       const details = await apiRequest(`/api/products/${encodeURIComponent(id)}/details`);
       if (openSequence !== productOpenSequence || state.openedProductId !== id) return;
 
-      product = details.product;
+      product = { ...details.product, sellerTrust: details.sellerTrust || null };
       state.similarProducts = details.similarProducts || [];
       state.sellerOtherProducts = details.sellerProducts || [];
       state.priceHistory = details.priceHistory || [];
@@ -4076,6 +4286,15 @@ async function publishAd(status = "active") {
       showListingLimitDialog(error.details?.listingQuota || state.listingQuota);
       return;
     }
+    if (error.code === "DUPLICATE_LISTING") {
+      const duplicateId = error.details?.duplicateProductId;
+      const openExisting = duplicateId && window.confirm(`${error.message}
+
+Открыть существующее объявление для редактирования?`);
+      if (openExisting) await editAd(duplicateId);
+      else alert(error.message);
+      return;
+    }
     alert("Не удалось сохранить объявление: " + error.message);
   } finally {
     isPublishingAd = false;
@@ -4416,6 +4635,10 @@ async function changeAdStatus(id, status) {
     render();
   } catch (error) {
     console.error("Не удалось изменить статус объявления:", error);
+    if (error.code === "DUPLICATE_LISTING") {
+      alert(error.message);
+      return;
+    }
     alert("Не удалось изменить статус объявления: " + error.message);
   }
 }
@@ -4523,6 +4746,8 @@ function initEvents() {
     applyCatalogFiltersFromUI();
   });
   document.getElementById("resetCatalogFilters")?.addEventListener("click", resetCatalogFilters);
+  document.getElementById("saveSearchButton")?.addEventListener("click", saveCurrentSearch);
+  document.getElementById("submitSellerReviewButton")?.addEventListener("click", submitSellerReview);
   document.getElementById("editProfileButton")?.addEventListener("click", openProfileEditor);
   ["filterMinPrice", "filterMaxPrice"].forEach(id => {
     document.getElementById(id)?.addEventListener("input", event => {
@@ -4614,6 +4839,7 @@ function initEvents() {
     });
 
     state.category = button.dataset.category || "Все";
+    updateSaveSearchButton();
     state.filters.itemType = "";
     state.filters.brand = "";
     state.filters.model = "";
@@ -5403,6 +5629,12 @@ async function openSellerProfile(userId) {
   const sellerStatus = document.getElementById("sellerStatus");
   const sellerStatusLabel = document.getElementById("sellerStatusLabel");
   const messageButton = document.getElementById("sellerMessageButton");
+  const trustCard = document.getElementById("sellerTrustCard");
+  const reviewsList = document.getElementById("sellerReviewsList");
+  const reviewsCount = document.getElementById("sellerReviewsCount");
+  const reviewComposer = document.getElementById("sellerReviewComposer");
+  const reviewComment = document.getElementById("sellerReviewComment");
+  const reviewRating = document.getElementById("sellerReviewRating");
 
   showPage("sellerProfile");
 
@@ -5420,6 +5652,12 @@ async function openSellerProfile(userId) {
   if (sellerSoldProducts) sellerSoldProducts.innerHTML = "";
   if (sellerSoldSection) sellerSoldSection.hidden = true;
   if (messageButton) messageButton.disabled = true;
+  if (trustCard) trustCard.innerHTML = '<div class="seller-trust-loading">Считаем доверие…</div>';
+  if (reviewsList) reviewsList.innerHTML = '<div class="seller-reviews-empty">Загрузка отзывов…</div>';
+  if (reviewsCount) reviewsCount.textContent = "0";
+  if (reviewComposer) reviewComposer.hidden = true;
+  if (reviewComment) reviewComment.value = "";
+  if (reviewRating) reviewRating.value = "5";
 
   if (!userId) {
     sellerCount.textContent = "📦 0";
@@ -5429,18 +5667,23 @@ async function openSellerProfile(userId) {
   }
 
   try {
-    const [profileData, productsData] = await Promise.all([
+    const [profileData, productsData, reviewsData] = await Promise.all([
       apiRequest(`/api/users/${encodeURIComponent(userId)}`),
-      apiRequest(`/api/users/${encodeURIComponent(userId)}/products`)
+      apiRequest(`/api/users/${encodeURIComponent(userId)}/products`),
+      apiRequest(`/api/users/${encodeURIComponent(userId)}/reviews`)
     ]);
 
     const user = profileData.user || {};
     const products = Array.isArray(productsData.products) ? productsData.products : [];
     const soldProducts = Array.isArray(productsData.soldProducts) ? productsData.soldProducts : [];
+    const reviews = Array.isArray(reviewsData.reviews) ? reviewsData.reviews : [];
+    const trust = reviewsData.trust || user.trust || {};
 
     state.sellerProducts = products;
     state.sellerSoldProducts = soldProducts;
-    state.openedSeller = user;
+    state.sellerReviews = reviews;
+    state.sellerTrust = trust;
+    state.openedSeller = { ...user, id: user.id || userId, trust };
 
     for (const product of products) {
       const index = state.products.findIndex(item => item.id === product.id);
@@ -5489,6 +5732,22 @@ async function openSellerProfile(userId) {
       messageButton.disabled = isOwnProfile || (!username && !user.id);
       messageButton.textContent = isOwnProfile ? "Это ваш профиль" : "💬 Написать продавцу";
       messageButton.onclick = () => openTelegramSellerChat(user);
+    }
+
+    if (trustCard) trustCard.innerHTML = getSellerTrustMarkup(trust);
+    if (reviewsCount) reviewsCount.textContent = String(reviews.length);
+    if (reviewsList) {
+      reviewsList.innerHTML = reviews.length ? reviews.map(review => `
+        <article class="seller-review-card">
+          <div><b>${escapeHTML(review.reviewerName || "Покупатель")}</b><span>${"★".repeat(Number(review.rating) || 0)}${"☆".repeat(Math.max(0, 5 - (Number(review.rating) || 0)))}</span></div>
+          ${review.comment ? `<p>${escapeHTML(review.comment)}</p>` : ""}
+          <small>${escapeHTML(formatProductDate(review.updatedAt || review.createdAt))}</small>
+        </article>
+      `).join("") : '<div class="seller-reviews-empty">Отзывов пока нет. Будьте первым.</div>';
+    }
+    if (reviewComposer) {
+      const isOwnProfile = String(user.id || userId) === String(state.telegramUser?.id || "");
+      reviewComposer.hidden = isOwnProfile || !state.telegramUser?.id;
     }
 
     if (products.length === 0) {
@@ -5541,6 +5800,11 @@ async function openSellerProfile(userId) {
   } catch (error) {
     console.error("Seller profile error:", error);
     state.openedSeller = null;
+    state.sellerReviews = [];
+    state.sellerTrust = null;
+    if (trustCard) trustCard.innerHTML = '<div class="seller-reviews-empty">Данные доверия недоступны</div>';
+    if (reviewsList) reviewsList.innerHTML = '<div class="seller-reviews-empty">Отзывы не загрузились</div>';
+    if (reviewComposer) reviewComposer.hidden = true;
     sellerCount.textContent = "📦 0";
     if (sellerSoldCount) sellerSoldCount.textContent = "✓ 0";
     sellerProducts.innerHTML = `
@@ -5548,6 +5812,41 @@ async function openSellerProfile(userId) {
         <h3>Не удалось открыть профиль</h3>
         <p class="muted">${escapeHTML(error.message || "Попробуйте ещё раз")}</p>
       </div>`;
+  }
+}
+
+async function submitSellerReview() {
+  const sellerId = String(state.openedSeller?.id || "");
+  if (!sellerId || !state.telegramUser?.id) {
+    alert("Откройте профиль продавца через Telegram");
+    return;
+  }
+  const rating = Number(document.getElementById("sellerReviewRating")?.value || 0);
+  const comment = document.getElementById("sellerReviewComment")?.value.trim() || "";
+  const button = document.getElementById("submitSellerReviewButton");
+  if (rating < 1 || rating > 5) {
+    alert("Выберите оценку");
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Сохраняем…";
+  }
+  try {
+    await apiRequest(`/api/users/${encodeURIComponent(sellerId)}/reviews`, {
+      method: "POST",
+      body: JSON.stringify({ rating, comment })
+    });
+    showToast("Оценка сохранена");
+    await openSellerProfile(sellerId);
+  } catch (error) {
+    console.error("Submit seller review error:", error);
+    alert(error.message || "Не удалось сохранить оценку");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Сохранить оценку";
+    }
   }
 }
 

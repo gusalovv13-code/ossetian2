@@ -15,8 +15,8 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <link rel="manifest" href="manifest.webmanifest?v=1.14.4" />
-  <link rel="stylesheet" href="style.css?v=1.14.4" />
+  <link rel="manifest" href="manifest.webmanifest?v=1.14.6" />
+  <link rel="stylesheet" href="style.css?v=1.14.6" />
 </head>
 
 <body>
@@ -177,7 +177,10 @@
       <button class="primary" type="submit">Показать объявления</button>
     </div>
   </form>
-  <div id="searchStatus" class="search-status" aria-live="polite"></div>
+  <div class="catalog-search-tools">
+    <div id="searchStatus" class="search-status" aria-live="polite"></div>
+    <button id="saveSearchButton" class="save-search-button" type="button" hidden>☆ Сохранить поиск</button>
+  </div>
 
   <div id="catalogTopAds" class="catalog-top-ads" hidden></div>
 
@@ -222,6 +225,7 @@
           </span>
           <span class="seller-profile-link-arrow" aria-hidden="true">›</span>
         </button>
+        <div id="productSellerTrust" class="seller-trust-inline" hidden></div>
         <p id="productLocation">Город</p>
         <p id="productPhoneLine">Телефон</p>
       </div>
@@ -659,7 +663,38 @@
             <small id="sellerStatusLabel">Статус неизвестен</small>
           </div>
         </div>
+
+        <div id="sellerTrustCard" class="seller-trust-card" aria-live="polite"></div>
       </div>
+
+      <section id="sellerReviewComposer" class="seller-review-composer" hidden>
+        <h3>Оценить продавца</h3>
+        <div class="seller-review-fields">
+          <label>
+            <span>Оценка</span>
+            <select id="sellerReviewRating">
+              <option value="5">5 — Отлично</option>
+              <option value="4">4 — Хорошо</option>
+              <option value="3">3 — Нормально</option>
+              <option value="2">2 — Плохо</option>
+              <option value="1">1 — Очень плохо</option>
+            </select>
+          </label>
+          <label>
+            <span>Комментарий <small>необязательно</small></span>
+            <textarea id="sellerReviewComment" maxlength="800" placeholder="Расскажите, как прошла сделка"></textarea>
+          </label>
+          <button id="submitSellerReviewButton" class="primary" type="button">Сохранить оценку</button>
+        </div>
+      </section>
+
+      <section class="seller-reviews-section">
+        <div class="related-heading">
+          <h3>Отзывы</h3>
+          <small id="sellerReviewsCount">0</small>
+        </div>
+        <div id="sellerReviewsList" class="seller-reviews-list"></div>
+      </section>
 
       <h3>Активные товары</h3>
       <div id="sellerProducts" class="product-list"></div>
@@ -913,6 +948,6 @@
   </div>
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">←</div>
 
-  <script src="script.js?v=1.14.5"></script>
+  <script src="script.js?v=1.14.6"></script>
 </body>
 </html>

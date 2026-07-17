@@ -7320,3 +7320,406 @@ body.dark-mode .cover-crop-panel { background: #1d1e23; color: #f5f5f7; }
     border-radius: 12px;
   }
 }
+
+/* ===== v1.14.6: единые фото вакансий, доверие, сохранённые поиски ===== */
+
+/* Вакансии используют ту же высоту изображения, что и остальные карточки каталога. */
+#productList > .product-card.is-vacancy-card:not(.owner-product-card) > img {
+  width: 100%;
+  height: 120px;
+  margin: 0 0 8px;
+}
+
+.catalog-search-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 34px;
+  margin: 2px 0 8px;
+}
+
+.catalog-search-tools .search-status {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+
+.save-search-button {
+  flex: 0 0 auto;
+  width: auto;
+  min-height: 32px;
+  padding: 7px 11px;
+  border: 1px solid #d8d4ff;
+  border-radius: 999px;
+  background: #f1efff;
+  color: #5b49dd;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.saved-searches-section,
+.favorite-products-section,
+.seller-reviews-section,
+.seller-review-composer {
+  margin: 14px 0 18px;
+}
+
+.saved-searches-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.saved-searches-heading h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.saved-searches-heading small {
+  display: block;
+  margin-top: 2px;
+  color: #8b8f9c;
+  font-size: 10px;
+}
+
+.saved-searches-heading > b {
+  display: grid;
+  place-items: center;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #ece9ff;
+  color: #5d4be2;
+  font-size: 12px;
+}
+
+.saved-searches-list {
+  display: grid;
+  gap: 9px;
+}
+
+.saved-search-card {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid #ebeaf1;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 6px 18px rgba(31, 35, 48, .05);
+}
+
+.saved-search-open {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 66px;
+  padding: 11px 42px 11px 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.saved-search-open > span {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: #f1efff;
+  font-size: 18px;
+}
+
+.saved-search-open div {
+  min-width: 0;
+}
+
+.saved-search-open b,
+.saved-search-open small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.saved-search-open b {
+  font-size: 13px;
+}
+
+.saved-search-open small {
+  margin-top: 4px;
+  color: #8b8f9c;
+  font-size: 10px;
+}
+
+.saved-search-open i {
+  color: #aaa6b6;
+  font-size: 22px;
+  font-style: normal;
+}
+
+.saved-search-delete {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  z-index: 2;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: #f0f1f4;
+  color: #777c88;
+  font-size: 18px;
+  transform: translateY(-50%);
+}
+
+.saved-searches-empty,
+.seller-reviews-empty,
+.seller-trust-loading {
+  padding: 14px;
+  border: 1px dashed #dcdbe4;
+  border-radius: 14px;
+  color: #858995;
+  font-size: 11px;
+  text-align: center;
+}
+
+.seller-trust-inline {
+  margin: 9px 0 4px;
+}
+
+.seller-trust-card {
+  margin-top: 15px;
+}
+
+.seller-trust-summary {
+  padding: 13px;
+  border: 1px solid #e6e4ef;
+  border-radius: 17px;
+  background: #faf9ff;
+  text-align: left;
+}
+
+.seller-trust-summary.trust-high,
+.seller-trust-summary.trust-reliable {
+  border-color: #cde8dc;
+  background: #f0faf5;
+}
+
+.seller-trust-summary.is-compact {
+  padding: 10px;
+  border-radius: 14px;
+}
+
+.seller-trust-score {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+}
+
+.seller-trust-score > strong {
+  color: #f2a400;
+  font-size: 17px;
+}
+
+.seller-trust-score > span {
+  min-width: 0;
+}
+
+.seller-trust-score b,
+.seller-trust-score small {
+  display: block;
+}
+
+.seller-trust-score b {
+  font-size: 12px;
+}
+
+.seller-trust-score small {
+  margin-top: 2px;
+  color: #858995;
+  font-size: 9.5px;
+}
+
+.seller-trust-score > em {
+  display: grid;
+  place-items: center;
+  min-width: 42px;
+  min-height: 27px;
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: #e9e5ff;
+  color: #5d4ae2;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.seller-trust-meter {
+  height: 6px;
+  margin-top: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e4e3e9;
+}
+
+.seller-trust-meter i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #7a68ef, #31a875);
+}
+
+.seller-trust-summary > p {
+  margin: 8px 0 0;
+  color: #858995;
+  font-size: 10px;
+}
+
+.seller-trust-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.seller-trust-badges span {
+  padding: 5px 7px;
+  border-radius: 999px;
+  background: #eaf7f1;
+  color: #237859;
+  font-size: 8.5px;
+  font-weight: 700;
+}
+
+.seller-review-fields {
+  display: grid;
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid #e8e7ef;
+  border-radius: 17px;
+  background: #fff;
+}
+
+.seller-review-fields label > span {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.seller-review-fields label > span small {
+  color: #999ca6;
+  font-weight: 500;
+}
+
+.seller-review-fields textarea {
+  min-height: 86px;
+  resize: vertical;
+}
+
+.seller-reviews-list {
+  display: grid;
+  gap: 9px;
+}
+
+.seller-review-card {
+  padding: 12px;
+  border: 1px solid #e8e7ee;
+  border-radius: 15px;
+  background: #fff;
+}
+
+.seller-review-card > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.seller-review-card b {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seller-review-card span {
+  flex: 0 0 auto;
+  color: #f2a400;
+  font-size: 12px;
+  letter-spacing: 1px;
+}
+
+.seller-review-card p {
+  margin: 8px 0 6px;
+  color: #545966;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.seller-review-card small {
+  color: #969aa5;
+  font-size: 9px;
+}
+
+body.dark-mode .save-search-button,
+body.dark-mode .saved-search-open > span {
+  border-color: #48425f;
+  background: #302b43;
+  color: #c8bfff;
+}
+
+body.dark-mode .saved-search-card,
+body.dark-mode .seller-review-fields,
+body.dark-mode .seller-review-card {
+  border-color: #34363d;
+  background: #202126;
+}
+
+body.dark-mode .seller-trust-summary {
+  border-color: #3a3a47;
+  background: #282630;
+}
+
+body.dark-mode .seller-trust-summary.trust-high,
+body.dark-mode .seller-trust-summary.trust-reliable {
+  border-color: #355a4c;
+  background: #20332b;
+}
+
+body.dark-mode .seller-trust-meter {
+  background: #44454c;
+}
+
+body.dark-mode .seller-review-card p,
+body.dark-mode .saved-search-open b,
+body.dark-mode .seller-trust-score b {
+  color: #f0f1f4;
+}
+
+body.dark-mode .saved-search-delete {
+  background: #34363d;
+  color: #c4c7ce;
+}
+
+@media (max-width: 360px) {
+  .catalog-search-tools {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .save-search-button {
+    align-self: flex-end;
+  }
+}

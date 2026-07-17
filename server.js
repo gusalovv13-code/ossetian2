@@ -3,7 +3,7 @@ import compression from "compression";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
-import { createHmac, randomUUID, timingSafeEqual } from "crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "crypto";
 import pg from "pg";
 import sharp from "sharp";
 import { lookup } from "dns/promises";
@@ -14,7 +14,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.14.3";
+const APP_VERSION = "1.14.6";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -592,6 +592,163 @@ function mapPublicUser(row) {
 
 function normalizeText(value, maxLength) {
   return String(value ?? "").trim().slice(0, maxLength);
+}
+
+function normalizeFingerprintText(value, maxLength = 5000) {
+  return normalizeText(value, maxLength)
+    .normalize("NFKC")
+    .toLocaleLowerCase("ru")
+    .replace(/ё/g, "е")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function buildDuplicateFingerprint(product = {}) {
+  const specifications = normalizeSpecifications(product.specifications);
+  const specificationKey = Object.entries(specifications)
+    .map(([key, value]) => [normalizeFingerprintText(key, 80), normalizeFingerprintText(value, 160)])
+    .filter(([key, value]) => key && value)
+    .sort(([left], [right]) => left.localeCompare(right, "ru"))
+    .map(([key, value]) => `${key}:${value}`)
+    .join("|");
+  const firstImage = String(product.images?.[0] || product.image || "");
+  const imageKey = firstImage
+    ? `${firstImage.slice(0, 4096)}:${firstImage.slice(-4096)}`
+    : "";
+  const payload = [
+    normalizeFingerprintText(product.name, 240),
+    normalizeFingerprintText(product.category, 80),
+    String(Number(product.priceAmount) || parsePriceAmount(product.price) || 0),
+    normalizeFingerprintText(product.description ?? product.desc, 5000),
+    normalizeFingerprintText(product.location, 120),
+    normalizeFingerprintText(product.district, 120),
+    specificationKey,
+    imageKey
+  ].join("\n");
+
+  return createHash("sha256").update(payload).digest("hex");
+}
+
+async function findDuplicateListing(db, ownerId, fingerprint, excludeId = "") {
+  if (!ownerId || !fingerprint) return null;
+  const result = await db.query(
+    `SELECT id, name, status
+     FROM products
+     WHERE owner_id = $1
+       AND duplicate_fingerprint = $2
+       AND id <> $3
+       AND COALESCE(status, 'active') IN ('active', 'draft', 'archived')
+     ORDER BY created_at ASC
+     LIMIT 1`,
+    [String(ownerId), fingerprint, String(excludeId || "")]
+  );
+  return result.rows[0] || null;
+}
+
+function normalizeSavedSearchFilters(value) {
+  const filters = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const minPrice = normalizeText(filters.minPrice, 12).replace(/[^0-9]/g, "");
+  const maxPrice = normalizeText(filters.maxPrice, 12).replace(/[^0-9]/g, "");
+  return {
+    minPrice,
+    maxPrice,
+    city: normalizeText(filters.city, 80),
+    district: normalizeText(filters.district, 80),
+    itemType: normalizeText(filters.itemType, 80),
+    brand: normalizeText(filters.brand, 80),
+    model: normalizeText(filters.model, 80),
+    year: normalizeText(filters.year, 20),
+    sort: ["newest", "price_asc", "price_desc"].includes(filters.sort) ? filters.sort : "newest"
+  };
+}
+
+function buildSavedSearchKey(search, category, filters) {
+  return createHash("sha256")
+    .update(JSON.stringify({ search, category, filters }))
+    .digest("hex");
+}
+
+function mapSavedSearch(row) {
+  return {
+    id: row.id,
+    name: row.name || "Сохранённый поиск",
+    search: row.search_query || "",
+    category: row.category || "Все",
+    filters: normalizeSavedSearchFilters(row.filters),
+    createdAt: row.created_at ? new Date(row.created_at).getTime() : null,
+    updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : null
+  };
+}
+
+function buildSellerTrust(row = {}) {
+  const ratingAverage = Math.max(0, Math.min(5, Number(row.rating_average) || 0));
+  const ratingCount = Math.max(0, Number(row.rating_count) || 0);
+  const activeListings = Math.max(0, Number(row.active_listings) || 0);
+  const soldListings = Math.max(0, Number(row.sold_listings) || 0);
+  const phoneVerified = Boolean(row.phone_verified);
+  const memberSince = row.member_since ? new Date(row.member_since).getTime() : null;
+  const accountAgeDays = memberSince ? Math.max(0, Math.floor((Date.now() - memberSince) / 86_400_000)) : 0;
+
+  let level = "new";
+  let label = "Новый продавец";
+  if (ratingAverage >= 4.7 && ratingCount >= 5 && soldListings >= 1) {
+    level = "high";
+    label = "Высокое доверие";
+  } else if (ratingAverage >= 4.2 && ratingCount >= 3) {
+    level = "reliable";
+    label = "Надёжный продавец";
+  } else if (ratingCount > 0) {
+    level = "rated";
+    label = "Есть оценки";
+  }
+
+  const score = Math.min(100,
+    20 +
+    (phoneVerified ? 20 : 0) +
+    Math.min(10, Math.floor(accountAgeDays / 30) * 2) +
+    Math.min(20, soldListings * 4) +
+    Math.min(15, ratingCount * 3) +
+    (ratingCount ? Math.round((ratingAverage / 5) * 15) : 0)
+  );
+
+  return {
+    ratingAverage: Number(ratingAverage.toFixed(1)),
+    ratingCount,
+    activeListings,
+    soldListings,
+    phoneVerified,
+    memberSince,
+    accountAgeDays,
+    score,
+    level,
+    label
+  };
+}
+
+async function getSellerTrust(db, sellerId) {
+  const result = await db.query(
+    `SELECT
+       COALESCE((SELECT AVG(rating)::numeric(3,2) FROM seller_reviews WHERE seller_id = $1), 0) AS rating_average,
+       (SELECT COUNT(*)::int FROM seller_reviews WHERE seller_id = $1) AS rating_count,
+       (SELECT COUNT(*)::int FROM products WHERE owner_id = $1 AND COALESCE(status, 'active') = 'active' AND COALESCE(hidden, FALSE) = FALSE) AS active_listings,
+       (SELECT COUNT(*)::int FROM products WHERE owner_id = $1 AND COALESCE(status, 'active') = 'sold') AS sold_listings,
+       COALESCE((SELECT phone_normalized <> '' FROM users WHERE telegram_id = $1), FALSE) AS phone_verified,
+       COALESCE((SELECT created_at FROM users WHERE telegram_id = $1), (SELECT MIN(created_at) FROM products WHERE owner_id = $1)) AS member_since`,
+    [String(sellerId)]
+  );
+  return buildSellerTrust(result.rows[0] || {});
+}
+
+function mapSellerReview(row) {
+  return {
+    id: row.id,
+    reviewerName: row.reviewer_name || "Покупатель",
+    rating: Math.max(1, Math.min(5, Number(row.rating) || 1)),
+    comment: row.comment || "",
+    createdAt: row.created_at ? new Date(row.created_at).getTime() : null,
+    updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : null
+  };
 }
 
 function normalizePhoneKey(value) {
@@ -1513,6 +1670,45 @@ async function initDb(db = pool) {
     );
   `);
 
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS seller_reviews (
+      id TEXT PRIMARY KEY,
+      seller_id TEXT NOT NULL,
+      reviewer_id TEXT NOT NULL,
+      rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+      comment TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (seller_id, reviewer_id)
+    );
+  `);
+
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_seller_reviews_seller_created
+    ON seller_reviews (seller_id, created_at DESC);
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS saved_searches (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      search_query TEXT DEFAULT '',
+      category TEXT DEFAULT 'Все',
+      filters JSONB DEFAULT '{}'::jsonb,
+      search_key TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (user_id, search_key)
+    );
+  `);
+
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_saved_searches_user_updated
+    ON saved_searches (user_id, updated_at DESC);
+  `);
+
   await db.query(`
     CREATE TABLE IF NOT EXISTS product_images (
       id TEXT PRIMARY KEY,
@@ -1635,7 +1831,14 @@ async function initDb(db = pool) {
   await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_until TIMESTAMPTZ;`);
   await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_color TEXT DEFAULT 'green';`);
   await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_paid BOOLEAN DEFAULT FALSE;`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS duplicate_fingerprint TEXT DEFAULT '';`);
   await db.query(`ALTER TABLE products ALTER COLUMN featured_color SET DEFAULT 'green';`);
+  await db.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_products_owner_duplicate_fingerprint_unique
+    ON products (owner_id, duplicate_fingerprint)
+    WHERE duplicate_fingerprint <> ''
+      AND COALESCE(status, 'active') IN ('active', 'draft', 'archived');
+  `);
   await db.query(`UPDATE products SET featured_color = 'green' WHERE COALESCE(featured_color, '') <> 'green';`);
   await db.query(`
     UPDATE products
@@ -2055,7 +2258,7 @@ app.get("/api/version", (req, res) => {
     ok: true,
     version: APP_VERSION,
     catalogOrderFix: true,
-    build: "vacancies-fast-share-visible-report"
+    build: "trust-saved-searches-duplicate-protection"
   });
 });
 
@@ -2526,62 +2729,52 @@ app.get("/api/users/:id", async (req, res) => {
     const userId = normalizeText(req.params.id, 64);
 
     if (!userId) {
-      return res.status(400).json({
-        ok: false,
-        error: "Некорректный ID продавца"
-      });
+      return res.status(400).json({ ok: false, error: "Некорректный ID продавца" });
     }
 
-    const userResult = await pool.query(
-      `
-        SELECT telegram_id, username, first_name, last_name, avatar, profile_description,
-               city, phone, contact_username, last_seen, created_at, updated_at
-        FROM users
-        WHERE telegram_id = $1
-        LIMIT 1;
-      `,
-      [userId]
-    );
+    const [userResult, trust] = await Promise.all([
+      pool.query(
+        `SELECT telegram_id, username, first_name, last_name, avatar, profile_description,
+                city, phone, contact_username, last_seen, created_at, updated_at
+         FROM users
+         WHERE telegram_id = $1
+         LIMIT 1`,
+        [userId]
+      ),
+      getSellerTrust(pool, userId)
+    ]);
 
     if (userResult.rows.length > 0) {
       return res.json({
         ok: true,
-        user: mapPublicUser(userResult.rows[0])
+        user: { ...mapPublicUser(userResult.rows[0]), trust }
       });
     }
 
     // Поддержка старых объявлений, созданных до появления таблицы users.
     const fallbackResult = await pool.query(
-      `
-        SELECT owner_id, owner_name, owner_username, created_at
-        FROM products
-        WHERE owner_id = $1
-          AND COALESCE(status, 'active') = 'active'
-          AND COALESCE(hidden, FALSE) = FALSE
-          AND COALESCE(moderation_status, 'approved') = 'approved'
-        ORDER BY created_at DESC
-        LIMIT 1;
-      `,
+      `SELECT owner_id, owner_name, owner_username, created_at
+       FROM products
+       WHERE owner_id = $1
+         AND COALESCE(status, 'active') = 'active'
+         AND COALESCE(hidden, FALSE) = FALSE
+         AND COALESCE(moderation_status, 'approved') = 'approved'
+       ORDER BY created_at DESC
+       LIMIT 1`,
       [userId]
     );
 
     if (fallbackResult.rows.length === 0) {
-      return res.status(404).json({
-        ok: false,
-        error: "Продавец не найден"
-      });
+      return res.status(404).json({ ok: false, error: "Продавец не найден" });
     }
 
     return res.json({
       ok: true,
-      user: mapPublicUser(fallbackResult.rows[0])
+      user: { ...mapPublicUser(fallbackResult.rows[0]), trust }
     });
   } catch (error) {
     console.error("Get seller profile error:", error);
-    return res.status(500).json({
-      ok: false,
-      error: "Не удалось получить профиль продавца"
-    });
+    return res.status(500).json({ ok: false, error: "Не удалось получить профиль продавца" });
   }
 });
 
@@ -3081,6 +3274,26 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
       specifications: cleanSpecifications
     }, client);
     const finalStatus = moderation.blocked ? "draft" : (requestedStatus === "draft" ? "draft" : "active");
+    const duplicateFingerprint = buildDuplicateFingerprint({
+      name: cleanName,
+      priceAmount: cleanPriceAmount,
+      category: cleanCategory,
+      description: cleanDescription,
+      images: cleanImages,
+      location: cleanLocation,
+      district: cleanDistrict,
+      specifications: cleanSpecifications
+    });
+    const duplicate = await findDuplicateListing(client, req.telegramUser.id, duplicateFingerprint);
+    if (duplicate) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({
+        ok: false,
+        code: "DUPLICATE_LISTING",
+        error: `Похожее объявление «${duplicate.name}» уже существует. Отредактируйте его вместо повторной публикации.`,
+        duplicateProductId: duplicate.id
+      });
+    }
     const id = randomUUID();
     const ownerName = getTelegramDisplayName(req.telegramUser);
 
@@ -3091,13 +3304,14 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
           category, description, image, images, location, phone, allow_calls, allow_messages,
           condition, negotiable, delivery, district, specifications, views, status,
           hidden, auto_hidden, moderation_status, moderation_reason, moderation_matches,
-          moderation_target_status, published_at, expires_at
+          moderation_target_status, published_at, expires_at, duplicate_fingerprint
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13,
           $14, $15, $16, $17, $18, $19, $20::jsonb, 0, $21, $22, $23, $24, $25, $26::jsonb, $27,
           CASE WHEN $21 = 'active' THEN NOW() ELSE NULL END,
-          CASE WHEN $21 = 'active' THEN NOW() + ($28::int * INTERVAL '1 day') ELSE NULL END
+          CASE WHEN $21 = 'active' THEN NOW() + ($28::int * INTERVAL '1 day') ELSE NULL END,
+          $29
         )
         RETURNING *;
       `,
@@ -3111,7 +3325,8 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
         moderation.blocked, moderation.blocked ? "blocked" : "approved",
         moderation.reason, JSON.stringify(moderation.matches),
         requestedStatus === "draft" ? "draft" : "active",
-        PRODUCT_ARCHIVE_DAYS
+        PRODUCT_ARCHIVE_DAYS,
+        duplicateFingerprint
       ]
     );
 
@@ -3147,6 +3362,9 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
     console.error("Create product error:", error);
     if (error?.code === "23505" && String(error?.constraint || "").includes("phone_normalized")) {
       return res.status(409).json({ ok: false, code: "PHONE_ALREADY_USED", error: "Этот номер уже привязан к другому профилю" });
+    }
+    if (error?.code === "23505" && String(error?.constraint || "").includes("duplicate_fingerprint")) {
+      return res.status(409).json({ ok: false, code: "DUPLICATE_LISTING", error: "Такое объявление уже опубликовано" });
     }
     res.status(500).json({ ok: false, error: "Не удалось создать объявление" });
   } finally {
@@ -3274,6 +3492,26 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     const finalStatus = moderation.blocked
       ? "draft"
       : (["active", "draft"].includes(requestedStatus) ? requestedStatus : "active");
+    const duplicateFingerprint = buildDuplicateFingerprint({
+      name: cleanName,
+      priceAmount: cleanPriceAmount,
+      category: cleanCategory,
+      description: cleanDescription,
+      images: cleanImages,
+      location: cleanLocation,
+      district: cleanDistrict,
+      specifications: cleanSpecifications
+    });
+    const duplicate = await findDuplicateListing(client, req.telegramUser.id, duplicateFingerprint, productId);
+    if (duplicate) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({
+        ok: false,
+        code: "DUPLICATE_LISTING",
+        error: `Похожее объявление «${duplicate.name}» уже существует.`,
+        duplicateProductId: duplicate.id
+      });
+    }
 
     const result = await client.query(
       `
@@ -3298,6 +3536,7 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
             published_at = CASE WHEN $19 = 'active' AND COALESCE(status, '') <> 'active' THEN NOW() ELSE published_at END,
             expires_at = CASE WHEN $19 = 'active' AND COALESCE(status, '') <> 'active' THEN NOW() + ($29::int * INTERVAL '1 day') ELSE expires_at END,
             archived_at = CASE WHEN $19 = 'active' THEN NULL ELSE archived_at END,
+            duplicate_fingerprint = $30,
             updated_at = NOW()
         WHERE id = $1 AND owner_id = $2
         RETURNING *;
@@ -3311,7 +3550,7 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
         finalPreviousPrice, finalPreviousPriceAmount, finalPriceDroppedAt,
         moderation.blocked ? "blocked" : "approved", moderation.reason,
         JSON.stringify(moderation.matches), moderation.blocked,
-        requestedStatus, cleanThumbnail, PRODUCT_ARCHIVE_DAYS
+        requestedStatus, cleanThumbnail, PRODUCT_ARCHIVE_DAYS, duplicateFingerprint
       ]
     );
 
@@ -3358,6 +3597,9 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     if (error?.code === "23505" && String(error?.constraint || "").includes("phone_normalized")) {
       return res.status(409).json({ ok: false, code: "PHONE_ALREADY_USED", error: "Этот номер уже привязан к другому профилю" });
     }
+    if (error?.code === "23505" && String(error?.constraint || "").includes("duplicate_fingerprint")) {
+      return res.status(409).json({ ok: false, code: "DUPLICATE_LISTING", error: "Такое объявление уже существует" });
+    }
     res.status(500).json({ ok: false, error: "Не удалось обновить объявление" });
   } finally {
     client.release();
@@ -3392,7 +3634,7 @@ app.get("/api/products/:id/details", async (req, res) => {
     }
 
     const row = productResult.rows[0];
-    const [similarResult, sellerResult, priceHistoryResult] = await Promise.all([
+    const [similarResult, sellerResult, priceHistoryResult, sellerTrust] = await Promise.all([
       pool.query(
         `
           SELECT
@@ -3434,7 +3676,8 @@ app.get("/api/products/:id/details", async (req, res) => {
           LIMIT 10;
         `,
         [productId]
-      )
+      ),
+      getSellerTrust(pool, row.owner_id)
     ]);
 
     res.json({
@@ -3442,7 +3685,8 @@ app.get("/api/products/:id/details", async (req, res) => {
       product: mapPublicProduct(row),
       similarProducts: similarResult.rows.map(mapProductSummary),
       sellerProducts: sellerResult.rows.map(mapProductSummary),
-      priceHistory: priceHistoryResult.rows
+      priceHistory: priceHistoryResult.rows,
+      sellerTrust
     });
   } catch (error) {
     console.error("Product details error:", error);
@@ -3530,6 +3774,29 @@ app.patch("/api/products/:id/status", requireTelegramAuth, syncTelegramUser, asy
       });
     }
 
+    const statusFingerprint = existing.duplicate_fingerprint || buildDuplicateFingerprint({
+      name: existing.name,
+      priceAmount: existing.price_amount,
+      category: existing.category,
+      description: existing.description,
+      images: normalizeImages(existing),
+      location: existing.location,
+      district: existing.district,
+      specifications: existing.specifications
+    });
+    if (["active", "draft", "archived"].includes(status)) {
+      const duplicate = await findDuplicateListing(client, req.telegramUser.id, statusFingerprint, productId);
+      if (duplicate) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          ok: false,
+          code: "DUPLICATE_LISTING",
+          error: `Нельзя опубликовать дубликат объявления «${duplicate.name}».`,
+          duplicateProductId: duplicate.id
+        });
+      }
+    }
+
     let result;
 
     if (status === "sold") {
@@ -3579,6 +3846,7 @@ app.patch("/api/products/:id/status", requireTelegramAuth, syncTelegramUser, asy
               moderation_target_status = 'sold',
               featured_paid = FALSE,
               featured_until = NULL,
+              duplicate_fingerprint = '',
               expires_at = NULL,
               archived_at = NULL,
               updated_at = NOW()
@@ -3592,6 +3860,7 @@ app.patch("/api/products/:id/status", requireTelegramAuth, syncTelegramUser, asy
         `
           UPDATE products
           SET status = $3,
+              duplicate_fingerprint = $5,
               published_at = CASE WHEN $3 = 'active' THEN NOW() ELSE published_at END,
               expires_at = CASE WHEN $3 = 'active' THEN NOW() + ($4::int * INTERVAL '1 day') ELSE expires_at END,
               archived_at = CASE WHEN $3 = 'archived' THEN NOW() WHEN $3 = 'active' THEN NULL ELSE archived_at END,
@@ -3602,7 +3871,7 @@ app.patch("/api/products/:id/status", requireTelegramAuth, syncTelegramUser, asy
             AND ($3 <> 'active' OR COALESCE(moderation_status, 'approved') = 'approved')
           RETURNING *;
         `,
-        [productId, req.telegramUser.id, status, PRODUCT_ARCHIVE_DAYS]
+        [productId, req.telegramUser.id, status, PRODUCT_ARCHIVE_DAYS, statusFingerprint]
       );
     }
 
@@ -3624,6 +3893,9 @@ app.patch("/api/products/:id/status", requireTelegramAuth, syncTelegramUser, asy
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
     console.error("Update product status error:", error);
+    if (error?.code === "23505" && String(error?.constraint || "").includes("duplicate_fingerprint")) {
+      return res.status(409).json({ ok: false, code: "DUPLICATE_LISTING", error: "Такое объявление уже существует" });
+    }
     res.status(500).json({
       ok: false,
       error: "Не удалось изменить статус объявления"
@@ -3894,6 +4166,160 @@ app.post("/api/favorites", requireTelegramAuth, syncTelegramUser, async (req, re
 
 
 
+
+app.get("/api/saved-searches", requireTelegramAuth, syncTelegramUser, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, name, search_query, category, filters, created_at, updated_at
+       FROM saved_searches
+       WHERE user_id = $1
+       ORDER BY updated_at DESC
+       LIMIT 20`,
+      [String(req.telegramUser.id)]
+    );
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, savedSearches: result.rows.map(mapSavedSearch) });
+  } catch (error) {
+    console.error("Get saved searches error:", error);
+    res.status(500).json({ ok: false, error: "Не удалось загрузить сохранённые поиски" });
+  }
+});
+
+app.post("/api/saved-searches", requireTelegramAuth, syncTelegramUser, async (req, res) => {
+  try {
+    const search = normalizeText(req.body?.search, 100);
+    const requestedCategory = normalizeText(req.body?.category, 60) || "Все";
+    const category = requestedCategory === "Все" || PRODUCT_CATEGORIES.has(requestedCategory)
+      ? requestedCategory
+      : "Все";
+    const filters = normalizeSavedSearchFilters(req.body?.filters);
+    const hasFilters = Object.entries(filters).some(([key, value]) => key === "sort" ? value !== "newest" : Boolean(value));
+    if (!search && category === "Все" && !hasFilters) {
+      return res.status(400).json({ ok: false, error: "Сначала задайте запрос, категорию или фильтры" });
+    }
+
+    const defaultName = search || (category !== "Все" ? category : "Поиск с фильтрами");
+    const name = normalizeText(req.body?.name, 80) || defaultName;
+    const searchKey = buildSavedSearchKey(search, category, filters);
+    const countResult = await pool.query(
+      `SELECT COUNT(*)::int AS count FROM saved_searches WHERE user_id = $1`,
+      [String(req.telegramUser.id)]
+    );
+    const existingResult = await pool.query(
+      `SELECT id FROM saved_searches WHERE user_id = $1 AND search_key = $2 LIMIT 1`,
+      [String(req.telegramUser.id), searchKey]
+    );
+    if (Number(countResult.rows[0]?.count) >= 20 && existingResult.rows.length === 0) {
+      return res.status(409).json({ ok: false, code: "SAVED_SEARCH_LIMIT", error: "Можно сохранить не более 20 поисков" });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO saved_searches (id, user_id, name, search_query, category, filters, search_key)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+       ON CONFLICT (user_id, search_key)
+       DO UPDATE SET name = EXCLUDED.name, updated_at = NOW()
+       RETURNING id, name, search_query, category, filters, created_at, updated_at`,
+      [randomUUID(), String(req.telegramUser.id), name, search, category, JSON.stringify(filters), searchKey]
+    );
+    res.status(existingResult.rows.length ? 200 : 201).json({ ok: true, savedSearch: mapSavedSearch(result.rows[0]) });
+  } catch (error) {
+    console.error("Save search error:", error);
+    res.status(500).json({ ok: false, error: "Не удалось сохранить поиск" });
+  }
+});
+
+app.delete("/api/saved-searches/:id", requireTelegramAuth, syncTelegramUser, async (req, res) => {
+  try {
+    const id = normalizeText(req.params.id, 64);
+    const result = await pool.query(
+      `DELETE FROM saved_searches WHERE id = $1 AND user_id = $2 RETURNING id`,
+      [id, String(req.telegramUser.id)]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ ok: false, error: "Поиск не найден" });
+    res.json({ ok: true, deletedId: id });
+  } catch (error) {
+    console.error("Delete saved search error:", error);
+    res.status(500).json({ ok: false, error: "Не удалось удалить сохранённый поиск" });
+  }
+});
+
+app.get("/api/users/:id/reviews", async (req, res) => {
+  try {
+    const sellerId = normalizeText(req.params.id, 64);
+    if (!sellerId) return res.status(400).json({ ok: false, error: "Некорректный ID продавца" });
+    const [reviewsResult, trust] = await Promise.all([
+      pool.query(
+        `SELECT sr.id, sr.rating, sr.comment, sr.created_at, sr.updated_at,
+                COALESCE(NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''),
+                         CASE WHEN COALESCE(u.username, '') <> '' THEN '@' || u.username ELSE NULL END,
+                         'Покупатель') AS reviewer_name
+         FROM seller_reviews sr
+         LEFT JOIN users u ON u.telegram_id = sr.reviewer_id
+         WHERE sr.seller_id = $1
+         ORDER BY sr.updated_at DESC
+         LIMIT 30`,
+        [sellerId]
+      ),
+      getSellerTrust(pool, sellerId)
+    ]);
+    res.json({ ok: true, reviews: reviewsResult.rows.map(mapSellerReview), trust });
+  } catch (error) {
+    console.error("Get seller reviews error:", error);
+    res.status(500).json({ ok: false, error: "Не удалось загрузить отзывы" });
+  }
+});
+
+app.post("/api/users/:id/reviews", requireTelegramAuth, syncTelegramUser, async (req, res) => {
+  try {
+    const sellerId = normalizeText(req.params.id, 64);
+    const reviewerId = String(req.telegramUser.id);
+    const rating = Number.parseInt(String(req.body?.rating || ""), 10);
+    const comment = normalizeText(req.body?.comment, 800);
+    if (!sellerId || !Number.isInteger(rating) || rating < 1 || rating > 5) {
+      return res.status(400).json({ ok: false, error: "Выберите оценку от 1 до 5" });
+    }
+    if (sellerId === reviewerId) {
+      return res.status(400).json({ ok: false, code: "SELF_REVIEW", error: "Нельзя оценивать собственный профиль" });
+    }
+    const sellerExists = await pool.query(
+      `SELECT 1 FROM users WHERE telegram_id = $1
+       UNION ALL
+       SELECT 1 FROM products WHERE owner_id = $1 LIMIT 1`,
+      [sellerId]
+    );
+    if (sellerExists.rows.length === 0) return res.status(404).json({ ok: false, error: "Продавец не найден" });
+
+    const result = await pool.query(
+      `INSERT INTO seller_reviews (id, seller_id, reviewer_id, rating, comment)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (seller_id, reviewer_id)
+       DO UPDATE SET rating = EXCLUDED.rating, comment = EXCLUDED.comment, updated_at = NOW()
+       RETURNING id, rating, comment, created_at, updated_at`,
+      [randomUUID(), sellerId, reviewerId, rating, comment]
+    );
+    const trust = await getSellerTrust(pool, sellerId);
+    res.json({ ok: true, review: mapSellerReview({ ...result.rows[0], reviewer_name: getTelegramDisplayName(req.telegramUser) || "Вы" }), trust });
+  } catch (error) {
+    console.error("Save seller review error:", error);
+    res.status(500).json({ ok: false, error: "Не удалось сохранить оценку" });
+  }
+});
+
+app.delete("/api/users/:id/reviews/mine", requireTelegramAuth, syncTelegramUser, async (req, res) => {
+  try {
+    const sellerId = normalizeText(req.params.id, 64);
+    const result = await pool.query(
+      `DELETE FROM seller_reviews WHERE seller_id = $1 AND reviewer_id = $2 RETURNING id`,
+      [sellerId, String(req.telegramUser.id)]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ ok: false, error: "Ваша оценка не найдена" });
+    const trust = await getSellerTrust(pool, sellerId);
+    res.json({ ok: true, trust });
+  } catch (error) {
+    console.error("Delete seller review error:", error);
+    res.status(500).json({ ok: false, error: "Не удалось удалить оценку" });
+  }
+});
 
 app.get("/api/ads", async (req, res) => {
   try {
