@@ -1479,6 +1479,12 @@ function navigateMainTab(page) {
 }
 
 function goBack() {
+  const callSheet = document.getElementById("callSheet");
+  if (callSheet && !callSheet.hidden) {
+    hidePhoneMenu();
+    return;
+  }
+
   const lightbox = document.getElementById("photoLightbox");
   if (lightbox && !lightbox.hidden) {
     closePhotoLightbox();
@@ -2120,7 +2126,8 @@ function getProductCard(product, options = {}) {
   const priceDropMarkup = product.priceDropped
     ? `<span class="price-drop-card-badge">Скидка${product.priceDropPercent ? ` −${Number(product.priceDropPercent)}%` : ""}</span>`
     : "";
-  const vacancyBadge = isVacancyCategory(product.category)
+  const isVacancyCard = isVacancyCategory(product.category);
+  const vacancyBadge = isVacancyCard
     ? '<span class="vacancy-card-badge">💼 Вакансия</span>'
     : "";
   const status = product.status || "active";
@@ -2181,7 +2188,7 @@ function getProductCard(product, options = {}) {
   const historyTime = product.soldAt || product.updatedAt || product.createdAt;
 
   return `
-    <div class="product-card ${options.ownerActions ? "owner-product-card" : ""} ${status !== "active" ? "is-inactive" : ""} ${isSoldHistory ? "sold-history-card is-noninteractive" : ""} ${featuredClass}" ${interactionAttributes}>
+    <div class="product-card ${options.ownerActions ? "owner-product-card" : ""} ${isVacancyCard ? "is-vacancy-card" : ""} ${status !== "active" ? "is-inactive" : ""} ${isSoldHistory ? "sold-history-card is-noninteractive" : ""} ${featuredClass}" ${interactionAttributes}>
       <img src="${image}" alt="${name}" loading="${options.priority ? "eager" : "lazy"}" decoding="async" fetchpriority="${options.priority ? "high" : "low"}" onerror="handleImageError(this)">
       <div class="${options.ownerActions ? "product-card-info" : ""}">
         ${featuredBadge}
@@ -3031,7 +3038,15 @@ function renderProductDetails(product) {
         if (callBtn.tagName !== "A") {
           event.preventDefault();
           startPhoneCall(cleanPhone);
+          return;
         }
+
+        // Первый тап открывает понятное меню подтверждения.
+        // Вторая кнопка внутри меню — настоящая tel:-ссылка, поэтому iOS/Telegram
+        // получает отдельный прямой пользовательский жест и показывает системный звонок.
+        event.preventDefault();
+        event.stopPropagation();
+        showPhoneMenu(sellerPhone || cleanPhone);
       };
     } else {
       callBtn.textContent = isAvailable ? "📞 Нет номера" : "📞 Недоступно";
@@ -3067,6 +3082,68 @@ function renderProductDetails(product) {
   prepareProductShareMessage(product).catch(() => {});
   state.currentProductImageIndex = 0;
   showProductImage(0);
+}
+
+function formatPhoneForCallSheet(phone) {
+  const normalized = normalizePhoneForTel(phone);
+  const match = normalized.match(/^\+7(\d{3})(\d{3})(\d{2})(\d{2})$/);
+  if (match) return `+7 (${match[1]}) ${match[2]}-${match[3]}-${match[4]}`;
+  return String(phone || "").trim() || normalized;
+}
+
+function showPhoneMenu(phone) {
+  const normalizedPhone = normalizePhoneForTel(phone);
+  if (!normalizedPhone) {
+    alert("Телефон продавца не указан");
+    return;
+  }
+
+  const sheet = document.getElementById("callSheet");
+  const confirmLink = document.getElementById("callSheetConfirm");
+  const phoneLabel = document.getElementById("callSheetPhone");
+
+  if (!sheet || !confirmLink || !phoneLabel) {
+    startPhoneCall(normalizedPhone);
+    return;
+  }
+
+  const displayPhone = formatPhoneForCallSheet(phone) || normalizedPhone;
+  confirmLink.href = `tel:${normalizedPhone}`;
+  confirmLink.setAttribute("aria-label", `Позвонить ${displayPhone}`);
+  confirmLink.dataset.phone = normalizedPhone;
+  phoneLabel.textContent = `Позвонить ${displayPhone}`;
+  sheet.hidden = false;
+  sheet.setAttribute("aria-hidden", "false");
+  document.body.classList.add("call-sheet-open");
+
+  requestAnimationFrame(() => {
+    sheet.classList.add("is-open");
+    try {
+      confirmLink.focus({ preventScroll: true });
+    } catch {
+      confirmLink.focus();
+    }
+  });
+}
+
+function hidePhoneMenu() {
+  const sheet = document.getElementById("callSheet");
+  if (!sheet || sheet.hidden) return;
+
+  sheet.classList.remove("is-open");
+  sheet.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("call-sheet-open");
+  window.setTimeout(() => {
+    if (!sheet.classList.contains("is-open")) sheet.hidden = true;
+  }, 220);
+}
+
+function handleCallSheetBackdrop(event) {
+  if (event.target === event.currentTarget) hidePhoneMenu();
+}
+
+function handleCallSheetConfirm() {
+  tg?.HapticFeedback?.impactOccurred?.("medium");
 }
 
 function startPhoneCall(phone) {

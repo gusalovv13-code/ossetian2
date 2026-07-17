@@ -6762,3 +6762,172 @@ body.dark-mode #productList > .product-card.is-featured:not(.owner-product-card)
   }
 }
 
+
+/* ===== v1.14.3: полные фото, компактные вакансии и меню звонка ===== */
+
+/* Фото объявления больше не обрезается сверху и снизу: целиком вписываем его в рамку. */
+#productList > .product-card:not(.owner-product-card) > img,
+#productList > .product-card.is-featured:not(.owner-product-card) > img,
+.related-products > .product-card > img,
+.related-products > .product-card.is-featured:not(.owner-product-card) > img {
+  object-fit: contain !important;
+  object-position: center center !important;
+  background: #eef1f5;
+  padding: 2px;
+}
+
+body.dark-mode #productList > .product-card:not(.owner-product-card) > img,
+body.dark-mode .related-products > .product-card > img {
+  background: #27292f;
+}
+
+/* У вакансии есть дополнительная плашка и подпись зарплаты — освобождаем им место. */
+#productList > .product-card.is-vacancy-card:not(.owner-product-card) > img {
+  height: 92px;
+  margin-bottom: 5px;
+}
+
+#productList > .product-card.is-vacancy-card:not(.owner-product-card) .vacancy-card-badge {
+  min-height: 17px;
+  margin: 0 0 3px;
+  padding: 3px 6px;
+  font-size: 9px;
+  line-height: 1;
+}
+
+#productList > .product-card.is-vacancy-card:not(.owner-product-card) h4 {
+  min-height: 0;
+  margin-bottom: 3px;
+  font-size: 13.5px;
+  line-height: 1.16;
+}
+
+#productList > .product-card.is-vacancy-card:not(.owner-product-card) .salary-caption {
+  margin-bottom: 1px;
+  font-size: 9px;
+  line-height: 1.05;
+}
+
+#productList > .product-card.is-vacancy-card:not(.owner-product-card) .card-price-row {
+  margin-bottom: 2px;
+}
+
+#productList > .product-card.is-vacancy-card:not(.owner-product-card) .card-price-row b,
+#productList > .product-card.is-vacancy-card:not(.owner-product-card) .discounted-price {
+  margin-bottom: 0;
+  font-size: 13px;
+  line-height: 1.12;
+}
+
+#productList > .product-card.is-vacancy-card:not(.owner-product-card) p {
+  font-size: 9.5px;
+  line-height: 1.15;
+}
+
+/* Собственное подтверждение звонка: первый тап открывает меню, второй — прямую tel:-ссылку. */
+.call-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 14px max(12px, env(safe-area-inset-right)) calc(14px + env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  background: rgba(0, 0, 0, .48);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.call-sheet[hidden] {
+  display: none !important;
+}
+
+.call-sheet.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.call-sheet-panel {
+  width: min(100%, 430px);
+  transform: translate3d(0, calc(100% + 28px), 0);
+  transition: transform 220ms cubic-bezier(.22, .9, .32, 1);
+}
+
+.call-sheet.is-open .call-sheet-panel {
+  transform: translate3d(0, 0, 0);
+}
+
+.call-sheet-group,
+.call-sheet-cancel {
+  width: 100%;
+  overflow: hidden;
+  border: 0;
+  border-radius: 18px;
+  background: rgba(246, 246, 248, .96);
+  box-shadow: 0 12px 38px rgba(0, 0, 0, .22);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+}
+
+.call-sheet-action,
+.call-sheet-cancel {
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 14px 18px;
+  color: #087cff;
+  text-align: center;
+  text-decoration: none;
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1.2;
+  touch-action: manipulation;
+}
+
+.call-sheet-action:active,
+.call-sheet-cancel:active {
+  background: rgba(224, 224, 228, .98);
+}
+
+.call-sheet-icon {
+  flex: 0 0 auto;
+  font-size: 25px;
+  filter: grayscale(1);
+  opacity: .56;
+}
+
+.call-sheet-action strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.call-sheet-cancel {
+  margin-top: 9px;
+  cursor: pointer;
+}
+
+body.call-sheet-open {
+  overscroll-behavior: none;
+}
+
+body.dark-mode .call-sheet-group,
+body.dark-mode .call-sheet-cancel {
+  background: rgba(42, 42, 45, .97);
+  color: #0a84ff;
+}
+
+body.dark-mode .call-sheet-action:active,
+body.dark-mode .call-sheet-cancel:active {
+  background: rgba(58, 58, 61, .98);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .call-sheet,
+  .call-sheet-panel {
+    transition: none;
+  }
+}
