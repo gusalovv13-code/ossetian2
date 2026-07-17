@@ -489,13 +489,21 @@
       ></textarea>
       <p class="field-hint">До 20 характеристик в формате «Название: значение».</p>
 
-      <label for="adPhone">Телефон</label>
-      <input
-        id="adPhone"
-        placeholder="+7 999 123-45-67"
-        inputmode="tel"
-        enterkeyhint="done"
-      />
+      <div class="toggle-row">
+        <span>Получать звонки</span>
+        <input id="adAllowCalls" type="checkbox" checked />
+      </div>
+
+      <div id="adPhoneField" class="phone-field-group">
+        <label for="adPhone">Телефон</label>
+        <input
+          id="adPhone"
+          placeholder="+7 999 123-45-67"
+          inputmode="tel"
+          enterkeyhint="done"
+        />
+        <p class="field-hint">Если звонки выключены, номер не показывается в объявлении.</p>
+      </div>
 
       <div class="toggle-row">
         <span>Разрешить сообщения в Telegram</span>
@@ -878,15 +886,12 @@
         <button type="button" class="dialog-close" onclick="closeCoverCropEditor()" aria-label="Закрыть">×</button>
       </div>
 
-      <div class="cover-crop-viewport">
+      <div id="coverCropViewport" class="cover-crop-viewport">
         <img id="coverCropImage" alt="Настройка кадра" />
         <div class="cover-crop-grid" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
         <span>Каталог</span>
       </div>
-
-      <label class="cover-crop-control"><span>По горизонтали</span><input id="coverCropX" type="range" min="0" max="100" value="50" oninput="updateCoverCropEditor()" /></label>
-      <label class="cover-crop-control"><span>По вертикали</span><input id="coverCropY" type="range" min="0" max="100" value="50" oninput="updateCoverCropEditor()" /></label>
-      <label class="cover-crop-control"><span>Масштаб</span><input id="coverCropZoom" type="range" min="1" max="2.4" step="0.05" value="1" oninput="updateCoverCropEditor()" /></label>
+      <p class="cover-crop-hint">Двигайте фото пальцем. Для масштаба используйте жест двумя пальцами.</p>
 
       <div class="cover-crop-actions">
         <button type="button" class="outline" onclick="resetCoverCropEditor()">Сбросить</button>
@@ -908,6 +913,6 @@
   </div>
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">←</div>
 
-  <script src="script.js?v=1.14.4"></script>
+  <script src="script.js?v=1.14.5"></script>
 </body>
 </html>

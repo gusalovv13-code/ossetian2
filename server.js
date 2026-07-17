@@ -261,6 +261,7 @@ function mapProduct(row) {
     district: row.district || "",
     phone: row.phone || "",
     allowMessages: row.allow_messages !== false,
+    allowCalls: row.allow_calls !== false,
     condition: PRODUCT_CONDITIONS.has(row.condition) ? row.condition : "used",
     negotiable: Boolean(row.negotiable),
     delivery: Boolean(row.delivery),
@@ -356,6 +357,7 @@ const PRODUCT_PUBLIC_DETAIL_COLUMNS = `
   p.district,
   p.phone,
   p.allow_messages,
+  p.allow_calls,
   p.condition,
   p.negotiable,
   p.delivery,
@@ -1345,6 +1347,7 @@ async function initDb(db = pool) {
       location TEXT DEFAULT 'Владикавказ',
       phone TEXT DEFAULT '',
       allow_messages BOOLEAN DEFAULT true,
+      allow_calls BOOLEAN DEFAULT true,
       views INTEGER DEFAULT 0,
       status TEXT DEFAULT 'active',
       created_at TIMESTAMPTZ DEFAULT NOW()
@@ -1359,6 +1362,11 @@ async function initDb(db = pool) {
   await db.query(`
     ALTER TABLE products
     ADD COLUMN IF NOT EXISTS allow_messages BOOLEAN DEFAULT true;
+  `);
+
+  await db.query(`
+    ALTER TABLE products
+    ADD COLUMN IF NOT EXISTS allow_calls BOOLEAN DEFAULT true;
   `);
 
   await db.query(`
@@ -3017,7 +3025,7 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
   try {
     const {
       name, price, category, desc, image, thumbnail, images, location, phone,
-      allowMessages, condition, negotiable, delivery, district,
+      allowCalls, allowMessages, condition, negotiable, delivery, district,
       specifications, status
     } = req.body;
 
@@ -3080,16 +3088,16 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
       `
         INSERT INTO products (
           id, owner_id, owner_name, owner_username, name, price, price_amount,
-          category, description, image, images, location, phone, allow_messages,
+          category, description, image, images, location, phone, allow_calls, allow_messages,
           condition, negotiable, delivery, district, specifications, views, status,
           hidden, auto_hidden, moderation_status, moderation_reason, moderation_matches,
           moderation_target_status, published_at, expires_at
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13,
-          $14, $15, $16, $17, $18, $19::jsonb, 0, $20, $21, $22, $23, $24, $25::jsonb, $26,
-          CASE WHEN $20 = 'active' THEN NOW() ELSE NULL END,
-          CASE WHEN $20 = 'active' THEN NOW() + ($27::int * INTERVAL '1 day') ELSE NULL END
+          $14, $15, $16, $17, $18, $19, $20::jsonb, 0, $21, $22, $23, $24, $25, $26::jsonb, $27,
+          CASE WHEN $21 = 'active' THEN NOW() ELSE NULL END,
+          CASE WHEN $21 = 'active' THEN NOW() + ($28::int * INTERVAL '1 day') ELSE NULL END
         )
         RETURNING *;
       `,
@@ -3097,7 +3105,7 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
         id, req.telegramUser.id, ownerName || "Пользователь Telegram",
         req.telegramUser.username || "", cleanName, cleanPrice, cleanPriceAmount,
         cleanCategory, cleanDescription, cleanImages[0] || "", JSON.stringify(cleanImages),
-        cleanLocation, cleanPhone, allowMessages !== false, cleanCondition,
+        cleanLocation, cleanPhone, allowCalls !== false, allowMessages !== false, cleanCondition,
         normalizeBoolean(negotiable), normalizeBoolean(delivery), cleanDistrict,
         JSON.stringify(cleanSpecifications), finalStatus, moderation.blocked,
         moderation.blocked, moderation.blocked ? "blocked" : "approved",
@@ -3152,7 +3160,7 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     const productId = normalizeText(req.params.id, 64);
     const {
       name, price, category, desc, image, thumbnail, images, location, phone,
-      allowMessages, condition, negotiable, delivery, district,
+      allowCalls, allowMessages, condition, negotiable, delivery, district,
       specifications, status, discountEnabled, originalPrice
     } = req.body;
 
@@ -3272,24 +3280,24 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
         UPDATE products
         SET name = $3, price = $4, price_amount = $5, category = $6,
             description = $7, image = $8, images = $9::jsonb, location = $10,
-            phone = $11, allow_messages = $12, condition = $13, negotiable = $14,
-            delivery = $15, district = $16, specifications = $17::jsonb, status = $18,
-            previous_price = $19,
-            previous_price_amount = $20,
-            price_dropped_at = $21,
-            moderation_status = $22, moderation_reason = $23,
-            moderation_matches = $24::jsonb,
-            moderation_target_status = $26,
+            phone = $11, allow_calls = $12, allow_messages = $13, condition = $14, negotiable = $15,
+            delivery = $16, district = $17, specifications = $18::jsonb, status = $19,
+            previous_price = $20,
+            previous_price_amount = $21,
+            price_dropped_at = $22,
+            moderation_status = $23, moderation_reason = $24,
+            moderation_matches = $25::jsonb,
+            moderation_target_status = $27,
             hidden = CASE
-              WHEN $25 THEN TRUE
+              WHEN $26 THEN TRUE
               WHEN COALESCE(auto_hidden, FALSE) = TRUE THEN FALSE
               ELSE hidden
             END,
-            auto_hidden = $25,
-            thumbnail = $27,
-            published_at = CASE WHEN $18 = 'active' AND COALESCE(status, '') <> 'active' THEN NOW() ELSE published_at END,
-            expires_at = CASE WHEN $18 = 'active' AND COALESCE(status, '') <> 'active' THEN NOW() + ($28::int * INTERVAL '1 day') ELSE expires_at END,
-            archived_at = CASE WHEN $18 = 'active' THEN NULL ELSE archived_at END,
+            auto_hidden = $26,
+            thumbnail = $28,
+            published_at = CASE WHEN $19 = 'active' AND COALESCE(status, '') <> 'active' THEN NOW() ELSE published_at END,
+            expires_at = CASE WHEN $19 = 'active' AND COALESCE(status, '') <> 'active' THEN NOW() + ($29::int * INTERVAL '1 day') ELSE expires_at END,
+            archived_at = CASE WHEN $19 = 'active' THEN NULL ELSE archived_at END,
             updated_at = NOW()
         WHERE id = $1 AND owner_id = $2
         RETURNING *;
@@ -3297,7 +3305,7 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
       [
         productId, req.telegramUser.id, cleanName, cleanPrice, cleanPriceAmount,
         cleanCategory, cleanDescription, cleanImages[0] || "", JSON.stringify(cleanImages),
-        cleanLocation, cleanPhone, allowMessages !== false, cleanCondition,
+        cleanLocation, cleanPhone, allowCalls !== false, allowMessages !== false, cleanCondition,
         normalizeBoolean(negotiable), normalizeBoolean(delivery), cleanDistrict,
         JSON.stringify(cleanSpecifications), finalStatus,
         finalPreviousPrice, finalPreviousPriceAmount, finalPriceDroppedAt,

@@ -361,6 +361,7 @@ const draftAd = {
 };
 
 let coverCropEditorState = { x: 50, y: 50, zoom: 1 };
+const coverCropGestureState = { active: new Map(), startCrop: { x: 50, y: 50, zoom: 1 }, startDistance: 0, startCenter: null };
 let isPublishingAd = false;
 
 /* =======================
@@ -2175,7 +2176,7 @@ function getProductCard(product, options = {}) {
   const productId = escapeHTML(product.id || "");
   const name = escapeHTML(product.name || "Без названия");
   const location = escapeHTML(product.location || "Владикавказ");
-  const image = escapeHTML(safeImageUrl(images[0]));
+  const image = escapeHTML(safeImageUrl(product.thumbnail || images[0]));
   const price = escapeHTML(formatPrice(product.price) || product.price || "");
   const previousPrice = escapeHTML(formatPrice(product.previousPrice) || product.previousPrice || "");
   const priceDropMarkup = product.priceDropped
@@ -3028,6 +3029,7 @@ function renderProductDetails(product) {
   const sellerPhone = product.phone || "";
   const cleanPhone = normalizePhoneForTel(sellerPhone);
   const allowMessages = product.allowMessages !== false;
+  const allowCalls = product.allowCalls !== false;
   const isAvailable = (product.status || "active") === "active" && !product.hidden;
 
   if (productSeller) {
@@ -3049,15 +3051,15 @@ function renderProductDetails(product) {
   }
 
   if (productPhoneLine) {
-    if (cleanPhone && isAvailable) {
+    if (allowCalls && cleanPhone && isAvailable) {
       productPhoneLine.innerHTML = `
-        <a href="tel:${escapeHTML(cleanPhone)}" class="phone-line-link" aria-label="Позвонить ${escapeHTML(sellerPhone)}" onclick="event.preventDefault(); showPhoneMenu(decodeURIComponent('${escapeHTML(encodeURIComponent(sellerPhone || cleanPhone))}'))">
+        <a href="${escapeHTML(buildExternalCallPageUrl(cleanPhone) || `tel:${cleanPhone}`)}" class="phone-line-link" aria-label="Позвонить ${escapeHTML(sellerPhone)}" onclick="event.preventDefault(); openExternalCallPage(decodeURIComponent('${escapeHTML(encodeURIComponent(cleanPhone))}'))">
           📞 ${escapeHTML(sellerPhone)}
         </a>
       `;
     } else {
       productPhoneLine.textContent = isAvailable
-        ? "📞 Телефон не указан"
+        ? (allowCalls ? "📞 Телефон не указан" : "📞 Номер скрыт")
         : "📞 Объявление недоступно";
     }
   }
@@ -3079,7 +3081,7 @@ function renderProductDetails(product) {
   }
 
   if (callBtn) {
-    if (isAvailable && cleanPhone) {
+    if (isAvailable && allowCalls && cleanPhone) {
       const telHref = `tel:${cleanPhone}`;
       callBtn.textContent = "📞 Позвонить";
       callBtn.classList.remove("disabled-btn", "disabled");
@@ -3090,20 +3092,12 @@ function renderProductDetails(product) {
       callBtn.dataset.phone = cleanPhone;
       callBtn.onclick = event => {
         tg?.HapticFeedback?.impactOccurred?.("light");
-        if (callBtn.tagName !== "A") {
-          event.preventDefault();
-          openExternalCallPage(cleanPhone);
-          return;
-        }
-
-        // Первый тап открывает меню подтверждения. Второй открывает отдельную
-        // HTTPS-страницу вне Mini App, где находится прямая tel:-ссылка.
         event.preventDefault();
         event.stopPropagation();
-        showPhoneMenu(sellerPhone || cleanPhone);
+        openExternalCallPage(cleanPhone);
       };
     } else {
-      callBtn.textContent = isAvailable ? "📞 Нет номера" : "📞 Недоступно";
+      callBtn.textContent = isAvailable ? (allowCalls ? "📞 Нет номера" : "📞 Звонки выключены") : "📞 Недоступно";
       callBtn.classList.add("disabled-btn", "disabled");
       callBtn.removeAttribute("href");
       callBtn.setAttribute("aria-disabled", "true");
@@ -3521,8 +3515,24 @@ function getAdFormData() {
     model: structured.model,
     year: structured.year,
     phone: document.getElementById("adPhone")?.value.trim() || "",
+    allowCalls: document.getElementById("adAllowCalls")?.checked !== false,
     allowMessages: document.getElementById("adAllowMessages")?.checked !== false
   };
+}
+
+function updateCallPreferencesUI() {
+  const allowCallsInput = document.getElementById("adAllowCalls");
+  const phoneField = document.getElementById("adPhoneField");
+  const phoneInput = document.getElementById("adPhone");
+  const enabled = allowCallsInput?.checked !== false;
+
+  if (phoneField) phoneField.hidden = !enabled;
+  if (phoneInput) {
+    phoneInput.disabled = !enabled;
+    if (enabled && !phoneInput.value.trim() && state.telegramUser?.phone) {
+      phoneInput.value = state.telegramUser.phone;
+    }
+  }
 }
 
 function updateListingQuality() {
@@ -3714,6 +3724,99 @@ function removeDraftPhoto(index) {
   if (photoInput) photoInput.value = "";
 }
 
+function getCoverCropDistance(points) {
+  if (points.length < 2) return 0;
+  const [a, b] = points;
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function getCoverCropCenter(points) {
+  if (points.length === 0) return { x: 0, y: 0 };
+  const total = points.reduce((sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }), { x: 0, y: 0 });
+  return { x: total.x / points.length, y: total.y / points.length };
+}
+
+function initCoverCropGestures() {
+  const viewport = document.getElementById("coverCropViewport");
+  if (!viewport || viewport.dataset.gestureReady === "true") return;
+  viewport.dataset.gestureReady = "true";
+
+  const clampCrop = crop => normalizeCoverCrop(crop);
+
+  const syncFromPointers = () => {
+    const points = Array.from(coverCropGestureState.active.values());
+    const rect = viewport.getBoundingClientRect();
+    if (!rect.width || !rect.height || points.length === 0) return;
+
+    if (points.length >= 2) {
+      const distance = getCoverCropDistance(points);
+      const center = getCoverCropCenter(points);
+      const nextZoom = Math.max(1, Math.min(2.4, coverCropGestureState.startCrop.zoom * (distance / Math.max(coverCropGestureState.startDistance || distance, 1))));
+      const moveX = center.x - (coverCropGestureState.startCenter?.x || center.x);
+      const moveY = center.y - (coverCropGestureState.startCenter?.y || center.y);
+      coverCropEditorState = clampCrop({
+        x: coverCropGestureState.startCrop.x - (moveX / rect.width) * (100 / Math.max(nextZoom, 1)),
+        y: coverCropGestureState.startCrop.y - (moveY / rect.height) * (100 / Math.max(nextZoom, 1)),
+        zoom: nextZoom
+      });
+      updateCoverCropEditor();
+      return;
+    }
+
+    const point = points[0];
+    const startPoint = coverCropGestureState.startCenter || point;
+    const moveX = point.x - startPoint.x;
+    const moveY = point.y - startPoint.y;
+    coverCropEditorState = clampCrop({
+      x: coverCropGestureState.startCrop.x - (moveX / rect.width) * (100 / Math.max(coverCropGestureState.startCrop.zoom, 1)),
+      y: coverCropGestureState.startCrop.y - (moveY / rect.height) * (100 / Math.max(coverCropGestureState.startCrop.zoom, 1)),
+      zoom: coverCropGestureState.startCrop.zoom
+    });
+    updateCoverCropEditor();
+  };
+
+  const startGesture = () => {
+    const points = Array.from(coverCropGestureState.active.values());
+    coverCropGestureState.startCrop = { ...coverCropEditorState };
+    coverCropGestureState.startDistance = getCoverCropDistance(points);
+    coverCropGestureState.startCenter = getCoverCropCenter(points);
+  };
+
+  const handlePointerDown = event => {
+    viewport.setPointerCapture?.(event.pointerId);
+    coverCropGestureState.active.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    startGesture();
+  };
+
+  const handlePointerMove = event => {
+    if (!coverCropGestureState.active.has(event.pointerId)) return;
+    coverCropGestureState.active.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    syncFromPointers();
+  };
+
+  const finishPointer = event => {
+    if (!coverCropGestureState.active.has(event.pointerId)) return;
+    coverCropGestureState.active.delete(event.pointerId);
+    if (coverCropGestureState.active.size > 0) startGesture();
+  };
+
+  viewport.addEventListener("pointerdown", handlePointerDown);
+  viewport.addEventListener("pointermove", handlePointerMove);
+  viewport.addEventListener("pointerup", finishPointer);
+  viewport.addEventListener("pointercancel", finishPointer);
+  viewport.addEventListener("pointerleave", finishPointer);
+  viewport.addEventListener("wheel", event => {
+    event.preventDefault();
+    const delta = event.deltaY < 0 ? 0.12 : -0.12;
+    coverCropEditorState = normalizeCoverCrop({
+      x: coverCropEditorState.x,
+      y: coverCropEditorState.y,
+      zoom: coverCropEditorState.zoom + delta
+    });
+    updateCoverCropEditor();
+  }, { passive: false });
+}
+
 function openCoverCropEditor() {
   const source = draftAd.images[0];
   if (!source) {
@@ -3725,11 +3828,10 @@ function openCoverCropEditor() {
   const image = document.getElementById("coverCropImage");
   if (!dialog || !image) return;
 
+  initCoverCropGestures();
+  coverCropGestureState.active.clear();
   coverCropEditorState = normalizeCoverCrop(draftAd.coverCrop);
   image.src = safeImageUrl(source);
-  document.getElementById("coverCropX").value = String(coverCropEditorState.x);
-  document.getElementById("coverCropY").value = String(coverCropEditorState.y);
-  document.getElementById("coverCropZoom").value = String(coverCropEditorState.zoom);
   updateCoverCropEditor();
 
   if (dialog.showModal) dialog.showModal();
@@ -3739,19 +3841,12 @@ function openCoverCropEditor() {
 function updateCoverCropEditor() {
   const image = document.getElementById("coverCropImage");
   if (!image) return;
-  coverCropEditorState = normalizeCoverCrop({
-    x: document.getElementById("coverCropX")?.value,
-    y: document.getElementById("coverCropY")?.value,
-    zoom: document.getElementById("coverCropZoom")?.value
-  });
+  coverCropEditorState = normalizeCoverCrop(coverCropEditorState);
   image.style.cssText = getCoverCropCss(coverCropEditorState);
 }
 
 function resetCoverCropEditor() {
   coverCropEditorState = { x: 50, y: 50, zoom: 1 };
-  document.getElementById("coverCropX").value = "50";
-  document.getElementById("coverCropY").value = "50";
-  document.getElementById("coverCropZoom").value = "1";
   updateCoverCropEditor();
 }
 
@@ -3786,6 +3881,7 @@ async function saveCoverCropEditor() {
 }
 
 function updatePreviewCard() {
+
   const preview = document.getElementById("previewCard");
 
   if (!preview) {
@@ -3921,6 +4017,7 @@ async function publishAd(status = "active") {
         delivery: ad.delivery,
         specifications: ad.specifications,
         phone: ad.phone,
+        allowCalls: ad.allowCalls,
         allowMessages: ad.allowMessages,
         status: targetStatus
       })
@@ -4019,6 +4116,7 @@ function clearCreateForm() {
   const delivery = document.getElementById("adDelivery");
   const specifications = document.getElementById("adSpecifications");
   const phone = document.getElementById("adPhone");
+  const allowCalls = document.getElementById("adAllowCalls");
   const allowMessages = document.getElementById("adAllowMessages");
   const preview = document.getElementById("previewCard");
   const photoInput = document.getElementById("photoInput");
@@ -4048,7 +4146,9 @@ function clearCreateForm() {
   if (delivery) delivery.checked = false;
   if (specifications) specifications.value = "";
   if (phone) phone.value = state.telegramUser?.phone || "";
+  if (allowCalls) allowCalls.checked = true;
   if (allowMessages) allowMessages.checked = true;
+  updateCallPreferencesUI();
   if (preview) preview.innerHTML = "";
   if (photoInput) photoInput.value = "";
   if (cameraInput) cameraInput.value = "";
@@ -4112,6 +4212,7 @@ async function editAd(id) {
   const delivery = document.getElementById("adDelivery");
   const specifications = document.getElementById("adSpecifications");
   const phone = document.getElementById("adPhone");
+  const allowCalls = document.getElementById("adAllowCalls");
   const allowMessages = document.getElementById("adAllowMessages");
 
   if (title) title.value = product.name || "";
@@ -4140,7 +4241,9 @@ async function editAd(id) {
   if (delivery) delivery.checked = Boolean(product.delivery);
   if (specifications) specifications.value = specificationsToText(product.specifications, { excludeStructured: true });
   if (phone) phone.value = product.phone || "";
+  if (allowCalls) allowCalls.checked = product.allowCalls !== false;
   if (allowMessages) allowMessages.checked = product.allowMessages !== false;
+  updateCallPreferencesUI();
 
   draftAd.images = getProductImages(product).filter(Boolean).slice(0, MAX_PHOTOS);
   draftAd.thumbnail = product.thumbnail || "";
@@ -4604,6 +4707,11 @@ function initEvents() {
   document.getElementById("adModel")?.addEventListener("change", () => updateCustomSelectInput("adModel", "adModelCustom"));
   document.getElementById("adLocation")?.addEventListener("change", () => refreshAdDistrictOptions(""));
   document.getElementById("adDistrict")?.addEventListener("change", () => updateCustomSelectInput("adDistrict", "adDistrictCustom"));
+  document.getElementById("adAllowCalls")?.addEventListener("change", () => {
+    updateCallPreferencesUI();
+    updatePreviewCard();
+    updateCreateButtons();
+  });
 
   [
     "adTitle",
@@ -4626,6 +4734,7 @@ function initEvents() {
     "adDelivery",
     "adSpecifications",
     "adPhone",
+    "adAllowCalls",
     "adAllowMessages"
   ].forEach(id => {
     const el = document.getElementById(id);
@@ -4663,6 +4772,7 @@ function initEvents() {
 
   refreshAdStructuredFields();
   refreshAdDistrictOptions();
+  updateCallPreferencesUI();
   renderPhotoPreview();
   updateCreateButtons();
   updateListingQuality();

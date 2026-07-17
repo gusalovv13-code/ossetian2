@@ -7,11 +7,15 @@
     name="viewport"
     content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
   />
+  <meta name="screen-orientation" content="portrait" />
+  <meta name="x5-orientation" content="portrait" />
+  <meta name="theme-color" content="#f7f8fc" />
 
   <title>Алания Маркет</title>
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
+  <link rel="manifest" href="manifest.webmanifest?v=1.14.4" />
   <link rel="stylesheet" href="style.css?v=1.14.4" />
 </head>
 
@@ -31,20 +35,22 @@
       <h1>Добро пожаловать!</h1>
       <p class="muted">Что вы хотите сделать?</p>
 
+      <div id="homeTopAds" class="catalog-top-ads home-top-ads" hidden></div>
+
       <div class="menu">
         <button onclick="showPage('catalog')" class="menu-card purple" type="button">
           <span>🔍</span>
           <div>
-            <b>Найти товар</b>
-            <small>Поиск по всем объявлениям</small>
+            <b>Найти товар или вакансию</b>
+            <small>Поиск по актуальным объявлениям</small>
           </div>
         </button>
 
-        <button onclick="showPage('create1')" class="menu-card blue" type="button">
+        <button onclick="openCreatePage()" class="menu-card blue" type="button">
           <span>＋</span>
           <div>
             <b>Разместить объявление</b>
-            <small>Добавьте свой товар</small>
+            <small>Добавьте товар или вакансию</small>
           </div>
         </button>
 
@@ -55,6 +61,7 @@
             <small>Управление товарами</small>
           </div>
         </button>
+
 
         <button onclick="showPage('favorites')" class="menu-card red" type="button">
           <span>♡</span>
@@ -67,50 +74,192 @@
     </section>
 
    <section id="catalog" class="page">
-  <form id="searchForm" class="search-form" action="javascript:void(0);">
-    <input
-      id="searchInput"
-      class="search"
-      type="search"
-      placeholder="Поиск товаров..."
-      enterkeyhint="done"
-      autocomplete="off"
-    />
-  </form>
+  <div class="catalog-search-row">
+    <form id="searchForm" class="search-form" action="javascript:void(0);">
+      <input
+        id="searchInput"
+        class="search"
+        type="search"
+        placeholder="Товар, вакансия, марка авто, модель телефона..."
+        enterkeyhint="search"
+        autocomplete="off"
+      />
+      <button
+        id="searchClearButton"
+        class="search-clear-button"
+        type="button"
+        aria-label="Очистить поисковый запрос"
+        title="Очистить поиск"
+        hidden
+      >×</button>
+    </form>
+    <button id="catalogFiltersToggle" class="catalog-filters-toggle" type="button" aria-expanded="false">
+      ⚙️ <span>Фильтры</span><b id="catalogFilterCount" hidden>0</b>
+    </button>
+  </div>
 
-  <div class="categories">
-    <button class="active" type="button">Все</button>
-    <button type="button">📱 Электроника</button>
-    <button type="button">🚗 Авто</button>
-    <button type="button">👕 Одежда</button>
-    <button type="button">🏠 Дом</button>
+  <form id="catalogFilters" class="catalog-filters" hidden>
+    <div class="filter-grid two-columns">
+      <label>
+        <span>Цена от</span>
+        <input id="filterMinPrice" type="text" inputmode="numeric" maxlength="10" placeholder="0" />
+      </label>
+      <label>
+        <span>Цена до</span>
+        <input id="filterMaxPrice" type="text" inputmode="numeric" maxlength="10" placeholder="Без ограничения" />
+      </label>
+    </div>
+
+    <div class="filter-grid two-columns">
+      <label>
+        <span>Город</span>
+        <select id="filterCity">
+          <option value="">Все города</option>
+          <option>Владикавказ</option>
+          <option>Беслан</option>
+          <option>Алагир</option>
+          <option>Ардон</option>
+          <option>Дигора</option>
+          <option>Моздок</option>
+          <option>Чикола</option>
+          <option>Другое</option>
+        </select>
+      </label>
+      <label>
+        <span>Район</span>
+        <select id="filterDistrict">
+          <option value="">Все районы</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="filter-grid two-columns">
+      <label>
+        <span id="filterItemTypeLabel">Тип товара</span>
+        <select id="filterItemType">
+          <option value="">Все типы</option>
+        </select>
+      </label>
+      <label>
+        <span id="filterYearLabel">Год выпуска</span>
+        <select id="filterYear">
+          <option value="">Любой год</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="filter-grid two-columns">
+      <label>
+        <span id="filterBrandLabel">Марка / бренд</span>
+        <select id="filterBrand">
+          <option value="">Все марки и бренды</option>
+        </select>
+      </label>
+      <label>
+        <span id="filterModelLabel">Модель</span>
+        <select id="filterModel">
+          <option value="">Все модели</option>
+        </select>
+      </label>
+    </div>
+
+    <label>
+      <span>Сортировка</span>
+      <select id="filterSort">
+        <option value="newest">Сначала новые</option>
+        <option value="price_asc">Сначала дешевле</option>
+        <option value="price_desc">Сначала дороже</option>
+      </select>
+    </label>
+
+    <div class="filter-actions">
+      <button id="resetCatalogFilters" class="outline" type="button">Сбросить</button>
+      <button class="primary" type="submit">Показать объявления</button>
+    </div>
+  </form>
+  <div id="searchStatus" class="search-status" aria-live="polite"></div>
+
+  <div id="catalogTopAds" class="catalog-top-ads" hidden></div>
+
+  <div class="categories" role="group" aria-label="Категории объявлений">
+    <button class="active" type="button" data-category="Все" aria-pressed="true">Все</button>
+    <button type="button" data-category="Электроника" aria-pressed="false">📱 Электроника</button>
+    <button type="button" data-category="Авто" aria-pressed="false">🚗 Авто</button>
+    <button type="button" data-category="Одежда" aria-pressed="false">👕 Одежда</button>
+    <button type="button" data-category="Дом" aria-pressed="false">🏠 Дом</button>
+    <button type="button" data-category="Инструменты" aria-pressed="false">🔧 Инструменты</button>
+    <button type="button" data-category="Сад и огород" aria-pressed="false">🌱 Сад и огород</button>
+    <button type="button" data-category="Животные" aria-pressed="false">🐄 Животные</button>
+    <button type="button" data-category="Вакансии" aria-pressed="false">💼 Вакансии</button>
   </div>
 
   <div id="productList" class="product-list"></div>
+  <button id="catalogLoadMore" class="catalog-load-more" type="button" onclick="loadMoreProducts()" hidden>Показать ещё</button>
 </section>
 
     <section id="product" class="page">
-      <img id="productImage" class="hero-img" src="" alt="" />
+      <div id="productGallery" class="product-gallery" aria-label="Фотографии объявления">
+        <button id="productPrevImage" class="gallery-arrow gallery-prev" type="button" aria-label="Предыдущее фото">‹</button>
+        <img id="productImage" class="hero-img" src="" alt="Фото товара" onclick="openPhotoLightbox()" />
+        <button id="productNextImage" class="gallery-arrow gallery-next" type="button" aria-label="Следующее фото">›</button>
+        <span id="productImageCounter" class="gallery-counter">1 / 1</span>
+      </div>
+      <div id="productThumbs" class="product-thumbs"></div>
 
       <h2 id="productName"></h2>
       <h2 id="productPrice" class="price"></h2>
+      <div id="productPriceHistory" class="product-price-history" hidden></div>
 
-      <p class="seller">👤 Владикавказ · 5 мин. назад</p>
+      <div id="productMeta" class="product-meta"></div>
+      <div id="productBadges" class="product-badges"></div>
 
       <div class="seller-info">
-        <p id="productSeller">Продавец</p>
+        <button id="productSeller" class="seller-profile-link" type="button">
+          <span class="seller-profile-link-icon" aria-hidden="true">👤</span>
+          <span class="seller-profile-link-copy">
+            <b>Продавец</b>
+            <small>Открыть профиль</small>
+          </span>
+          <span class="seller-profile-link-arrow" aria-hidden="true">›</span>
+        </button>
         <p id="productLocation">Город</p>
         <p id="productPhoneLine">Телефон</p>
       </div>
 
-      <h4>Описание</h4>
-      <p id="productDesc" class="desc"></p>
+      <section class="product-section">
+        <h4>Описание</h4>
+        <p id="productDesc" class="desc"></p>
+      </section>
+
+      <section id="productSpecificationsSection" class="product-section">
+        <h4>Характеристики</h4>
+        <div id="productSpecifications" class="specifications-list"></div>
+      </section>
+
+      <div class="product-secondary-actions">
+        <button id="shareProductBtn" type="button" class="outline compact-share-action" onclick="shareProduct(this)">↗ Поделиться</button>
+        <button id="reportProductBtn" type="button" class="outline danger-outline report-product-action" onclick="openReportDialog()">🚩 Пожаловаться на объявление</button>
+      </div>
 
       <div class="actions">
         <button id="messageBtn" class="outline" type="button">💬 Написать</button>
-
         <a id="callBtn" class="primary call-link disabled disabled-btn" role="button" aria-disabled="true">📞 Позвонить</a>
       </div>
+
+      <div id="productDetailAds" class="product-detail-ads" hidden></div>
+
+      <section id="sellerOtherProductsSection" class="related-section">
+        <div class="related-heading">
+          <h3>Другие объявления продавца</h3>
+          <button id="openSellerProductsBtn" type="button" class="ghost">Все</button>
+        </div>
+        <div id="sellerOtherProducts" class="related-products"></div>
+      </section>
+
+      <section id="similarProductsSection" class="related-section">
+        <h3>Похожие объявления</h3>
+        <div id="similarProducts" class="related-products"></div>
+      </section>
     </section>
 
     <section id="create1" class="page">
@@ -122,10 +271,10 @@
         <b>3</b>
       </div>
 
-      <label for="adTitle">Название товара</label>
+      <label id="adTitleLabel" for="adTitle">Название товара</label>
       <input id="adTitle" placeholder="Введите название" enterkeyhint="done" />
 
-      <label for="adPrice">Цена</label>
+      <label id="adPriceLabel" for="adPrice">Цена</label>
       <input
         id="adPrice"
         type="text"
@@ -136,6 +285,35 @@
         enterkeyhint="done"
       />
 
+      <section id="adDiscountEditor" class="discount-editor" hidden>
+        <label class="discount-toggle" for="adDiscountEnabled">
+          <input id="adDiscountEnabled" type="checkbox" />
+          <span>
+            <b>Добавить скидку</b>
+            <small>Старая цена будет зачёркнута, а новая отмечена зелёной меткой.</small>
+          </span>
+        </label>
+
+        <div id="adDiscountFields" class="discount-fields" hidden>
+          <label for="adDiscountPrice">Цена со скидкой</label>
+          <input
+            id="adDiscountPrice"
+            type="text"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            maxlength="9"
+            placeholder="Введите цену со скидкой"
+            enterkeyhint="done"
+          />
+          <div id="adDiscountPreview" class="discount-inline-preview" hidden>
+            <s id="adOriginalPricePreview"></s>
+            <strong id="adDiscountPricePreview"></strong>
+            <span id="adDiscountPercentPreview">Скидка</span>
+          </div>
+          <small class="discount-help">Цена со скидкой должна быть ниже обычной цены.</small>
+        </div>
+      </section>
+
       <label for="adCategory">Категория</label>
       <select id="adCategory">
         <option value="">Выберите категорию</option>
@@ -143,7 +321,55 @@
         <option value="Авто">Авто</option>
         <option value="Одежда">Одежда</option>
         <option value="Дом">Дом</option>
+        <option value="Инструменты">Инструменты</option>
+        <option value="Сад и огород">Сад и огород</option>
+        <option value="Животные">Животные</option>
+        <option value="Вакансии">Вакансии</option>
       </select>
+
+      <section id="adStructuredFields" class="structured-fields-card" hidden>
+        <div class="structured-fields-heading">
+          <div>
+            <b>Точные характеристики <span class="optional-label">необязательно</span></b>
+            <small>Заполните только известные пункты. Они улучшат поиск, но не блокируют публикацию.</small>
+          </div>
+          <span>Для поиска</span>
+        </div>
+
+        <div class="filter-grid two-columns">
+          <label>
+            <span id="adItemTypeLabel">Тип товара</span>
+            <select id="adItemType"></select>
+          </label>
+          <label>
+            <span id="adYearLabel">Год выпуска</span>
+            <select id="adYear"></select>
+          </label>
+        </div>
+
+        <div class="filter-grid two-columns">
+          <label>
+            <span id="adBrandLabel">Марка / бренд</span>
+            <select id="adBrand"></select>
+            <input id="adBrandCustom" maxlength="80" placeholder="Введите марку или бренд" hidden />
+          </label>
+          <label>
+            <span id="adModelLabel">Модель</span>
+            <select id="adModel"></select>
+            <input id="adModelCustom" maxlength="80" placeholder="Введите модель" hidden />
+          </label>
+        </div>
+      </section>
+
+      <div id="adConditionField">
+        <label for="adCondition">Состояние товара</label>
+        <select id="adCondition">
+          <option value="new">Новое</option>
+          <option value="like_new">Как новое</option>
+          <option value="used" selected>Бывшее в употреблении</option>
+          <option value="for_parts">На запчасти</option>
+        </select>
+      </div>
 
       <label for="adDesc">Описание</label>
       <textarea
@@ -172,16 +398,35 @@
         <b>3</b>
       </div>
 
-      <h3>Фото объявления</h3>
-      <p class="muted">Добавьте до 5 фото товара.</p>
+      <h3 id="createPhotoHeading">Фото объявления</h3>
+      <p id="createPhotoHint" class="muted">Добавьте до 5 фото товара.</p>
 
       <input id="photoInput" type="file" accept="image/*" multiple hidden />
+      <input id="cameraInput" type="file" accept="image/*" capture="environment" hidden />
 
-      <button id="addPhotoBtn" type="button" class="outline wide">
-        ＋ Добавить фото
-      </button>
+      <div class="photo-source-actions">
+        <button id="addPhotoBtn" type="button" class="outline">
+          ＋ Из галереи
+        </button>
+        <button id="takePhotoBtn" type="button" class="outline">
+          📷 Сфотографировать
+        </button>
+      </div>
 
       <div id="photoPreview" class="photo-grid"></div>
+
+      <section id="catalogCoverPreview" class="catalog-cover-preview" hidden aria-live="polite">
+        <div class="catalog-cover-frame">
+          <img id="catalogCoverPreviewImage" alt="Предпросмотр обложки каталога" />
+          <span>Так будет видно в каталоге</span>
+          <i aria-hidden="true"></i>
+        </div>
+        <div class="catalog-cover-copy">
+          <b>Обложка каталога</b>
+          <small>Первое фото используется в карточке. Перемещайте кадр и меняйте масштаб.</small>
+          <button type="button" class="outline" onclick="openCoverCropEditor()">Настроить кадр</button>
+        </div>
+      </section>
 
       <button
         id="createStep2Btn"
@@ -217,42 +462,101 @@
         <option>Другое</option>
       </select>
 
-      <label for="adPhone">Телефон</label>
-      <input
-        id="adPhone"
-        placeholder="+7 999 123-45-67"
-        inputmode="tel"
-        enterkeyhint="done"
-      />
+      <label for="adDistrict">Район</label>
+      <select id="adDistrict">
+        <option value="">Выберите район</option>
+      </select>
+      <input id="adDistrictCustom" maxlength="80" placeholder="Введите район" enterkeyhint="done" hidden />
+
+      <div class="toggle-row">
+        <span>Возможен торг</span>
+        <input id="adNegotiable" type="checkbox" />
+      </div>
+
+      <div class="toggle-row">
+        <span>Есть доставка</span>
+        <input id="adDelivery" type="checkbox" />
+      </div>
+
+      <label for="adSpecifications">Характеристики</label>
+      <textarea
+        id="adSpecifications"
+        maxlength="2000"
+        placeholder="Каждая характеристика с новой строки:
+Марка / бренд: Samsung
+Модель: Galaxy S24
+Память: 256 ГБ"
+      ></textarea>
+      <p class="field-hint">До 20 характеристик в формате «Название: значение».</p>
+
+      <div class="toggle-row">
+        <span>Получать звонки</span>
+        <input id="adAllowCalls" type="checkbox" checked />
+      </div>
+
+      <div id="adPhoneField" class="phone-field-group">
+        <label for="adPhone">Телефон</label>
+        <input
+          id="adPhone"
+          placeholder="+7 999 123-45-67"
+          inputmode="tel"
+          enterkeyhint="done"
+        />
+        <p class="field-hint">Если звонки выключены, номер не показывается в объявлении.</p>
+      </div>
 
       <div class="toggle-row">
         <span>Разрешить сообщения в Telegram</span>
         <input id="adAllowMessages" type="checkbox" checked />
       </div>
 
+      <section id="listingQuality" class="quality-card" aria-live="polite">
+        <div class="quality-header">
+          <div>
+            <small>Качество объявления</small>
+            <b id="listingQualityScore">0%</b>
+          </div>
+          <span id="listingQualityLabel">Нужно улучшить</span>
+        </div>
+        <div class="quality-track"><i id="listingQualityBar"></i></div>
+        <ul id="listingQualityTips"></ul>
+      </section>
+
       <h4>Предпросмотр</h4>
       <div id="previewCard" class="product-card"></div>
 
-      <button
-        id="publishBtn"
-        class="primary wide"
-        onclick="publishAd()"
-        type="button"
-      >
-        Опубликовать объявление
-      </button>
+      <div class="create-actions">
+        <button
+          id="saveDraftBtn"
+          class="outline wide"
+          onclick="publishAd('draft')"
+          type="button"
+        >
+          Сохранить как черновик
+        </button>
+
+        <button
+          id="publishBtn"
+          class="primary wide"
+          onclick="publishAd('active')"
+          type="button"
+        >
+          Опубликовать объявление
+        </button>
+      </div>
     </section>
 
     <section id="myAds" class="page">
-      <div class="tabs">
-        <button class="active" type="button">Активные</button>
-        <button type="button">Проданные</button>
-        <button type="button">Черновики</button>
+      <div class="tabs" id="myAdsTabs">
+        <button class="active" data-status="active" onclick="setMyAdsTab('active')" type="button">Активные</button>
+        <button data-status="sold" onclick="setMyAdsTab('sold')" type="button">Проданные</button>
+        <button data-status="draft" onclick="setMyAdsTab('draft')" type="button">Черновики</button>
+        <button data-status="archived" onclick="setMyAdsTab('archived')" type="button">Архив</button>
       </div>
 
       <div id="myAdsList" class="product-list"></div>
 
-      <button class="primary wide fixed-btn" onclick="showPage('create1')" type="button">
+      <button class="primary wide fixed-btn" onclick="openCreatePage()" type="button">
         ＋ Добавить объявление
       </button>
     </section>
@@ -262,16 +566,51 @@
       <p class="muted">Пока пусто. Сердечки ждут своего героя.</p>
     </section>
 
+
+
+    <section id="settings" class="page">
+      <h2>Настройки</h2>
+
+      <div class="settings-card">
+        <div class="settings-row">
+          <div>
+            <b>🌙 Темная тема</b>
+            <small>Переключение оформления приложения</small>
+          </div>
+
+          <label class="switch">
+            <input id="darkModeToggle" type="checkbox" onchange="toggleDarkMode(this.checked)">
+            <span></span>
+          </label>
+        </div>
+      </div>
+
+
+      <div class="settings-card admin-settings-card" id="adminMenu" style="display:none">
+        <button onclick="showPage('admin')" class="admin-settings-row" type="button">
+          <span class="admin-settings-icon" aria-hidden="true"></span>
+          <span class="admin-settings-copy">
+            <b>Администратор</b>
+            <small>Управление маркетом</small>
+          </span>
+          <span class="admin-settings-arrow" aria-hidden="true">›</span>
+        </button>
+      </div>
+    </section>
+
     <section id="chats" class="page">
       <h2>Чаты</h2>
       <p class="muted">Позже подключим Telegram-чаты.</p>
     </section>
 
     <section id="profile" class="page">
-      <div class="profile-card">
+      <div class="profile-card extended-profile-card">
         <div class="avatar">?</div>
         <h3 id="profileName">Пользователь</h3>
         <p id="profileUsername">Telegram</p>
+        <p id="profileDescription" class="profile-description muted">Добавьте описание профиля</p>
+        <div id="profileContacts" class="profile-contact-list"></div>
+        <button id="editProfileButton" class="outline profile-edit-button" type="button">✏️ Редактировать профиль</button>
       </div>
 
       <button onclick="showPage('myAds')" class="profile-row" type="button">
@@ -286,42 +625,280 @@
         💬 Чаты
       </button>
 
-      <button class="profile-row" type="button">
+      <button onclick="showPage('settings')" class="profile-row" type="button">
         ⚙️ Настройки
       </button>
 
-      <button class="profile-row" type="button">
+      <button class="profile-row" type="button" onclick="openSupport()">
         🛟 Поддержка
       </button>
     </section>
 
+
+    <section id="sellerProfile" class="page">
+      <div class="seller-profile-card">
+        <div id="sellerAvatar" class="seller-avatar">👤</div>
+
+        <h2 id="sellerProfileName">Продавец</h2>
+        <p id="sellerProfileUsername"></p>
+        <p id="sellerProfileDescription" class="seller-profile-description" hidden></p>
+        <div id="sellerProfileContacts" class="seller-contact-list"></div>
+        <button id="sellerMessageButton" class="primary seller-message-button" type="button">💬 Написать продавцу</button>
+
+        <div class="seller-stats">
+          <div>
+            <b id="sellerProfileCount">📦 0</b>
+            <small>Активные</small>
+          </div>
+          <div>
+            <b id="sellerSoldCount">✓ 0</b>
+            <small>Продано</small>
+          </div>
+          <div>
+            <b id="sellerStatus">⚪</b>
+            <small id="sellerStatusLabel">Статус неизвестен</small>
+          </div>
+        </div>
+      </div>
+
+      <h3>Активные товары</h3>
+      <div id="sellerProducts" class="product-list"></div>
+
+      <section id="sellerSoldSection" class="seller-sold-section" hidden>
+        <h3>Проданные товары</h3>
+        <div id="sellerSoldProducts" class="seller-sold-products"></div>
+      </section>
+    </section>
+
     <nav class="bottom-nav">
-      <button onclick="showPage('home')" type="button">
+      <button onclick="navigateMainTab('home')" type="button">
         ⌂
         <small>Главная</small>
       </button>
 
-      <button onclick="showPage('favorites')" type="button">
+      <button onclick="navigateMainTab('favorites')" type="button">
         ♡
         <small>Избранное</small>
       </button>
 
-      <button onclick="showPage('create1')" class="add-btn" type="button">
+      <button onclick="openCreatePage()" class="add-btn" type="button">
         ＋
       </button>
 
-      <button onclick="showPage('chats')" type="button">
+      <button onclick="navigateMainTab('chats')" type="button">
         💬
         <small>Чаты</small>
       </button>
 
-      <button onclick="showPage('profile')" type="button">
+      <button onclick="navigateMainTab('profile')" type="button">
         👤
         <small>Профиль</small>
       </button>
     </nav>
-  </main>
+  
+<section id="admin" class="page admin-page">
+  <div class="admin-hero">
+    <div>
+      <span class="admin-kicker">Панель управления</span>
+      <h2>Администратор</h2>
+      <p>Объявления, автомодерация, жалобы, рекламные кампании и аналитика проекта.</p>
+    </div>
+    <button
+      class="admin-refresh-button"
+      type="button"
+      onclick="reloadCurrentAdminTab()"
+      aria-label="Обновить текущий раздел"
+    >↻</button>
+  </div>
 
+  <div id="adminStats" class="admin-stats-grid" aria-live="polite">
+    <div class="admin-stat-card admin-stat-skeleton"></div>
+    <div class="admin-stat-card admin-stat-skeleton"></div>
+    <div class="admin-stat-card admin-stat-skeleton"></div>
+    <div class="admin-stat-card admin-stat-skeleton"></div>
+  </div>
+
+  <div class="admin-toolbar">
+    <label class="admin-search-box" for="adminSearch">
+      <span>⌕</span>
+      <input
+        id="adminSearch"
+        type="search"
+        placeholder="Поиск по товарам, пользователям или ID"
+        autocomplete="off"
+        oninput="searchAdmin()"
+      >
+    </label>
+
+    <div class="admin-tabs" role="tablist" aria-label="Разделы админ-панели">
+      <button data-admin-tab="products" class="active" onclick="loadAdminPanel()" type="button">📦 Объявления</button>
+      <button data-admin-tab="featureRequests" onclick="loadAdminFeatureRequests()" type="button">★ Выделение</button>
+      <button data-admin-tab="reports" onclick="loadAdminReports()" type="button">⚑ Жалобы</button>
+      <button data-admin-tab="moderation" onclick="loadAdminModeration()" type="button">🛡 Автомодерация</button>
+      <button data-admin-tab="ads" onclick="loadAdminAds()" type="button">📣 Реклама</button>
+      <button data-admin-tab="users" onclick="loadAdminUsers()" type="button">👥 Пользователи</button>
+      <button data-admin-tab="logs" onclick="loadAdminLogs()" type="button">📋 Журнал</button>
+      <button data-admin-tab="growth" onclick="loadAdminGrowth()" type="button">📈 Аналитика</button>
+    </div>
+  </div>
+
+  <div id="adminContent" class="admin-content" aria-live="polite"></div>
+</section>
+</main>
+
+  <div id="photoLightbox" class="photo-lightbox" hidden role="dialog" aria-modal="true" aria-label="Просмотр фотографии">
+    <button class="lightbox-close" type="button" onclick="closePhotoLightbox()" aria-label="Закрыть">×</button>
+    <button class="lightbox-arrow lightbox-prev" type="button" onclick="changeProductImage(-1)" aria-label="Предыдущее фото">‹</button>
+    <div id="lightboxViewport" class="lightbox-viewport">
+      <img id="lightboxImage" src="" alt="Увеличенное фото товара" draggable="false" />
+    </div>
+    <button class="lightbox-arrow lightbox-next" type="button" onclick="changeProductImage(1)" aria-label="Следующее фото">›</button>
+    <span id="lightboxCounter" class="lightbox-counter">1 / 1</span>
+    <div class="lightbox-zoom-controls" aria-label="Масштаб фотографии">
+      <button type="button" onclick="changeLightboxZoom(-0.5)" aria-label="Уменьшить">−</button>
+      <button id="lightboxZoomReset" type="button" onclick="resetLightboxZoom()" aria-label="Сбросить масштаб">100%</button>
+      <button type="button" onclick="changeLightboxZoom(0.5)" aria-label="Увеличить">＋</button>
+    </div>
+  </div>
+
+  <dialog id="highlightDialog" class="highlight-dialog">
+    <form onsubmit="submitProductHighlightRequest(event)">
+      <div class="dialog-heading">
+        <div>
+          <small>Платное выделение</small>
+          <h3>Выделить объявление</h3>
+        </div>
+        <button type="button" class="dialog-close" onclick="closeHighlightDialog()" aria-label="Закрыть">×</button>
+      </div>
+
+      <p id="highlightProductName" class="highlight-product-name"></p>
+
+      <div class="highlight-style-preview" aria-label="Спокойное выделение">
+        <span class="highlight-style-preview-swatch" aria-hidden="true"></span>
+        <span><b>Спокойное выделение</b><small>Единый тёмно-зелёный стиль, как в каталоге</small></span>
+      </div>
+
+      <div id="highlightRequestSummary" class="highlight-request-summary"></div>
+
+      <div class="dialog-actions">
+        <button type="button" class="outline" onclick="closeHighlightDialog()">Отмена</button>
+        <button id="submitHighlightRequestBtn" type="submit" class="primary">Отправить заявку</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="profileEditDialog" class="profile-edit-dialog">
+    <form method="dialog" onsubmit="saveProfile(event)">
+      <div class="dialog-heading">
+        <div>
+          <small>Публичный профиль</small>
+          <h3>Контакты продавца</h3>
+        </div>
+        <button type="button" class="dialog-close" onclick="closeProfileEditor()" aria-label="Закрыть">×</button>
+      </div>
+
+      <label for="profileEditDescription">О себе</label>
+      <textarea id="profileEditDescription" maxlength="600" placeholder="Расскажите, что вы продаёте и как обычно передаёте товары"></textarea>
+
+      <label for="profileEditCity">Город</label>
+      <input id="profileEditCity" maxlength="80" list="profileCityOptions" placeholder="Например, Владикавказ" />
+      <datalist id="profileCityOptions">
+        <option value="Владикавказ"></option><option value="Беслан"></option><option value="Алагир"></option>
+        <option value="Ардон"></option><option value="Дигора"></option><option value="Моздок"></option><option value="Чикола"></option>
+      </datalist>
+
+      <label for="profileEditPhone">Телефон</label>
+      <input id="profileEditPhone" maxlength="30" inputmode="tel" placeholder="+7 999 000-00-00" />
+
+      <label for="profileEditUsername">Telegram для связи</label>
+      <input id="profileEditUsername" maxlength="33" placeholder="username без @" autocomplete="off" />
+      <p class="muted profile-edit-hint">По кнопке «Написать» покупатель сразу перейдёт в этот Telegram-чат.</p>
+
+      <div class="dialog-actions">
+        <button type="button" class="outline" onclick="closeProfileEditor()">Отмена</button>
+        <button id="saveProfileButton" type="submit" class="primary">Сохранить</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="listingLimitDialog" class="listing-limit-dialog">
+    <div class="dialog-heading">
+      <div>
+        <small>Лимит объявлений</small>
+        <h3>Свободных мест нет</h3>
+      </div>
+      <button type="button" class="dialog-close" onclick="closeListingLimitDialog()" aria-label="Закрыть">×</button>
+    </div>
+    <p id="listingLimitSummary" class="listing-limit-summary"></p>
+    <div class="listing-limit-offer">
+      <span aria-hidden="true">🏪</span>
+      <p id="listingLimitOffer"></p>
+    </div>
+    <div class="dialog-actions">
+      <button type="button" class="outline" onclick="closeListingLimitDialog()">Понятно</button>
+      <button type="button" class="primary" onclick="contactSupportForListingLimit()">Написать в поддержку</button>
+    </div>
+  </dialog>
+
+  <dialog id="reportDialog" class="report-dialog">
+    <form method="dialog" onsubmit="submitProductReport(event)">
+      <div class="dialog-heading">
+        <div>
+          <small>Модерация</small>
+          <h3>Пожаловаться на объявление</h3>
+        </div>
+        <button type="button" class="dialog-close" onclick="closeReportDialog()" aria-label="Закрыть">×</button>
+      </div>
+
+      <label for="reportReason">Причина</label>
+      <select id="reportReason" required>
+        <option value="">Выберите причину</option>
+        <option value="fraud">Мошенничество</option>
+        <option value="prohibited">Запрещённый товар или содержание</option>
+        <option value="wrong_category">Неверная категория</option>
+        <option value="wrong_price">Неверная цена</option>
+        <option value="duplicate">Дубликат</option>
+        <option value="sold">Объявление уже неактуально</option>
+        <option value="stolen_photos">Чужие фотографии</option>
+        <option value="offensive">Оскорбительное содержание</option>
+        <option value="other">Другая причина</option>
+      </select>
+
+      <label for="reportDetails">Комментарий</label>
+      <textarea id="reportDetails" maxlength="1000" placeholder="Опишите проблему. Для причины «Другая» нужно не менее 10 символов."></textarea>
+
+      <div class="dialog-actions">
+        <button type="button" class="outline" onclick="closeReportDialog()">Отмена</button>
+        <button id="submitReportBtn" type="submit" class="primary">Отправить жалобу</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="appToast" class="app-toast" role="status" aria-live="polite" hidden></div>
+
+  <dialog id="coverCropDialog" class="cover-crop-dialog" aria-labelledby="coverCropTitle">
+    <div class="cover-crop-panel">
+      <div class="dialog-heading">
+        <div>
+          <small>Обложка каталога</small>
+          <h3 id="coverCropTitle">Настройте видимую область</h3>
+        </div>
+        <button type="button" class="dialog-close" onclick="closeCoverCropEditor()" aria-label="Закрыть">×</button>
+      </div>
+
+      <div id="coverCropViewport" class="cover-crop-viewport">
+        <img id="coverCropImage" alt="Настройка кадра" />
+        <div class="cover-crop-grid" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+        <span>Каталог</span>
+      </div>
+      <p class="cover-crop-hint">Двигайте фото пальцем. Для масштаба используйте жест двумя пальцами.</p>
+
+      <div class="cover-crop-actions">
+        <button type="button" class="outline" onclick="resetCoverCropEditor()">Сбросить</button>
+        <button type="button" class="primary" onclick="saveCoverCropEditor()">Сохранить кадр</button>
+      </div>
+    </div>
+  </dialog>
 
   <div id="callSheet" class="call-sheet" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="callSheetPhone" hidden onclick="handleCallSheetBackdrop(event)">
     <div class="call-sheet-panel">
@@ -334,8 +911,8 @@
       <button type="button" class="call-sheet-cancel" onclick="hidePhoneMenu()">Отменить</button>
     </div>
   </div>
-  <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">‹</div>
+  <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">←</div>
 
-  <script src="script.js?v=1.14.4"></script>
+  <script src="script.js?v=1.14.5"></script>
 </body>
 </html>
