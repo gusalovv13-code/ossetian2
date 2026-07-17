@@ -108,15 +108,6 @@ const CATALOG_PAGE_SIZE = 12;
 const FEATURE_REQUEST_COLOR = "green";
 const DATA_CACHE_TTL_MS = 30_000;
 const PRODUCT_DETAILS_CACHE_TTL_MS = 60_000;
-const LEGAL_DOCUMENT_VERSION = "1.16.0";
-const LEGAL_ACCEPTANCE_STORAGE_KEY = "ossetian_market_legal_acceptance";
-const LEGAL_DOCUMENTS = Object.freeze({
-  terms: LEGAL_DOCUMENT_VERSION,
-  privacy: LEGAL_DOCUMENT_VERSION,
-  pdConsent: LEGAL_DOCUMENT_VERSION,
-  publicDataConsent: LEGAL_DOCUMENT_VERSION,
-  listingRules: LEGAL_DOCUMENT_VERSION
-});
 
 const OTHER_OPTION_VALUE = "__other__";
 const STRUCTURED_SPECIFICATION_KEYS = new Set([
@@ -277,82 +268,6 @@ function writeBrowserStorage(storageName, key, value) {
     return false;
   }
 }
-
-let legalOnboardingResolve = null;
-
-function getStoredLegalAcceptance() {
-  try {
-    const raw = readBrowserStorage("localStorage", LEGAL_ACCEPTANCE_STORAGE_KEY);
-    const value = raw ? JSON.parse(raw) : null;
-    return value && typeof value === "object" ? value : null;
-  } catch (error) {
-    console.warn("Не удалось прочитать подтверждение документов:", error);
-    return null;
-  }
-}
-
-function hasCurrentCoreLegalAcceptance() {
-  const acceptance = getStoredLegalAcceptance();
-  return Boolean(
-    acceptance?.termsAccepted &&
-    acceptance?.pdConsentAccepted &&
-    acceptance?.termsVersion === LEGAL_DOCUMENTS.terms &&
-    acceptance?.pdConsentVersion === LEGAL_DOCUMENTS.pdConsent
-  );
-}
-
-function getLegalAcceptanceHeaders() {
-  const acceptance = getStoredLegalAcceptance();
-  if (!acceptance) return {};
-  return {
-    "X-Legal-Terms-Version": String(acceptance.termsVersion || ""),
-    "X-PD-Consent-Version": String(acceptance.pdConsentVersion || ""),
-    "X-Legal-Accepted-At": String(acceptance.acceptedAt || "")
-  };
-}
-
-function updateLegalOnboardingButton() {
-  const terms = document.getElementById("coreTermsAccepted")?.checked === true;
-  const pd = document.getElementById("corePdConsentAccepted")?.checked === true;
-  const button = document.getElementById("acceptLegalOnboardingBtn");
-  if (button) button.disabled = !(terms && pd);
-}
-
-function ensureCoreLegalAcceptance() {
-  if (hasCurrentCoreLegalAcceptance()) return Promise.resolve(true);
-  const dialog = document.getElementById("legalOnboardingDialog");
-  if (!dialog) return Promise.resolve(false);
-  document.getElementById("coreTermsAccepted").checked = false;
-  document.getElementById("corePdConsentAccepted").checked = false;
-  updateLegalOnboardingButton();
-  if (typeof dialog.showModal === "function") dialog.showModal();
-  else dialog.setAttribute("open", "");
-  return new Promise(resolve => { legalOnboardingResolve = resolve; });
-}
-
-function acceptLegalOnboarding() {
-  const termsAccepted = document.getElementById("coreTermsAccepted")?.checked === true;
-  const pdConsentAccepted = document.getElementById("corePdConsentAccepted")?.checked === true;
-  if (!termsAccepted || !pdConsentAccepted) return;
-  const acceptance = {
-    termsAccepted: true,
-    pdConsentAccepted: true,
-    termsVersion: LEGAL_DOCUMENTS.terms,
-    pdConsentVersion: LEGAL_DOCUMENTS.pdConsent,
-    acceptedAt: new Date().toISOString()
-  };
-  writeBrowserStorage("localStorage", LEGAL_ACCEPTANCE_STORAGE_KEY, JSON.stringify(acceptance));
-  const dialog = document.getElementById("legalOnboardingDialog");
-  if (typeof dialog?.close === "function") dialog.close();
-  else dialog?.removeAttribute("open");
-  legalOnboardingResolve?.(true);
-  legalOnboardingResolve = null;
-}
-
-function closeAppFromLegalDialog() {
-  if (typeof tg?.close === "function") tg.close();
-  else window.location.href = "about:blank";
-}
 let productsAbortController = null;
 let productOpenSequence = 0;
 let galleryImageSequence = 0;
@@ -484,7 +399,6 @@ async function apiRequest(url, options = {}) {
       headers: {
         "Content-Type": "application/json",
         ...getTelegramAuthHeaders(),
-        ...getLegalAcceptanceHeaders(),
         ...headers
       }
     });
@@ -3621,32 +3535,6 @@ function updateCallPreferencesUI() {
   }
 }
 
-function updateListingLegalConsentVisibility() {
-  const allowCalls = document.getElementById("adAllowCalls")?.checked !== false;
-  const allowMessages = document.getElementById("adAllowMessages")?.checked !== false;
-  const phoneRow = document.getElementById("adPublicPhoneConsentRow");
-  const telegramRow = document.getElementById("adPublicTelegramConsentRow");
-  const phoneConsent = document.getElementById("adPublicPhoneConsent");
-  const telegramConsent = document.getElementById("adPublicTelegramConsent");
-  if (phoneRow) phoneRow.hidden = !allowCalls;
-  if (telegramRow) telegramRow.hidden = !allowMessages;
-  if (!allowCalls && phoneConsent) phoneConsent.checked = false;
-  if (!allowMessages && telegramConsent) telegramConsent.checked = false;
-}
-
-function getListingLegalAcceptance() {
-  return {
-    documentVersion: LEGAL_DOCUMENT_VERSION,
-    termsVersion: LEGAL_DOCUMENTS.terms,
-    listingRulesVersion: LEGAL_DOCUMENTS.listingRules,
-    publicDataConsentVersion: LEGAL_DOCUMENTS.publicDataConsent,
-    rulesAccepted: document.getElementById("adRulesAccepted")?.checked === true,
-    publicPhoneConsent: document.getElementById("adPublicPhoneConsent")?.checked === true,
-    publicTelegramConsent: document.getElementById("adPublicTelegramConsent")?.checked === true,
-    acceptedAt: new Date().toISOString()
-  };
-}
-
 function updateListingQuality() {
   const scoreEl = document.getElementById("listingQualityScore");
   const labelEl = document.getElementById("listingQualityLabel");
@@ -4057,23 +3945,7 @@ async function publishAd(status = "active") {
     }
 
     const ad = getAdFormData();
-    const listingLegalAcceptance = getListingLegalAcceptance();
     const priceNumber = getPriceNumber(ad.price);
-
-    if (targetStatus === "active") {
-      if (!listingLegalAcceptance.rulesAccepted) {
-        alert("Подтвердите Пользовательское соглашение и Правила размещения объявлений");
-        return;
-      }
-      if (ad.allowCalls && !listingLegalAcceptance.publicPhoneConsent) {
-        alert("Для показа номера телефона требуется отдельное согласие на распространение");
-        return;
-      }
-      if (ad.allowMessages && !listingLegalAcceptance.publicTelegramConsent) {
-        alert("Для показа Telegram-контакта требуется отдельное согласие на распространение");
-        return;
-      }
-    }
 
     if (!ad.title) {
       alert(isVacancyCategory(ad.category) ? "Введите название вакансии" : "Введите название товара");
@@ -4147,7 +4019,6 @@ async function publishAd(status = "active") {
         phone: ad.phone,
         allowCalls: ad.allowCalls,
         allowMessages: ad.allowMessages,
-        legalAcceptance: listingLegalAcceptance,
         status: targetStatus
       })
     });
@@ -4247,9 +4118,6 @@ function clearCreateForm() {
   const phone = document.getElementById("adPhone");
   const allowCalls = document.getElementById("adAllowCalls");
   const allowMessages = document.getElementById("adAllowMessages");
-  const rulesAccepted = document.getElementById("adRulesAccepted");
-  const publicPhoneConsent = document.getElementById("adPublicPhoneConsent");
-  const publicTelegramConsent = document.getElementById("adPublicTelegramConsent");
   const preview = document.getElementById("previewCard");
   const photoInput = document.getElementById("photoInput");
   const cameraInput = document.getElementById("cameraInput");
@@ -4280,11 +4148,7 @@ function clearCreateForm() {
   if (phone) phone.value = state.telegramUser?.phone || "";
   if (allowCalls) allowCalls.checked = true;
   if (allowMessages) allowMessages.checked = true;
-  if (rulesAccepted) rulesAccepted.checked = false;
-  if (publicPhoneConsent) publicPhoneConsent.checked = false;
-  if (publicTelegramConsent) publicTelegramConsent.checked = false;
   updateCallPreferencesUI();
-  updateListingLegalConsentVisibility();
   if (preview) preview.innerHTML = "";
   if (photoInput) photoInput.value = "";
   if (cameraInput) cameraInput.value = "";
@@ -4350,9 +4214,6 @@ async function editAd(id) {
   const phone = document.getElementById("adPhone");
   const allowCalls = document.getElementById("adAllowCalls");
   const allowMessages = document.getElementById("adAllowMessages");
-  const rulesAccepted = document.getElementById("adRulesAccepted");
-  const publicPhoneConsent = document.getElementById("adPublicPhoneConsent");
-  const publicTelegramConsent = document.getElementById("adPublicTelegramConsent");
 
   if (title) title.value = product.name || "";
   if (price) price.value = product.priceDropped && product.previousPrice ? product.previousPrice : (product.price || "");
@@ -4382,11 +4243,7 @@ async function editAd(id) {
   if (phone) phone.value = product.phone || "";
   if (allowCalls) allowCalls.checked = product.allowCalls !== false;
   if (allowMessages) allowMessages.checked = product.allowMessages !== false;
-  if (rulesAccepted) rulesAccepted.checked = false;
-  if (publicPhoneConsent) publicPhoneConsent.checked = false;
-  if (publicTelegramConsent) publicTelegramConsent.checked = false;
   updateCallPreferencesUI();
-  updateListingLegalConsentVisibility();
 
   draftAd.images = getProductImages(product).filter(Boolean).slice(0, MAX_PHOTOS);
   draftAd.thumbnail = product.thumbnail || "";
@@ -4852,12 +4709,6 @@ function initEvents() {
   document.getElementById("adDistrict")?.addEventListener("change", () => updateCustomSelectInput("adDistrict", "adDistrictCustom"));
   document.getElementById("adAllowCalls")?.addEventListener("change", () => {
     updateCallPreferencesUI();
-    updateListingLegalConsentVisibility();
-    updatePreviewCard();
-    updateCreateButtons();
-  });
-  document.getElementById("adAllowMessages")?.addEventListener("change", () => {
-    updateListingLegalConsentVisibility();
     updatePreviewCard();
     updateCreateButtons();
   });
@@ -5489,9 +5340,6 @@ async function initApp() {
   initKeyboardViewportGuard();
   initEvents();
   syncCatalogFiltersUI();
-  updateListingLegalConsentVisibility();
-  const legalAccepted = await ensureCoreLegalAcceptance();
-  if (!legalAccepted) return;
   const adsPromise = loadAds();
   const configPromise = loadConfig();
   await initTelegramUser();
@@ -6183,7 +6031,6 @@ function getAdminActionLabel(action) {
     moderation_rule_toggle: "Изменил правило модерации",
     moderation_rule_delete: "Удалил правило модерации",
     moderation_settings_update: "Обновил автомодерацию",
-    moderation_defaults_sync: "Обновил базовый пакет модерации",
     ad_create: "Создал рекламную кампанию",
     ad_update: "Обновил рекламную кампанию",
     ad_delete: "Удалил рекламную кампанию",
@@ -6311,28 +6158,21 @@ function renderAdminModeration(data) {
   const settings = data.settings || {};
   const events = data.events || [];
   const rules = data.rules || [];
-  const categories = data.categories || {};
-  const categoryOptions = Object.entries(categories)
-    .map(([value, label]) => `<option value="${escapeHTML(value)}">${escapeHTML(label)}</option>`)
-    .join("");
 
   root.innerHTML = `
     <section class="admin-config-card">
-      <div class="admin-section-heading"><div><b>Автоматическая модерация</b><small>Пакет РФ ${escapeHTML(data.policyVersion || "")}: ссылки, контакты, маскировки и категории риска</small></div></div>
+      <div class="admin-section-heading"><div><b>Автоматическая модерация</b><small>Ссылки, контакты, email и запрещённые выражения</small></div></div>
       <div class="moderation-switches">
         <label><input id="moderationEnabled" type="checkbox" ${settings.enabled !== false ? "checked" : ""}> Автомодерация включена</label>
         <label><input id="moderationLinks" type="checkbox" ${settings.block_links !== false ? "checked" : ""}> Блокировать ссылки и домены</label>
         <label><input id="moderationContacts" type="checkbox" ${settings.block_contacts !== false ? "checked" : ""}> Блокировать телефоны и @username в тексте</label>
         <label><input id="moderationEmails" type="checkbox" ${settings.block_emails !== false ? "checked" : ""}> Блокировать email</label>
       </div>
-      <div class="admin-report-actions">
-        <button class="admin-action-button restore" type="button" onclick="saveModerationSettings(this)">Сохранить настройки</button>
-        <button class="admin-action-button" type="button" onclick="syncDefaultModerationRules(this)">Обновить базовый пакет РФ</button>
-      </div>
+      <button class="admin-action-button restore" type="button" onclick="saveModerationSettings(this)">Сохранить настройки</button>
     </section>
 
     <section class="admin-config-card">
-      <div class="admin-section-heading"><div><b>Запрещённые слова и фразы</b><small>Фильтр распознаёт регистр, ё/е, латинские подмены, цифры, пробелы, точки и повторение букв</small></div></div>
+      <div class="admin-section-heading"><div><b>Запрещённые слова и фразы</b><small>Совпадение проверяется без учёта регистра и буквы ё</small></div></div>
       <div class="moderation-rule-form">
         <input id="moderationRulePattern" maxlength="200" placeholder="Слово, фраза или домен">
         <select id="moderationRuleType">
@@ -6340,20 +6180,13 @@ function renderAdminModeration(data) {
           <option value="phrase">Фраза</option>
           <option value="domain">Домен</option>
         </select>
-        <select id="moderationRuleCategory">
-          ${categoryOptions || '<option value="custom">Пользовательское правило</option>'}
-        </select>
-        <select id="moderationRuleAction">
-          <option value="review">На ручную проверку</option>
-          <option value="block">Высокий риск</option>
-        </select>
         <input id="moderationRuleNote" maxlength="500" placeholder="Комментарий для модераторов">
         <button class="admin-action-button" type="button" onclick="createModerationRule(this)">Добавить</button>
       </div>
       <div class="moderation-rule-list">
         ${rules.length ? rules.map(rule => `
           <div class="moderation-rule-row ${rule.is_active ? "" : "is-muted"}">
-            <div><b>${escapeHTML(rule.pattern)}</b><small>${escapeHTML(categories[rule.category] || rule.category || "Пользовательское правило")} · ${rule.action === "block" ? "высокий риск" : "ручная проверка"} · ${escapeHTML(rule.match_type)}${rule.note ? ` · ${escapeHTML(rule.note)}` : ""}</small></div>
+            <div><b>${escapeHTML(rule.pattern)}</b><small>${escapeHTML(rule.match_type)}${rule.note ? ` · ${escapeHTML(rule.note)}` : ""}</small></div>
             <button type="button" class="admin-action-button ${rule.is_active ? "danger" : "restore"}" onclick="toggleModerationRule('${escapeHTML(rule.id)}', this)">${rule.is_active ? "Выключить" : "Включить"}</button>
             <button type="button" class="admin-action-button danger" onclick="deleteModerationRule('${escapeHTML(rule.id)}', this)">Удалить</button>
           </div>`).join("") : '<p class="muted">Правил пока нет.</p>'}
@@ -6400,29 +6233,13 @@ async function saveModerationSettings(button) {
 async function createModerationRule(button) {
   const pattern = document.getElementById("moderationRulePattern")?.value.trim() || "";
   const matchType = document.getElementById("moderationRuleType")?.value || "word";
-  const category = document.getElementById("moderationRuleCategory")?.value || "custom";
-  const action = document.getElementById("moderationRuleAction")?.value || "review";
   const note = document.getElementById("moderationRuleNote")?.value.trim() || "";
   if (!pattern) return alert("Введите запрещённое выражение");
   if (button) button.disabled = true;
   try {
-    await apiRequest("/api/admin/moderation/rules", { method: "POST", body: JSON.stringify({ pattern, matchType, category, action, note }) });
+    await apiRequest("/api/admin/moderation/rules", { method: "POST", body: JSON.stringify({ pattern, matchType, note }) });
     await loadAdminModeration();
   } catch (error) { alert(error.message); if (button) button.disabled = false; }
-}
-
-async function syncDefaultModerationRules(button) {
-  if (button) button.disabled = true;
-  try {
-    const result = await apiRequest("/api/admin/moderation/defaults", { method: "POST" });
-    alert(result.inserted > 0
-      ? `Добавлено правил: ${result.inserted}`
-      : "Базовый пакет уже актуален");
-    await loadAdminModeration();
-  } catch (error) {
-    alert(error.message || "Не удалось обновить пакет модерации");
-    if (button) button.disabled = false;
-  }
 }
 
 async function toggleModerationRule(id, button) {

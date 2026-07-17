@@ -9,19 +9,12 @@ import sharp from "sharp";
 import { lookup } from "dns/promises";
 import { isIP } from "net";
 import { createTelegramAuthMiddleware } from "./telegram-auth.js";
-import {
-  DEFAULT_MODERATION_RULES,
-  MODERATION_CATEGORY_LABELS,
-  MODERATION_POLICY_VERSION
-} from "./moderation-policy.js";
-import { containsModerationPattern } from "./moderation-text.js";
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.16.0";
-const LEGAL_DOCUMENT_VERSION = "1.16.0";
+const APP_VERSION = "1.14.3";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -91,8 +84,6 @@ const PRODUCT_CATEGORIES = new Set([
 ]);
 const MODERATION_STATUSES = new Set(["approved", "blocked", "rejected"]);
 const MODERATION_MATCH_TYPES = new Set(["word", "phrase", "domain"]);
-const MODERATION_RULE_ACTIONS = new Set(["review", "block"]);
-const MODERATION_RULE_CATEGORIES = new Set(Object.keys(MODERATION_CATEGORY_LABELS));
 const AD_PLACEMENTS = new Set(["catalog_top", "catalog_feed", "product_detail"]);
 const AD_STATUSES = new Set(["draft", "active", "paused", "ended"]);
 const AD_BILLING_MODELS = new Set(["flat", "cpm", "cpc"]);
@@ -603,94 +594,6 @@ function normalizeText(value, maxLength) {
   return String(value ?? "").trim().slice(0, maxLength);
 }
 
-function normalizeLegalAcceptance(value) {
-  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
-}
-
-function validateListingLegalAcceptance({ legalAcceptance, status, allowCalls, allowMessages }) {
-  if (status !== "active") return null;
-  const acceptance = normalizeLegalAcceptance(legalAcceptance);
-  if (acceptance.documentVersion !== LEGAL_DOCUMENT_VERSION ||
-      acceptance.termsVersion !== LEGAL_DOCUMENT_VERSION ||
-      acceptance.listingRulesVersion !== LEGAL_DOCUMENT_VERSION ||
-      acceptance.rulesAccepted !== true) {
-    return {
-      code: "LEGAL_ACCEPTANCE_REQUIRED",
-      error: "Подтвердите актуальные Пользовательское соглашение и Правила размещения объявлений"
-    };
-  }
-  if (allowCalls !== false && acceptance.publicPhoneConsent !== true) {
-    return {
-      code: "PUBLIC_PHONE_CONSENT_REQUIRED",
-      error: "Для публикации номера требуется отдельное согласие на распространение персональных данных"
-    };
-  }
-  if (allowMessages !== false && acceptance.publicTelegramConsent !== true) {
-    return {
-      code: "PUBLIC_TELEGRAM_CONSENT_REQUIRED",
-      error: "Для публикации Telegram-контакта требуется отдельное согласие на распространение персональных данных"
-    };
-  }
-  if ((allowCalls !== false || allowMessages !== false) && acceptance.publicDataConsentVersion !== LEGAL_DOCUMENT_VERSION) {
-    return {
-      code: "PUBLIC_DATA_CONSENT_VERSION_REQUIRED",
-      error: "Подтвердите актуальную редакцию согласия на распространение персональных данных"
-    };
-  }
-  return null;
-}
-
-async function recordLegalAcceptance(db, { userId, type, version, context = "app", productId = "", metadata = {} }) {
-  const cleanUserId = normalizeText(userId, 64);
-  const cleanType = normalizeText(type, 64);
-  const cleanVersion = normalizeText(version, 32);
-  const cleanContext = normalizeText(context, 40) || "app";
-  const cleanProductId = normalizeText(productId, 64);
-  if (!cleanUserId || !cleanType || !cleanVersion) return;
-  await db.query(
-    `INSERT INTO legal_acceptances (
-       id, user_id, acceptance_type, document_version, context, product_id, evidence
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
-     ON CONFLICT (user_id, acceptance_type, document_version, context, product_id) DO NOTHING`,
-    [randomUUID(), cleanUserId, cleanType, cleanVersion, cleanContext, cleanProductId, JSON.stringify(metadata || {})]
-  );
-}
-
-async function recordCoreLegalAcceptancesFromRequest(db, req) {
-  const termsVersion = normalizeText(req.get("x-legal-terms-version"), 32);
-  const pdConsentVersion = normalizeText(req.get("x-pd-consent-version"), 32);
-  const clientAcceptedAt = normalizeText(req.get("x-legal-accepted-at"), 80);
-  const metadata = { source: "mini_app", clientAcceptedAt };
-  if (termsVersion === LEGAL_DOCUMENT_VERSION) {
-    await recordLegalAcceptance(db, {
-      userId: req.telegramUser?.id, type: "user_agreement", version: termsVersion, metadata
-    });
-  }
-  if (pdConsentVersion === LEGAL_DOCUMENT_VERSION) {
-    await recordLegalAcceptance(db, {
-      userId: req.telegramUser?.id, type: "pd_processing", version: pdConsentVersion, metadata
-    });
-  }
-}
-
-async function recordListingLegalAcceptances(db, { userId, productId, legalAcceptance, allowCalls, allowMessages }) {
-  const acceptance = normalizeLegalAcceptance(legalAcceptance);
-  const metadata = { source: "listing_publish", clientAcceptedAt: normalizeText(acceptance.acceptedAt, 80) };
-  await recordLegalAcceptance(db, {
-    userId, productId, type: "listing_rules", version: LEGAL_DOCUMENT_VERSION, context: "listing", metadata
-  });
-  if (allowCalls !== false) {
-    await recordLegalAcceptance(db, {
-      userId, productId, type: "public_phone", version: LEGAL_DOCUMENT_VERSION, context: "listing", metadata
-    });
-  }
-  if (allowMessages !== false) {
-    await recordLegalAcceptance(db, {
-      userId, productId, type: "public_telegram", version: LEGAL_DOCUMENT_VERSION, context: "listing", metadata
-    });
-  }
-}
-
 function normalizePhoneKey(value) {
   let digits = String(value || "").replace(/\D/g, "");
   if (digits.length === 10) digits = `7${digits}`;
@@ -1186,6 +1089,34 @@ function parsePriceAmount(value) {
     : 0;
 }
 
+function normalizeModerationText(value) {
+  return String(value ?? "")
+    .toLocaleLowerCase("ru-RU")
+    .replace(/ё/g, "е")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function containsModerationPattern(text, pattern, matchType) {
+  const normalizedText = normalizeModerationText(text);
+  const normalizedPattern = normalizeModerationText(pattern);
+  if (!normalizedText || !normalizedPattern) return false;
+
+  if (matchType === "phrase" || matchType === "domain") {
+    return normalizedText.includes(normalizedPattern);
+  }
+
+  const expression = new RegExp(
+    `(^|[^\p{L}\p{N}])${escapeRegExp(normalizedPattern)}(?=$|[^\p{L}\p{N}])`,
+    "iu"
+  );
+  return expression.test(normalizedText);
+}
+
 function normalizeOptionalDate(value) {
   if (!value) return null;
   const date = new Date(value);
@@ -1238,17 +1169,17 @@ async function evaluateProductModeration(product, database = pool) {
   const phonePattern = /(?:\+?\d[\s().-]*){10,}/u;
 
   if (settings.block_links && linkPattern.test(content)) {
-    matches.push({ type: "link", category: "custom", action: "review", label: "Ссылка в тексте объявления" });
+    matches.push({ type: "link", label: "Ссылка в тексте объявления" });
   }
   if (settings.block_emails && emailPattern.test(content)) {
-    matches.push({ type: "email", category: "custom", action: "review", label: "Email в тексте объявления" });
+    matches.push({ type: "email", label: "Email в тексте объявления" });
   }
   if (settings.block_contacts && (telegramPattern.test(content) || phonePattern.test(content))) {
-    matches.push({ type: "contact", category: "custom", action: "review", label: "Контактные данные в тексте объявления" });
+    matches.push({ type: "contact", label: "Контактные данные в тексте объявления" });
   }
 
   const rulesResult = await database.query(`
-    SELECT id, pattern, match_type, category, action
+    SELECT id, pattern, match_type
     FROM moderation_rules
     WHERE is_active = TRUE
     ORDER BY created_at ASC;
@@ -1256,14 +1187,10 @@ async function evaluateProductModeration(product, database = pool) {
 
   for (const rule of rulesResult.rows) {
     if (containsModerationPattern(content, rule.pattern, rule.match_type)) {
-      const category = MODERATION_RULE_CATEGORIES.has(rule.category) ? rule.category : "custom";
-      const action = MODERATION_RULE_ACTIONS.has(rule.action) ? rule.action : "review";
       matches.push({
         type: rule.match_type,
         ruleId: rule.id,
-        category,
-        action,
-        label: `${MODERATION_CATEGORY_LABELS[category]}: ${rule.pattern}`
+        label: `Запрещённое выражение: ${rule.pattern}`
       });
     }
   }
@@ -1272,21 +1199,10 @@ async function evaluateProductModeration(product, database = pool) {
     items.findIndex(item => item.type === match.type && item.label === match.label) === index
   );
 
-  const decision = uniqueMatches.some(item => item.action === "block") ? "block" : "review";
-  const categories = [...new Set(uniqueMatches.map(item => item.category).filter(Boolean))];
-  const categorySummary = categories
-    .map(category => MODERATION_CATEGORY_LABELS[category] || "Правила публикации")
-    .join(", ");
-
   return {
     blocked: uniqueMatches.length > 0,
-    decision,
-    policyVersion: MODERATION_POLICY_VERSION,
-    reason: uniqueMatches.length
-      ? `Объявление направлено на проверку: ${categorySummary || "правила публикации"}`.slice(0, 1000)
-      : "",
-    adminReason: uniqueMatches.map(item => item.label).join("; ").slice(0, 1000),
-    matches: uniqueMatches.slice(0, 30)
+    reason: uniqueMatches.map(item => item.label).join("; ").slice(0, 1000),
+    matches: uniqueMatches.slice(0, 20)
   };
 }
 
@@ -1415,43 +1331,6 @@ async function fetchTelegramAvatarBuffer(avatarUrl) {
   };
 }
 
-async function seedDefaultModerationRules(database = pool) {
-  let inserted = 0;
-  for (const [id, pattern, matchType, category, action] of DEFAULT_MODERATION_RULES) {
-    const values = [
-      id,
-      pattern,
-      matchType,
-      category,
-      action,
-      `Базовый пакет РФ ${MODERATION_POLICY_VERSION}`
-    ];
-    const updated = await database.query(
-      `
-        UPDATE moderation_rules
-        SET category = $4, action = $5, note = $6, updated_at = NOW()
-        WHERE id = $1
-        RETURNING id;
-      `,
-      values
-    );
-    if (updated.rows.length) continue;
-
-    const result = await database.query(
-      `
-        INSERT INTO moderation_rules (
-          id, pattern, match_type, category, action, note, created_by
-        ) VALUES ($1, $2, $3, $4, $5, $6, 'system')
-        ON CONFLICT DO NOTHING
-        RETURNING id;
-      `,
-      values
-    );
-    inserted += result.rows.length;
-  }
-  return inserted;
-}
-
 async function initDb(db = pool) {
   await db.query(`
     CREATE TABLE IF NOT EXISTS products (
@@ -1553,28 +1432,6 @@ async function initDb(db = pool) {
   await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
   await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_normalized TEXT DEFAULT '';`);
   await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS listing_limit INTEGER DEFAULT ${DEFAULT_LISTING_LIMIT};`);
-
-
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS legal_acceptances (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      acceptance_type TEXT NOT NULL,
-      document_version TEXT NOT NULL,
-      context TEXT NOT NULL DEFAULT 'app',
-      product_id TEXT NOT NULL DEFAULT '',
-      accepted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      evidence JSONB NOT NULL DEFAULT '{}'::jsonb
-    );
-  `);
-  await db.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_legal_acceptances_unique
-    ON legal_acceptances (user_id, acceptance_type, document_version, context, product_id);
-  `);
-  await db.query(`
-    CREATE INDEX IF NOT EXISTS idx_legal_acceptances_user_date
-    ON legal_acceptances (user_id, accepted_at DESC);
-  `);
   await db.query(`
     UPDATE users
     SET listing_limit = ${DEFAULT_LISTING_LIMIT}
@@ -1833,8 +1690,6 @@ async function initDb(db = pool) {
       id TEXT PRIMARY KEY,
       pattern TEXT NOT NULL,
       match_type TEXT DEFAULT 'word',
-      category TEXT DEFAULT 'custom',
-      action TEXT DEFAULT 'review',
       is_active BOOLEAN DEFAULT TRUE,
       note TEXT DEFAULT '',
       created_by TEXT DEFAULT '',
@@ -1847,9 +1702,29 @@ async function initDb(db = pool) {
     ON moderation_rules (LOWER(pattern), match_type);
   `);
 
-  await db.query(`ALTER TABLE moderation_rules ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'custom';`);
-  await db.query(`ALTER TABLE moderation_rules ADD COLUMN IF NOT EXISTS action TEXT DEFAULT 'review';`);
-  await seedDefaultModerationRules(db);
+  const moderationRuleCount = await db.query(
+    `SELECT COUNT(*)::int AS count FROM moderation_rules`
+  );
+  if ((moderationRuleCount.rows[0]?.count || 0) === 0) {
+    const defaultModerationRules = [
+      ['default-heroin', 'героин', 'word'],
+      ['default-cocaine', 'кокаин', 'word'],
+      ['default-meth', 'метамфетамин', 'word'],
+      ['default-fake-passport', 'поддельный паспорт', 'phrase'],
+      ['default-drug-stash', 'закладка наркотиков', 'phrase'],
+      ['default-ammunition', 'боевые патроны', 'phrase']
+    ];
+    for (const [id, pattern, matchType] of defaultModerationRules) {
+      await db.query(
+        `
+          INSERT INTO moderation_rules (id, pattern, match_type, note, created_by)
+          VALUES ($1, $2, $3, 'Базовое правило проекта', 'system')
+          ON CONFLICT DO NOTHING;
+        `,
+        [id, pattern, matchType]
+      );
+    }
+  }
 
   await db.query(`
     CREATE TABLE IF NOT EXISTS moderation_events (
@@ -2500,9 +2375,6 @@ async function syncTelegramUser(req, res, next) {
         error: "Ваш аккаунт заблокирован администратором"
       });
     }
-
-
-    await recordCoreLegalAcceptancesFromRequest(pool, req);
   } catch (error) {
     console.error("User profile sync error:", error);
     return res.status(500).json({
@@ -3154,7 +3026,7 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
     const {
       name, price, category, desc, image, thumbnail, images, location, phone,
       allowCalls, allowMessages, condition, negotiable, delivery, district,
-      specifications, status, legalAcceptance
+      specifications, status
     } = req.body;
 
     const cleanName = normalizeText(name, 120);
@@ -3168,10 +3040,6 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
     const cleanDistrict = normalizeText(district, 80);
     const cleanSpecifications = normalizeSpecifications(specifications);
     const requestedStatus = normalizeProductStatus(status, "active");
-    const legalError = validateListingLegalAcceptance({
-      legalAcceptance, status: requestedStatus, allowCalls, allowMessages
-    });
-    if (legalError) return res.status(400).json({ ok: false, ...legalError });
 
     if (!PRODUCT_CATEGORIES.has(cleanCategory)) {
       return res.status(400).json({ ok: false, error: "Выберите допустимую категорию" });
@@ -3262,14 +3130,8 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
     if (moderation.blocked) {
       await client.query(
         `INSERT INTO moderation_events (id, product_id, user_id, source, reason, matches) VALUES ($1, $2, $3, 'publish', $4, $5::jsonb) ON CONFLICT DO NOTHING`,
-        [randomUUID(), id, req.telegramUser.id, moderation.adminReason || moderation.reason, JSON.stringify(moderation.matches)]
+        [randomUUID(), id, req.telegramUser.id, moderation.reason, JSON.stringify(moderation.matches)]
       );
-    }
-
-    if (finalStatus === "active") {
-      await recordListingLegalAcceptances(client, {
-        userId: req.telegramUser.id, productId: id, legalAcceptance, allowCalls, allowMessages
-      });
     }
 
     const updatedListingQuota = await getListingQuota(client, req.telegramUser.id);
@@ -3299,7 +3161,7 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     const {
       name, price, category, desc, image, thumbnail, images, location, phone,
       allowCalls, allowMessages, condition, negotiable, delivery, district,
-      specifications, status, discountEnabled, originalPrice, legalAcceptance
+      specifications, status, discountEnabled, originalPrice
     } = req.body;
 
     if (!productId) return res.status(400).json({ ok: false, error: "Некорректный ID товара" });
@@ -3319,10 +3181,6 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     const cleanDistrict = normalizeText(district, 80);
     const cleanSpecifications = normalizeSpecifications(specifications);
     const requestedStatus = normalizeProductStatus(status, "active");
-    const legalError = validateListingLegalAcceptance({
-      legalAcceptance, status: requestedStatus, allowCalls, allowMessages
-    });
-    if (legalError) return res.status(400).json({ ok: false, ...legalError });
 
     if (!PRODUCT_CATEGORIES.has(cleanCategory)) {
       return res.status(400).json({ ok: false, error: "Выберите допустимую категорию" });
@@ -3479,14 +3337,8 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     if (moderation.blocked) {
       await client.query(
         `INSERT INTO moderation_events (id, product_id, user_id, source, reason, matches) VALUES ($1, $2, $3, 'edit', $4, $5::jsonb) ON CONFLICT DO NOTHING`,
-        [randomUUID(), productId, req.telegramUser.id, moderation.adminReason || moderation.reason, JSON.stringify(moderation.matches)]
+        [randomUUID(), productId, req.telegramUser.id, moderation.reason, JSON.stringify(moderation.matches)]
       );
-    }
-
-    if (finalStatus === "active") {
-      await recordListingLegalAcceptances(client, {
-        userId: req.telegramUser.id, productId, legalAcceptance, allowCalls, allowMessages
-      });
     }
 
     await client.query("COMMIT");
@@ -4896,7 +4748,7 @@ app.get(
         LIMIT 100;
       `),
       pool.query(`
-        SELECT id, pattern, match_type, category, action, is_active, note, created_by, created_at, updated_at
+        SELECT id, pattern, match_type, is_active, note, created_by, created_at, updated_at
         FROM moderation_rules
         ORDER BY is_active DESC, created_at DESC;
       `),
@@ -4910,9 +4762,7 @@ app.get(
       ok: true,
       events: events.rows,
       rules: rules.rows,
-      settings: settings.rows[0] || {},
-      policyVersion: MODERATION_POLICY_VERSION,
-      categories: MODERATION_CATEGORY_LABELS
+      settings: settings.rows[0] || {}
     });
   })
 );
@@ -4926,22 +4776,18 @@ app.post(
     const pattern = normalizeText(req.body?.pattern, 200);
     const matchType = normalizeText(req.body?.matchType, 20).toLowerCase();
     const note = normalizeText(req.body?.note, 500);
-    const requestedCategory = normalizeText(req.body?.category, 40).toLowerCase();
-    const requestedAction = normalizeText(req.body?.action, 20).toLowerCase();
-    const category = MODERATION_RULE_CATEGORIES.has(requestedCategory) ? requestedCategory : "custom";
-    const action = MODERATION_RULE_ACTIONS.has(requestedAction) ? requestedAction : "review";
     if (pattern.length < 2 || !MODERATION_MATCH_TYPES.has(matchType)) {
       return res.status(400).json({ ok: false, error: "Проверьте выражение и тип правила" });
     }
 
     const result = await pool.query(
       `
-        INSERT INTO moderation_rules (id, pattern, match_type, category, action, note, created_by)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO moderation_rules (id, pattern, match_type, note, created_by)
+        VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT DO NOTHING
         RETURNING *;
       `,
-      [randomUUID(), pattern, matchType, category, action, note, req.telegramUser.id]
+      [randomUUID(), pattern, matchType, note, req.telegramUser.id]
     );
     if (!result.rows.length) {
       return res.status(409).json({ ok: false, error: "Такое правило уже существует" });
@@ -4979,28 +4825,6 @@ app.delete(
     if (!result.rows.length) return res.status(404).json({ ok: false, error: "Правило не найдено" });
     await addAdminLog(req.telegramUser.id, "moderation_rule_delete", ruleId, result.rows[0].pattern);
     res.json({ ok: true });
-  })
-);
-
-app.post(
-  "/api/admin/moderation/defaults",
-  requireTelegramAuth,
-  syncTelegramUser,
-  requireAdmin,
-  adminRoute(async (req, res) => {
-    const inserted = await seedDefaultModerationRules(pool);
-    await addAdminLog(
-      req.telegramUser.id,
-      "moderation_defaults_sync",
-      MODERATION_POLICY_VERSION,
-      `Добавлено правил: ${inserted}`
-    );
-    res.json({
-      ok: true,
-      inserted,
-      policyVersion: MODERATION_POLICY_VERSION,
-      totalInPack: DEFAULT_MODERATION_RULES.length
-    });
   })
 );
 
