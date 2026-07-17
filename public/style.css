@@ -6175,3 +6175,341 @@ body.dark-mode .admin-limit-control input {
     grid-column: 1 / -1;
   }
 }
+
+.admin-row{background:#1d1f26;color:#fff;border-radius:16px;justify-content:space-between}.admin-row div{flex:1}.admin-icon{background:none!important;color:#ff6b81!important;font-size:24px}.admin-arrow{background:none!important;color:#888!important;width:auto;height:auto;font-size:24px}
+
+/* ===== v1.14.0: единое спокойное выделение, быстрый поиск и карточка администратора ===== */
+
+/* Явная кнопка очистки поиска вместо системной кнопки, которая не везде видна. */
+.catalog-search-row .search-form {
+  position: relative;
+}
+
+.catalog-search-row .search {
+  padding-right: 45px;
+}
+
+.catalog-search-row .search::-webkit-search-cancel-button {
+  display: none;
+  -webkit-appearance: none;
+}
+
+.search-clear-button {
+  position: absolute;
+  top: 50%;
+  right: 7px;
+  z-index: 2;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: #e8ebf1;
+  color: #626a78;
+  font-size: 23px;
+  font-weight: 400;
+  line-height: 1;
+  transform: translateY(-50%);
+  cursor: pointer;
+}
+
+.search-clear-button:active {
+  transform: translateY(-50%) scale(.92);
+}
+
+body.dark-mode .search-clear-button {
+  background: #35363b;
+  color: #d7d8dc;
+}
+
+/* Единственный стиль платного выделения — тёмно-зелёная карточка как в макете. */
+.product-card.is-featured,
+.product-card.is-featured.featured-purple,
+.product-card.is-featured.featured-green,
+.product-card.is-featured.featured-gold,
+body.dark-mode .product-card.is-featured,
+body.dark-mode .product-card.is-featured.featured-purple,
+body.dark-mode .product-card.is-featured.featured-green,
+body.dark-mode .product-card.is-featured.featured-gold {
+  --feature-card-bg: #1b2b2b;
+  --feature-card-border: #35504b;
+  --feature-card-muted: #aebdb8;
+  --feature-card-badge: #9db6a4;
+  --feature-card-badge-text: #263c34;
+  border: 1px solid var(--feature-card-border) !important;
+  background: var(--feature-card-bg) !important;
+  box-shadow: 0 14px 32px rgba(12, 29, 28, .26) !important;
+}
+
+.product-card.is-featured:not(.owner-product-card) {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  align-items: stretch;
+  min-height: 0;
+  padding: 8px 8px 14px;
+  overflow: hidden;
+  contain-intrinsic-size: 340px;
+}
+
+.product-card.is-featured:not(.owner-product-card)::before {
+  display: none !important;
+}
+
+.product-card.is-featured:not(.owner-product-card) > img {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 10;
+  border-radius: 14px;
+  object-fit: cover;
+  box-shadow: none !important;
+}
+
+.product-card.is-featured:not(.owner-product-card) > div {
+  display: block;
+  padding: 11px 6px 0;
+}
+
+.product-card.is-featured:not(.owner-product-card) .featured-card-badge {
+  display: inline-flex;
+  min-height: 25px;
+  margin: 0 0 9px;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--feature-card-badge) !important;
+  color: var(--feature-card-badge-text) !important;
+  box-shadow: none;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.product-card.is-featured:not(.owner-product-card) h4 {
+  margin: 0 0 6px;
+  color: #f6faf8 !important;
+  font-size: 17px;
+  line-height: 1.2;
+}
+
+.product-card.is-featured:not(.owner-product-card) .card-price-row {
+  margin-bottom: 4px;
+}
+
+.product-card.is-featured:not(.owner-product-card) .card-price-row b,
+.product-card.is-featured:not(.owner-product-card) .discounted-price {
+  color: #ffffff !important;
+  font-size: 18px;
+}
+
+.product-card.is-featured:not(.owner-product-card) .card-price-row s {
+  color: #83938e;
+}
+
+.product-card.is-featured:not(.owner-product-card) p,
+body.dark-mode .product-card.is-featured:not(.owner-product-card) p {
+  color: var(--feature-card-muted) !important;
+}
+
+.product-card.is-featured:not(.owner-product-card) > .heart {
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  min-height: 38px;
+  padding: 0;
+  border-radius: 50%;
+  background: #ffffff;
+  color: #7a8582;
+  box-shadow: 0 7px 18px rgba(0, 0, 0, .18);
+  font-size: 24px;
+  line-height: 1;
+}
+
+.product-card.is-featured:not(.owner-product-card) > .heart:active {
+  transform: scale(.92);
+}
+
+/* В «Моих объявлениях» сохраняем компактную раскладку, но тот же единственный цвет. */
+.owner-product-card.is-featured h4,
+.owner-product-card.is-featured b {
+  color: #f6faf8 !important;
+}
+
+.owner-product-card.is-featured p,
+.owner-product-card.is-featured small {
+  color: var(--feature-card-muted) !important;
+}
+
+.owner-product-card.is-featured > img {
+  box-shadow: none !important;
+}
+
+/* Диалог больше не предлагает лишние цвета. */
+.highlight-style-preview {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  gap: 11px;
+  min-height: 68px;
+  padding: 12px;
+  border: 1px solid #527069;
+  border-radius: 16px;
+  background: #1b2b2b;
+  color: #f6faf8;
+}
+
+.highlight-style-preview-swatch {
+  width: 42px;
+  height: 42px;
+  border: 3px solid #b2c8ba;
+  border-radius: 13px;
+  background: #263e3a;
+  box-shadow: 0 7px 16px rgba(12, 29, 28, .24);
+}
+
+.highlight-style-preview > span:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.highlight-style-preview b {
+  font-size: 13px;
+}
+
+.highlight-style-preview small,
+body.dark-mode .highlight-style-preview small {
+  color: #aebdb8;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.highlight-request-summary,
+body.dark-mode .highlight-request-summary {
+  background: #edf4f0;
+  color: #63716d;
+}
+
+.highlight-request-summary b,
+body.dark-mode .highlight-request-summary b {
+  color: #263c34;
+}
+
+.admin-feature-color,
+.admin-feature-color.color-purple,
+.admin-feature-color.color-green,
+.admin-feature-color.color-gold {
+  --request-color: #355c53;
+}
+
+/* Кнопка администратора в настройках — отдельная аккуратная строка с розовой иконкой. */
+.admin-settings-card {
+  margin-top: 12px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.admin-settings-row {
+  width: 100%;
+  min-height: 76px;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) 22px;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.admin-settings-row:active {
+  background: rgba(109, 93, 252, .06);
+}
+
+.admin-settings-icon {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  display: block;
+}
+
+.admin-settings-icon::before {
+  content: "";
+  position: absolute;
+  top: 7px;
+  left: 15px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid #ff6681;
+  border-radius: 50%;
+}
+
+.admin-settings-icon::after {
+  content: "";
+  position: absolute;
+  left: 9px;
+  bottom: 7px;
+  width: 22px;
+  height: 13px;
+  border: 2px solid #ff6681;
+  border-bottom: 0;
+  border-radius: 13px 13px 4px 4px;
+}
+
+.admin-settings-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.admin-settings-copy b {
+  color: #242936;
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.admin-settings-copy small {
+  color: #888f9e;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.admin-settings-arrow {
+  color: #8c929d;
+  font-size: 27px;
+  font-weight: 300;
+  line-height: 1;
+  text-align: right;
+}
+
+body.dark-mode .admin-settings-row:active {
+  background: rgba(255, 255, 255, .045);
+}
+
+body.dark-mode .admin-settings-copy b {
+  color: #f2f2f7;
+}
+
+body.dark-mode .admin-settings-copy small {
+  color: #98989d;
+}
+
+@media (max-width: 360px) {
+  .catalog-filters-toggle span {
+    display: none;
+  }
+
+  .product-card.is-featured:not(.owner-product-card) > img {
+    aspect-ratio: 3 / 2;
+  }
+}

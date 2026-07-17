@@ -1,6 +1,6 @@
 {
   "name": "ossetian-market",
-  "version": "1.13.9",
+  "version": "1.14.0",
   "type": "module",
   "scripts": {
     "start": "node server.js",

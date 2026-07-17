@@ -105,7 +105,7 @@ const MAX_PRICE = 100000000;
 const MAX_AD_IMAGE_FILE_BYTES = 15 * 1024 * 1024;
 const MAX_AD_IMAGE_DATA_LENGTH = 8_000_000;
 const CATALOG_PAGE_SIZE = 12;
-const FEATURE_REQUEST_COLORS = new Set(["purple", "green", "gold"]);
+const FEATURE_REQUEST_COLOR = "green";
 const DATA_CACHE_TTL_MS = 30_000;
 const PRODUCT_DETAILS_CACHE_TTL_MS = 60_000;
 
@@ -224,6 +224,23 @@ const PRODUCT_TAXONOMY = Object.freeze({
 });
 
 const tg = window.Telegram?.WebApp || null;
+
+function lockPortraitOrientation() {
+  try {
+    tg?.lockOrientation?.();
+  } catch (error) {
+    console.warn("Telegram не смог заблокировать ориентацию:", error);
+  }
+
+  const orientation = window.screen?.orientation;
+  if (typeof orientation?.lock === "function") {
+    try {
+      Promise.resolve(orientation.lock("portrait")).catch(() => {});
+    } catch {
+      // Некоторые WebView объявляют API, но запрещают блокировку вне fullscreen.
+    }
+  }
+}
 let telegramAvatarObjectUrl = null;
 let productSearchTimer = null;
 let productsRequestSequence = 0;
@@ -2067,10 +2084,7 @@ function getProductCard(product, options = {}) {
     : "";
   const status = product.status || "active";
   const isSoldHistory = options.ownerActions && status === "sold";
-  const featureColor = FEATURE_REQUEST_COLORS.has(product.featuredColor)
-    ? product.featuredColor
-    : "purple";
-  const featuredClass = product.isFeatured ? `is-featured featured-${featureColor}` : "";
+  const featuredClass = product.isFeatured ? "is-featured featured-green" : "";
   const featuredBadge = product.isFeatured ? '<span class="featured-card-badge">★ Выделенное</span>' : "";
   const featureRequestBadge = product.featureRequestPending
     ? '<span class="feature-request-badge">Заявка на выделение отправлена</span>'
@@ -2105,7 +2119,7 @@ function getProductCard(product, options = {}) {
         ? `<button type="button" class="card-action status" aria-label="Отметить проданным" title="Отметить проданным" onclick="event.stopPropagation(); changeAdStatus('${productId}', 'sold')"><span class="card-action-icon" aria-hidden="true">✓</span><span>Продано</span></button>`
         : `<button type="button" class="card-action status" aria-label="Опубликовать снова" title="Опубликовать снова" onclick="event.stopPropagation(); changeAdStatus('${productId}', 'active')"><span class="card-action-icon" aria-hidden="true">↻</span><span>Опубликовать</span></button>`;
 
-    const featureActionLabel = product.featureRequestPending ? "Заявка отправлена" : "Выделить цветом";
+    const featureActionLabel = product.featureRequestPending ? "Заявка отправлена" : "Выделить объявление";
 
     actions = `
       <div class="product-card-actions">
@@ -2127,9 +2141,9 @@ function getProductCard(product, options = {}) {
 
   return `
     <div class="product-card ${options.ownerActions ? "owner-product-card" : ""} ${status !== "active" ? "is-inactive" : ""} ${isSoldHistory ? "sold-history-card is-noninteractive" : ""} ${featuredClass}" ${interactionAttributes}>
-      ${featuredBadge}
       <img src="${image}" alt="${name}" loading="${options.priority ? "eager" : "lazy"}" decoding="async" fetchpriority="${options.priority ? "high" : "low"}" onerror="handleImageError(this)">
       <div class="${options.ownerActions ? "product-card-info" : ""}">
+        ${featuredBadge}
         ${featureRequestBadge}
         ${vacancyBadge}
         ${priceDropMarkup}
@@ -3824,7 +3838,6 @@ function requestProductHighlight(productId) {
   const dialog = document.getElementById("highlightDialog");
   const productName = document.getElementById("highlightProductName");
   const summary = document.getElementById("highlightRequestSummary");
-  const purpleOption = dialog?.querySelector('input[name="highlightColor"][value="purple"]');
   const price = Number(state.config.featureHighlightPriceRub) || 0;
   const days = Number(state.config.featureHighlightDays) || 7;
   const priceText = price > 0 ? `${price.toLocaleString("ru-RU")} ₽` : "по согласованию";
@@ -3833,7 +3846,6 @@ function requestProductHighlight(productId) {
   if (summary) {
     summary.innerHTML = `<span>Срок</span><b>${days} дней</b><span>Стоимость</span><b>${escapeHTML(priceText)}</b>`;
   }
-  if (purpleOption) purpleOption.checked = true;
 
   if (dialog?.showModal) dialog.showModal();
   else dialog?.setAttribute("open", "");
@@ -3856,9 +3868,7 @@ async function submitProductHighlightRequest(event) {
     return;
   }
 
-  const form = event.currentTarget;
-  const selectedColor = String(new FormData(form).get("highlightColor") || "purple");
-  const color = FEATURE_REQUEST_COLORS.has(selectedColor) ? selectedColor : "purple";
+  const color = FEATURE_REQUEST_COLOR;
   const submitButton = document.getElementById("submitHighlightRequestBtn");
   const days = Number(state.config.featureHighlightDays) || 7;
 
@@ -3882,10 +3892,9 @@ async function submitProductHighlightRequest(event) {
       cached.featureRequestColor = color;
     }
 
-    const colorLabel = getFeatureColorLabel(color).toLowerCase();
     closeHighlightDialog();
     renderMyAds();
-    alert(`Заявка на ${colorLabel} выделение отправлена. Администратор напишет вам в Telegram для оплаты.`);
+    alert("Заявка на выделение отправлена. Администратор напишет вам в Telegram для оплаты.");
   } catch (error) {
     console.error("Feature request error:", error);
     alert(error.message || "Не удалось отправить заявку на выделение");
@@ -4012,9 +4021,14 @@ function initEvents() {
   const searchForm = document.getElementById("searchForm");
   const searchInput =
     document.getElementById("searchInput") || document.querySelector(".search");
+  const searchClearButton = document.getElementById("searchClearButton");
+  const syncSearchClearButton = () => {
+    if (searchClearButton) searchClearButton.hidden = !String(searchInput?.value || "").trim();
+  };
 
   searchInput?.addEventListener("input", event => {
     state.search = event.target.value;
+    syncSearchClearButton();
     state.productsLoadError = "";
     state.catalogPagination = { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE, hasMore: true };
     updateSearchStatus();
@@ -4028,8 +4042,24 @@ function initEvents() {
   searchInput?.addEventListener("keydown", hideKeyboardOnEnter);
 
   searchInput?.addEventListener("search", () => {
+    syncSearchClearButton();
     hideKeyboard();
   });
+
+  searchClearButton?.addEventListener("click", () => {
+    if (!searchInput) return;
+    searchInput.value = "";
+    state.search = "";
+    state.productsLoadError = "";
+    state.catalogPagination = { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE, hasMore: true };
+    syncSearchClearButton();
+    clearTimeout(productSearchTimer);
+    hideKeyboard();
+    loadProducts({ force: true });
+    searchInput.focus({ preventScroll: true });
+  });
+
+  syncSearchClearButton();
 
   searchForm?.addEventListener("submit", event => {
     event.preventDefault();
@@ -4382,6 +4412,7 @@ function initTelegramAppUI() {
 
   tg.ready();
   tg.expand();
+  lockPortraitOrientation();
   lockTelegramVerticalSwipes();
   requestTelegramFullscreen();
 
@@ -4406,6 +4437,7 @@ function initTelegramAppUI() {
     syncTelegramFullscreenState();
   });
   tg.onEvent?.("activated", requestTelegramFullscreen);
+  tg.onEvent?.("activated", lockPortraitOrientation);
 
   if (tg.BackButton) {
     tg.BackButton.onClick(goBack);
@@ -4840,6 +4872,7 @@ async function saveProfile(event) {
 ======================= */
 
 async function initApp() {
+  lockPortraitOrientation();
   initTelegramAppUI();
   initAppOverscrollGuard();
   initZoomLock();
@@ -5316,9 +5349,8 @@ function renderAdminProducts(products = []) {
   `;
 }
 
-function getFeatureColorLabel(color) {
-  const labels = { purple: "Фиолетовое", green: "Зелёное", gold: "Золотое" };
-  return labels[color] || labels.purple;
+function getFeatureColorLabel() {
+  return "Спокойное";
 }
 
 function renderAdminFeatureRequests(requests = []) {
@@ -5351,7 +5383,7 @@ function renderAdminFeatureRequests(requests = []) {
         const price = Number(request.priceAmount) > 0
           ? `${Number(request.priceAmount).toLocaleString("ru-RU")} ₽`
           : "По договорённости";
-        const colorKey = FEATURE_REQUEST_COLORS.has(request.color) ? request.color : "purple";
+        const colorKey = FEATURE_REQUEST_COLOR;
 
         return `
           <article class="admin-feature-request-card">
@@ -6273,7 +6305,7 @@ async function toggleAdminProductFeature(id, enabled, button) {
   try {
     await apiRequest(`/api/admin/products/${encodeURIComponent(id)}/feature`, {
       method: "PATCH",
-      body: JSON.stringify({ enabled, days: Number(state.config.featureHighlightDays) || 7, color: "purple" })
+      body: JSON.stringify({ enabled, days: Number(state.config.featureHighlightDays) || 7, color: FEATURE_REQUEST_COLOR })
     });
     await loadAdminPanel();
   } catch (error) {

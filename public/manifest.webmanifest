@@ -1,0 +1,9 @@
+{
+  "name": "Алания Маркет",
+  "short_name": "Алания Маркет",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f7f8fc",
+  "theme_color": "#f7f8fc"
+}
