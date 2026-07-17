@@ -19,8 +19,9 @@ test("плашка выделения уменьшена", () => {
 
 test("кнопка и номер запускают прямой системный звонок", () => {
   assert.match(client, /<a href="tel:\$\{escapeHTML\(cleanPhone\)\}" class="phone-line-link"/);
-  assert.match(client, /callBtn\.onclick[\s\S]*startPhoneCall\(cleanPhone\)/);
-  assert.match(client, /window\.location\.href = `tel:\$\{normalizedPhone\}`/);
+  assert.match(html, /<a id="callBtn"[^>]*role="button"[^>]*aria-disabled="true"/);
+  assert.match(client, /callBtn\.setAttribute\("href", telHref\)/);
+  assert.match(client, /callLink\.href = `tel:\$\{normalizedPhone\}`/);
   assert.doesNotMatch(client, /\/call\?phone=|openCallSheet|callSheetDialog/);
   assert.doesNotMatch(html, /callSheetDialog/);
   assert.doesNotMatch(server, /app\.get\("\/call"/);

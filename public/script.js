@@ -287,6 +287,7 @@ function getTelegramAuthHeaders() {
 const state = {
   page: "home",
   history: [],
+  pageScrollPositions: {},
   search: "",
   category: "Все",
   filters: {
@@ -1315,25 +1316,59 @@ function animatePageTitle(titleEl) {
   window.setTimeout(() => titleEl.classList.remove("is-changing"), 220);
 }
 
-function resetPageScroll(pageId) {
-  const scrollToTop = () => {
-    window.scrollTo(0, 0);
-    document.documentElement.scrollTop = 0;
-    document.body.scrollTop = 0;
+let pageScrollSequence = 0;
 
-    const phone = document.querySelector(".phone");
-    if (phone) phone.scrollTop = 0;
+function getAppScrollTop() {
+  const phone = document.querySelector(".phone");
+  return Math.max(
+    0,
+    Number(phone?.scrollTop) ||
+      Number(window.scrollY) ||
+      Number(document.documentElement.scrollTop) ||
+      Number(document.body.scrollTop) ||
+      0
+  );
+}
 
-    const page = document.getElementById(pageId);
-    if (page) page.scrollTop = 0;
+function savePageScroll(pageId) {
+  if (!pageId) return;
+  state.pageScrollPositions[pageId] = getAppScrollTop();
+}
+
+function applyPageScroll(pageId, scrollTop) {
+  const nextTop = Math.max(0, Number(scrollTop) || 0);
+  const phone = document.querySelector(".phone");
+  if (phone) phone.scrollTop = nextTop;
+
+  const page = document.getElementById(pageId);
+  if (page) page.scrollTop = nextTop;
+
+  window.scrollTo(0, nextTop);
+  document.documentElement.scrollTop = nextTop;
+  document.body.scrollTop = nextTop;
+}
+
+function schedulePageScroll(pageId, scrollTop) {
+  const sequence = ++pageScrollSequence;
+  const apply = () => {
+    if (sequence !== pageScrollSequence || state.page !== pageId) return;
+    applyPageScroll(pageId, scrollTop);
   };
 
-  scrollToTop();
+  apply();
   requestAnimationFrame(() => {
-    scrollToTop();
-    requestAnimationFrame(scrollToTop);
+    apply();
+    requestAnimationFrame(apply);
   });
-  window.setTimeout(scrollToTop, 80);
+  [80, 180].forEach(delay => window.setTimeout(apply, delay));
+}
+
+function resetPageScroll(pageId) {
+  schedulePageScroll(pageId, 0);
+}
+
+function restorePageScroll(pageId) {
+  schedulePageScroll(pageId, state.pageScrollPositions[pageId] || 0);
 }
 
 function showPage(page, addToHistory = true, preserveCreateSession = false, transitionDirection = null) {
@@ -1349,6 +1384,8 @@ function showPage(page, addToHistory = true, preserveCreateSession = false, tran
   const previousPage = state.page;
   const pageChanged = previousPage !== page;
 
+  if (pageChanged) savePageScroll(previousPage);
+
   if (addToHistory && pageChanged) {
     const previousHistoryPage = state.history[state.history.length - 1];
     if (previousHistoryPage === page) {
@@ -1361,6 +1398,7 @@ function showPage(page, addToHistory = true, preserveCreateSession = false, tran
     }
   }
 
+  const resolvedTransitionDirection = transitionDirection || (addToHistory ? "forward" : "back");
   state.page = page;
 
   document.querySelectorAll(".page").forEach(pageEl => {
@@ -1374,8 +1412,7 @@ function showPage(page, addToHistory = true, preserveCreateSession = false, tran
     targetPage.classList.add("active");
 
     if (pageChanged) {
-      const direction = transitionDirection || (addToHistory ? "forward" : "back");
-      animatePageEntry(targetPage, direction);
+      animatePageEntry(targetPage, resolvedTransitionDirection);
     }
   }
 
@@ -1424,7 +1461,11 @@ function showPage(page, addToHistory = true, preserveCreateSession = false, tran
     if (page === "admin") loadAdminPanel();
   });
 
-  resetPageScroll(page);
+  if (pageChanged && resolvedTransitionDirection === "back") {
+    restorePageScroll(page);
+  } else {
+    resetPageScroll(page);
+  }
 }
 
 function navigateMainTab(page) {
@@ -2977,18 +3018,25 @@ function renderProductDetails(product) {
 
   if (callBtn) {
     if (isAvailable && cleanPhone) {
+      const telHref = `tel:${cleanPhone}`;
       callBtn.textContent = "📞 Позвонить";
       callBtn.classList.remove("disabled-btn", "disabled");
       callBtn.removeAttribute("disabled");
       callBtn.removeAttribute("aria-disabled");
+      callBtn.setAttribute("href", telHref);
+      callBtn.setAttribute("aria-label", `Позвонить ${sellerPhone || cleanPhone}`);
       callBtn.dataset.phone = cleanPhone;
       callBtn.onclick = event => {
-        event.preventDefault();
-        startPhoneCall(cleanPhone);
+        tg?.HapticFeedback?.impactOccurred?.("light");
+        if (callBtn.tagName !== "A") {
+          event.preventDefault();
+          startPhoneCall(cleanPhone);
+        }
       };
     } else {
       callBtn.textContent = isAvailable ? "📞 Нет номера" : "📞 Недоступно";
       callBtn.classList.add("disabled-btn", "disabled");
+      callBtn.removeAttribute("href");
       callBtn.setAttribute("aria-disabled", "true");
       callBtn.onclick = event => {
         event.preventDefault();
@@ -3028,9 +3076,16 @@ function startPhoneCall(phone) {
     return;
   }
 
-  // Прямой tel: вызов показывает нативную нижнюю панель звонка на iOS
-  // и системный набор номера на Android без промежуточной веб-страницы.
-  window.location.href = `tel:${normalizedPhone}`;
+  // Fallback для старого закэшированного HTML с кнопкой вместо ссылки.
+  const callLink = document.createElement("a");
+  callLink.href = `tel:${normalizedPhone}`;
+  callLink.setAttribute("aria-hidden", "true");
+  callLink.tabIndex = -1;
+  callLink.style.position = "fixed";
+  callLink.style.left = "-9999px";
+  document.body.appendChild(callLink);
+  callLink.click();
+  window.setTimeout(() => callLink.remove(), 0);
 }
 
 async function openProduct(id) {
