@@ -12,7 +12,7 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=1.14.3" />
+  <link rel="stylesheet" href="style.css?v=1.14.4" />
 </head>
 
 <body>
@@ -326,7 +326,7 @@
   <div id="callSheet" class="call-sheet" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="callSheetPhone" hidden onclick="handleCallSheetBackdrop(event)">
     <div class="call-sheet-panel">
       <div class="call-sheet-group">
-        <a id="callSheetConfirm" class="call-sheet-action" href="tel:" target="_self" rel="external" onclick="handleCallSheetConfirm()">
+        <a id="callSheetConfirm" class="call-sheet-action" href="tel:" target="_blank" rel="external" onclick="return handleCallSheetConfirm(event)">
           <span class="call-sheet-icon" aria-hidden="true">📞</span>
           <strong id="callSheetPhone">Позвонить</strong>
         </a>
@@ -336,6 +336,6 @@
   </div>
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">‹</div>
 
-  <script src="script.js?v=1.14.3"></script>
+  <script src="script.js?v=1.14.4"></script>
 </body>
 </html>

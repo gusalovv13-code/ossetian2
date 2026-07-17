@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#111217" />
+  <title>Позвонить продавцу</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; margin: 0; }
+    body {
+      display: grid;
+      place-items: center;
+      padding: max(18px, env(safe-area-inset-top)) 16px max(22px, env(safe-area-inset-bottom));
+      background: radial-gradient(circle at top, #2b2355, #111217 44%);
+      color: #f7f7fb;
+      font: 16px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+      width: min(100%, 430px);
+      padding: 24px;
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 26px;
+      background: rgba(28,29,35,.94);
+      box-shadow: 0 28px 90px rgba(0,0,0,.45);
+      text-align: center;
+    }
+    .icon {
+      display: grid;
+      place-items: center;
+      width: 66px;
+      height: 66px;
+      margin: 0 auto 14px;
+      border-radius: 22px;
+      background: linear-gradient(135deg, #5f4df5, #7a58ff);
+      font-size: 30px;
+      box-shadow: 0 14px 35px rgba(102,79,246,.35);
+    }
+    h1 { margin: 0 0 6px; font-size: 24px; }
+    p { margin: 0 0 18px; color: #a9abb5; }
+    .number {
+      display: block;
+      margin: 0 0 18px;
+      font-size: clamp(24px, 7vw, 32px);
+      font-weight: 850;
+      letter-spacing: -.02em;
+      overflow-wrap: anywhere;
+    }
+    .call, button {
+      width: 100%;
+      min-height: 54px;
+      border: 0;
+      border-radius: 16px;
+      font: inherit;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    .call {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      margin-bottom: 10px;
+      background: linear-gradient(135deg, #6754ff, #7b4dff);
+      color: white;
+      text-decoration: none;
+      box-shadow: 0 14px 34px rgba(103,84,255,.32);
+    }
+    button { background: #292b32; color: #d9dae0; }
+    small { display: block; margin-top: 16px; color: #7d808b; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="icon" aria-hidden="true">📞</div>
+    <h1>Позвонить продавцу</h1>
+    <p>Нажмите кнопку ниже — телефон откроет системное подтверждение звонка.</p>
+    <strong id="phoneLabel" class="number">Номер не указан</strong>
+    <a id="callLink" class="call" href="#" hidden>📞 Позвонить</a>
+    <button id="copyButton" type="button">Скопировать номер</button>
+    <small>Страница открыта вне Telegram Mini App, чтобы ссылка на звонок корректно работала на телефоне.</small>
+  </main>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const raw = params.get("phone") || "";
+
+    function normalizePhone(value) {
+      const digits = String(value).replace(/\D/g, "");
+      if (digits.length === 10) return "+7" + digits;
+      if (digits.length === 11 && digits.startsWith("8")) return "+7" + digits.slice(1);
+      if (digits.length === 11 && digits.startsWith("7")) return "+" + digits;
+      if (String(value).trim().startsWith("+") && digits.length >= 7 && digits.length <= 15) return "+" + digits;
+      return "";
+    }
+
+    function formatPhone(value) {
+      const match = value.match(/^\+7(\d{3})(\d{3})(\d{2})(\d{2})$/);
+      return match ? `+7 (${match[1]}) ${match[2]}-${match[3]}-${match[4]}` : value;
+    }
+
+    const phone = normalizePhone(raw);
+    const label = document.getElementById("phoneLabel");
+    const link = document.getElementById("callLink");
+    const copyButton = document.getElementById("copyButton");
+
+    if (phone) {
+      label.textContent = formatPhone(phone);
+      link.href = "tel:" + phone;
+      link.hidden = false;
+      document.title = "Позвонить " + formatPhone(phone);
+    } else {
+      copyButton.disabled = true;
+      copyButton.textContent = "Некорректный номер";
+    }
+
+    copyButton.addEventListener("click", async () => {
+      if (!phone) return;
+      try {
+        await navigator.clipboard.writeText(phone);
+      } catch {
+        const input = document.createElement("input");
+        input.value = phone;
+        document.body.appendChild(input);
+        input.select();
+        document.execCommand("copy");
+        input.remove();
+      }
+      copyButton.textContent = "Номер скопирован ✓";
+    });
+  </script>
+</body>
+</html>

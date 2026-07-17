@@ -15,8 +15,8 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <link rel="manifest" href="manifest.webmanifest?v=1.14.3" />
-  <link rel="stylesheet" href="style.css?v=1.14.3" />
+  <link rel="manifest" href="manifest.webmanifest?v=1.14.4" />
+  <link rel="stylesheet" href="style.css?v=1.14.4" />
 </head>
 
 <body>
@@ -330,8 +330,8 @@
       <section id="adStructuredFields" class="structured-fields-card" hidden>
         <div class="structured-fields-heading">
           <div>
-            <b>Точные характеристики</b>
-            <small>Они попадут в фильтры и помогут покупателям найти объявление.</small>
+            <b>Точные характеристики <span class="optional-label">необязательно</span></b>
+            <small>Заполните только известные пункты. Они улучшат поиск, но не блокируют публикацию.</small>
           </div>
           <span>Для поиска</span>
         </div>
@@ -414,6 +414,19 @@
       </div>
 
       <div id="photoPreview" class="photo-grid"></div>
+
+      <section id="catalogCoverPreview" class="catalog-cover-preview" hidden aria-live="polite">
+        <div class="catalog-cover-frame">
+          <img id="catalogCoverPreviewImage" alt="Предпросмотр обложки каталога" />
+          <span>Так будет видно в каталоге</span>
+          <i aria-hidden="true"></i>
+        </div>
+        <div class="catalog-cover-copy">
+          <b>Обложка каталога</b>
+          <small>Первое фото используется в карточке. Перемещайте кадр и меняйте масштаб.</small>
+          <button type="button" class="outline" onclick="openCoverCropEditor()">Настроить кадр</button>
+        </div>
+      </section>
 
       <button
         id="createStep2Btn"
@@ -855,10 +868,37 @@
 
   <div id="appToast" class="app-toast" role="status" aria-live="polite" hidden></div>
 
+  <dialog id="coverCropDialog" class="cover-crop-dialog" aria-labelledby="coverCropTitle">
+    <div class="cover-crop-panel">
+      <div class="dialog-heading">
+        <div>
+          <small>Обложка каталога</small>
+          <h3 id="coverCropTitle">Настройте видимую область</h3>
+        </div>
+        <button type="button" class="dialog-close" onclick="closeCoverCropEditor()" aria-label="Закрыть">×</button>
+      </div>
+
+      <div class="cover-crop-viewport">
+        <img id="coverCropImage" alt="Настройка кадра" />
+        <div class="cover-crop-grid" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+        <span>Каталог</span>
+      </div>
+
+      <label class="cover-crop-control"><span>По горизонтали</span><input id="coverCropX" type="range" min="0" max="100" value="50" oninput="updateCoverCropEditor()" /></label>
+      <label class="cover-crop-control"><span>По вертикали</span><input id="coverCropY" type="range" min="0" max="100" value="50" oninput="updateCoverCropEditor()" /></label>
+      <label class="cover-crop-control"><span>Масштаб</span><input id="coverCropZoom" type="range" min="1" max="2.4" step="0.05" value="1" oninput="updateCoverCropEditor()" /></label>
+
+      <div class="cover-crop-actions">
+        <button type="button" class="outline" onclick="resetCoverCropEditor()">Сбросить</button>
+        <button type="button" class="primary" onclick="saveCoverCropEditor()">Сохранить кадр</button>
+      </div>
+    </div>
+  </dialog>
+
   <div id="callSheet" class="call-sheet" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="callSheetPhone" hidden onclick="handleCallSheetBackdrop(event)">
     <div class="call-sheet-panel">
       <div class="call-sheet-group">
-        <a id="callSheetConfirm" class="call-sheet-action" href="tel:" target="_self" rel="external" onclick="handleCallSheetConfirm()">
+        <a id="callSheetConfirm" class="call-sheet-action" href="tel:" target="_blank" rel="external" onclick="return handleCallSheetConfirm(event)">
           <span class="call-sheet-icon" aria-hidden="true">📞</span>
           <strong id="callSheetPhone">Позвонить</strong>
         </a>
@@ -868,6 +908,6 @@
   </div>
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">←</div>
 
-  <script src="script.js?v=1.14.3"></script>
+  <script src="script.js?v=1.14.4"></script>
 </body>
 </html>

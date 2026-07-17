@@ -356,9 +356,11 @@ const state = {
 const draftAd = {
   images: [],
   thumbnail: "",
-  thumbnailSource: ""
+  thumbnailSource: "",
+  coverCrop: { x: 50, y: 50, zoom: 1 }
 };
 
+let coverCropEditorState = { x: 50, y: 50, zoom: 1 };
 let isPublishingAd = false;
 
 /* =======================
@@ -812,25 +814,7 @@ function getStructuredAdValues() {
 }
 
 function getStructuredAdValidationError(ad) {
-  if (!PRODUCT_TAXONOMY[ad.category]) return "";
-  if (!ad.itemType) return isVacancyCategory(ad.category) ? "Выберите сферу работы" : "Выберите тип товара";
-
-  if (ad.category === "Авто") {
-    if (!ad.brand) return "Выберите марку автомобиля";
-    if (!["Автозапчасть"].includes(ad.itemType) && !ad.model) return "Выберите модель автомобиля";
-    if (!["Автозапчасть", "Мотоцикл"].includes(ad.itemType) && !ad.year) return "Выберите год выпуска автомобиля";
-  }
-
-  if (ad.category === "Электроника") {
-    if (!ad.brand) return "Выберите бренд устройства";
-    if (["Смартфон", "Кнопочный телефон"].includes(ad.itemType) && !ad.model) return "Выберите модель телефона";
-  }
-
-  if (ad.category === "Вакансии") {
-    if (!ad.brand) return "Выберите график работы";
-    if (!ad.year) return "Выберите тип занятости";
-  }
-
+  // Поля точных характеристик улучшают фильтры, но не являются обязательными.
   return "";
 }
 
@@ -1479,6 +1463,12 @@ function navigateMainTab(page) {
 }
 
 function goBack() {
+  const coverCropDialog = document.getElementById("coverCropDialog");
+  if (coverCropDialog?.open) {
+    closeCoverCropEditor();
+    return;
+  }
+
   const callSheet = document.getElementById("callSheet");
   if (callSheet && !callSheet.hidden) {
     hidePhoneMenu();
@@ -1910,6 +1900,71 @@ function compressImage(file, maxDimension = 900, quality = 0.72) {
     };
 
     reader.readAsDataURL(file);
+  });
+}
+
+function normalizeCoverCrop(crop = {}) {
+  const rawX = Number(crop.x);
+  const rawY = Number(crop.y);
+  const rawZoom = Number(crop.zoom);
+  const x = Math.max(0, Math.min(100, Number.isFinite(rawX) ? rawX : 50));
+  const y = Math.max(0, Math.min(100, Number.isFinite(rawY) ? rawY : 50));
+  const zoom = Math.max(1, Math.min(2.4, Number.isFinite(rawZoom) ? rawZoom : 1));
+  return { x, y, zoom };
+}
+
+function getCoverCropCss(crop = draftAd.coverCrop) {
+  const value = normalizeCoverCrop(crop);
+  return `object-position:${value.x}% ${value.y}%;transform:scale(${value.zoom});transform-origin:${value.x}% ${value.y}%;`;
+}
+
+async function createCatalogThumbnailFromImage(source, crop = draftAd.coverCrop, width = 480, height = 360, quality = 0.76) {
+  const value = String(source || "").trim();
+  if (!value) return "";
+
+  return new Promise(resolve => {
+    const img = new Image();
+    if (/^https?:/i.test(value)) img.crossOrigin = "anonymous";
+
+    img.onload = () => {
+      try {
+        const normalized = normalizeCoverCrop(crop);
+        const targetRatio = width / height;
+        const imageRatio = img.naturalWidth / Math.max(img.naturalHeight, 1);
+        let cropWidth;
+        let cropHeight;
+
+        if (imageRatio > targetRatio) {
+          cropHeight = img.naturalHeight;
+          cropWidth = cropHeight * targetRatio;
+        } else {
+          cropWidth = img.naturalWidth;
+          cropHeight = cropWidth / targetRatio;
+        }
+
+        cropWidth /= normalized.zoom;
+        cropHeight /= normalized.zoom;
+        const sourceX = (img.naturalWidth - cropWidth) * (normalized.x / 100);
+        const sourceY = (img.naturalHeight - cropHeight) * (normalized.y / 100);
+
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d", { alpha: false });
+        ctx.fillStyle = "#eef1f5";
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(img, sourceX, sourceY, cropWidth, cropHeight, 0, 0, width, height);
+
+        const webp = canvas.toDataURL("image/webp", quality);
+        resolve(webp.startsWith("data:image/webp") ? webp : canvas.toDataURL("image/jpeg", quality));
+      } catch (error) {
+        console.error("Не удалось создать обложку каталога:", error);
+        resolve(value);
+      }
+    };
+
+    img.onerror = () => resolve(value);
+    img.src = value;
   });
 }
 
@@ -2996,7 +3051,7 @@ function renderProductDetails(product) {
   if (productPhoneLine) {
     if (cleanPhone && isAvailable) {
       productPhoneLine.innerHTML = `
-        <a href="tel:${escapeHTML(cleanPhone)}" class="phone-line-link" aria-label="Позвонить ${escapeHTML(sellerPhone)}">
+        <a href="tel:${escapeHTML(cleanPhone)}" class="phone-line-link" aria-label="Позвонить ${escapeHTML(sellerPhone)}" onclick="event.preventDefault(); showPhoneMenu(decodeURIComponent('${escapeHTML(encodeURIComponent(sellerPhone || cleanPhone))}'))">
           📞 ${escapeHTML(sellerPhone)}
         </a>
       `;
@@ -3037,13 +3092,12 @@ function renderProductDetails(product) {
         tg?.HapticFeedback?.impactOccurred?.("light");
         if (callBtn.tagName !== "A") {
           event.preventDefault();
-          startPhoneCall(cleanPhone);
+          openExternalCallPage(cleanPhone);
           return;
         }
 
-        // Первый тап открывает понятное меню подтверждения.
-        // Вторая кнопка внутри меню — настоящая tel:-ссылка, поэтому iOS/Telegram
-        // получает отдельный прямой пользовательский жест и показывает системный звонок.
+        // Первый тап открывает меню подтверждения. Второй открывает отдельную
+        // HTTPS-страницу вне Mini App, где находится прямая tel:-ссылка.
         event.preventDefault();
         event.stopPropagation();
         showPhoneMenu(sellerPhone || cleanPhone);
@@ -3091,6 +3145,35 @@ function formatPhoneForCallSheet(phone) {
   return String(phone || "").trim() || normalized;
 }
 
+function buildExternalCallPageUrl(phone) {
+  const normalizedPhone = normalizePhoneForTel(phone);
+  if (!normalizedPhone) return "";
+  const url = new URL("call.html", window.location.href);
+  url.searchParams.set("phone", normalizedPhone);
+  return url.toString();
+}
+
+function openExternalCallPage(phone) {
+  const url = buildExternalCallPageUrl(phone);
+  if (!url) {
+    alert("Телефон продавца не указан");
+    return false;
+  }
+
+  try {
+    if (tg?.openLink && /^https:/i.test(url)) {
+      tg.openLink(url, { try_instant_view: false });
+      return true;
+    }
+  } catch (error) {
+    console.warn("Telegram openLink недоступен:", error);
+  }
+
+  const opened = window.open(url, "_blank", "noopener,noreferrer");
+  if (!opened) window.location.assign(url);
+  return true;
+}
+
 function showPhoneMenu(phone) {
   const normalizedPhone = normalizePhoneForTel(phone);
   if (!normalizedPhone) {
@@ -3103,13 +3186,14 @@ function showPhoneMenu(phone) {
   const phoneLabel = document.getElementById("callSheetPhone");
 
   if (!sheet || !confirmLink || !phoneLabel) {
-    startPhoneCall(normalizedPhone);
+    openExternalCallPage(normalizedPhone);
     return;
   }
 
   const displayPhone = formatPhoneForCallSheet(phone) || normalizedPhone;
-  confirmLink.href = `tel:${normalizedPhone}`;
-  confirmLink.setAttribute("aria-label", `Позвонить ${displayPhone}`);
+  confirmLink.href = buildExternalCallPageUrl(normalizedPhone) || `tel:${normalizedPhone}`;
+  confirmLink.target = "_blank";
+  confirmLink.setAttribute("aria-label", `Открыть страницу звонка ${displayPhone}`);
   confirmLink.dataset.phone = normalizedPhone;
   phoneLabel.textContent = `Позвонить ${displayPhone}`;
   sheet.hidden = false;
@@ -3142,8 +3226,14 @@ function handleCallSheetBackdrop(event) {
   if (event.target === event.currentTarget) hidePhoneMenu();
 }
 
-function handleCallSheetConfirm() {
+function handleCallSheetConfirm(event) {
+  event?.preventDefault();
+  event?.stopPropagation();
   tg?.HapticFeedback?.impactOccurred?.("medium");
+  const phone = document.getElementById("callSheetConfirm")?.dataset.phone || "";
+  hidePhoneMenu();
+  openExternalCallPage(phone);
+  return false;
 }
 
 function startPhoneCall(phone) {
@@ -3528,6 +3618,22 @@ function goCreateStep3() {
   showPage("create3");
 }
 
+function renderCatalogCoverPreview() {
+  const root = document.getElementById("catalogCoverPreview");
+  const image = document.getElementById("catalogCoverPreviewImage");
+  const source = draftAd.images[0] || "";
+  if (!root || !image) return;
+
+  root.hidden = !source;
+  if (!source) {
+    image.removeAttribute("src");
+    return;
+  }
+
+  image.src = safeImageUrl(source);
+  image.style.cssText = getCoverCropCss();
+}
+
 function renderPhotoPreview() {
   const photoPreview = document.getElementById("photoPreview");
 
@@ -3545,43 +3651,138 @@ function renderPhotoPreview() {
         <small>${vacancy ? "При желании добавьте логотип или рабочее место" : `Можно добавить до ${MAX_PHOTOS} фото`}</small>
       </div>
     `;
-
+    renderCatalogCoverPreview();
     updateCreateButtons();
     return;
   }
 
   photoPreview.innerHTML = draftAd.images
-    .map((src, index) => `
-      <div class="photo-item">
-        <img src="${escapeHTML(safeImageUrl(src))}" alt="Фото ${index + 1}">
-        <button type="button" onclick="removeDraftPhoto(${index})">×</button>
-      </div>
-    `)
+    .map((src, index) => {
+      const isCover = index === 0;
+      const imageStyle = isCover ? getCoverCropCss() : "";
+      return `
+        <div class="photo-item ${isCover ? "is-cover" : ""}">
+          <div class="photo-item-frame">
+            <img src="${escapeHTML(safeImageUrl(src))}" alt="Фото ${index + 1}" style="${escapeHTML(imageStyle)}">
+            <span>${isCover ? "Обложка каталога" : `Фото ${index + 1}`}</span>
+            ${isCover ? '<i class="photo-frame-guide" aria-hidden="true"></i>' : ""}
+          </div>
+          <button class="photo-remove" type="button" onclick="removeDraftPhoto(${index})" aria-label="Удалить фото ${index + 1}">×</button>
+          <button class="photo-cover-action" type="button" onclick="${isCover ? "openCoverCropEditor()" : `setDraftCoverImage(${index})`}">
+            ${isCover ? "Настроить кадр" : "Сделать обложкой"}
+          </button>
+        </div>
+      `;
+    })
     .join("");
 
   if (draftAd.images.length < MAX_PHOTOS) {
-    photoPreview.insertAdjacentHTML(
-      "beforeend",
-      `
-        <div class="photo-add" onclick="document.getElementById('photoInput')?.click()">
-          ＋
-        </div>
-      `
-    );
+    photoPreview.insertAdjacentHTML("beforeend", `
+      <button class="photo-add" type="button" onclick="document.getElementById('photoInput')?.click()" aria-label="Добавить ещё фото">＋</button>
+    `);
   }
 
+  renderCatalogCoverPreview();
   updateCreateButtons();
 }
 
-function removeDraftPhoto(index) {
-  draftAd.images.splice(index, 1);
+function setDraftCoverImage(index) {
+  const selectedIndex = Number(index);
+  if (!Number.isInteger(selectedIndex) || selectedIndex <= 0 || selectedIndex >= draftAd.images.length) return;
+  const [selected] = draftAd.images.splice(selectedIndex, 1);
+  draftAd.images.unshift(selected);
   draftAd.thumbnail = "";
   draftAd.thumbnailSource = "";
+  draftAd.coverCrop = { x: 50, y: 50, zoom: 1 };
+  renderPhotoPreview();
+  updatePreviewCard();
+  openCoverCropEditor();
+}
+
+function removeDraftPhoto(index) {
+  const removedCover = Number(index) === 0;
+  draftAd.images.splice(index, 1);
+  if (removedCover) {
+    draftAd.coverCrop = { x: 50, y: 50, zoom: 1 };
+    draftAd.thumbnail = "";
+    draftAd.thumbnailSource = "";
+  }
   renderPhotoPreview();
   updatePreviewCard();
 
   const photoInput = document.getElementById("photoInput");
   if (photoInput) photoInput.value = "";
+}
+
+function openCoverCropEditor() {
+  const source = draftAd.images[0];
+  if (!source) {
+    alert("Сначала добавьте фотографию");
+    return;
+  }
+
+  const dialog = document.getElementById("coverCropDialog");
+  const image = document.getElementById("coverCropImage");
+  if (!dialog || !image) return;
+
+  coverCropEditorState = normalizeCoverCrop(draftAd.coverCrop);
+  image.src = safeImageUrl(source);
+  document.getElementById("coverCropX").value = String(coverCropEditorState.x);
+  document.getElementById("coverCropY").value = String(coverCropEditorState.y);
+  document.getElementById("coverCropZoom").value = String(coverCropEditorState.zoom);
+  updateCoverCropEditor();
+
+  if (dialog.showModal) dialog.showModal();
+  else dialog.setAttribute("open", "");
+}
+
+function updateCoverCropEditor() {
+  const image = document.getElementById("coverCropImage");
+  if (!image) return;
+  coverCropEditorState = normalizeCoverCrop({
+    x: document.getElementById("coverCropX")?.value,
+    y: document.getElementById("coverCropY")?.value,
+    zoom: document.getElementById("coverCropZoom")?.value
+  });
+  image.style.cssText = getCoverCropCss(coverCropEditorState);
+}
+
+function resetCoverCropEditor() {
+  coverCropEditorState = { x: 50, y: 50, zoom: 1 };
+  document.getElementById("coverCropX").value = "50";
+  document.getElementById("coverCropY").value = "50";
+  document.getElementById("coverCropZoom").value = "1";
+  updateCoverCropEditor();
+}
+
+function closeCoverCropEditor() {
+  const dialog = document.getElementById("coverCropDialog");
+  if (dialog?.close) dialog.close();
+  else dialog?.removeAttribute("open");
+}
+
+async function saveCoverCropEditor() {
+  const source = draftAd.images[0];
+  if (!source) return;
+  const button = document.querySelector("#coverCropDialog .cover-crop-actions .primary");
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Сохраняем…";
+  }
+
+  try {
+    draftAd.coverCrop = normalizeCoverCrop(coverCropEditorState);
+    draftAd.thumbnail = await createCatalogThumbnailFromImage(source, draftAd.coverCrop);
+    draftAd.thumbnailSource = source;
+    closeCoverCropEditor();
+    renderPhotoPreview();
+    updatePreviewCard();
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Сохранить кадр";
+    }
+  }
 }
 
 function updatePreviewCard() {
@@ -3593,7 +3794,7 @@ function updatePreviewCard() {
   }
 
   const ad = getAdFormData();
-  const previewImage = draftAd.images[0] || DEFAULT_IMAGE;
+  const previewImage = draftAd.thumbnail || draftAd.images[0] || DEFAULT_IMAGE;
   const location = [ad.location, ad.district].filter(Boolean).join(", ");
   const options = isVacancyCategory(ad.category)
     ? [ad.itemType, ad.brand, ad.model, ad.year].filter(Boolean).join(" · ")
@@ -3692,7 +3893,7 @@ async function publishAd(status = "active") {
     const images = draftAd.images.slice(0, MAX_PHOTOS);
     const mainImage = images[0] || "";
     if (mainImage && (draftAd.thumbnailSource !== mainImage || !draftAd.thumbnail)) {
-      draftAd.thumbnail = await createThumbnailFromImage(mainImage);
+      draftAd.thumbnail = await createCatalogThumbnailFromImage(mainImage, draftAd.coverCrop);
       draftAd.thumbnailSource = mainImage;
     }
     const thumbnail = mainImage ? (draftAd.thumbnail || mainImage) : "";
@@ -3855,6 +4056,7 @@ function clearCreateForm() {
   draftAd.images = [];
   draftAd.thumbnail = "";
   draftAd.thumbnailSource = "";
+  draftAd.coverCrop = { x: 50, y: 50, zoom: 1 };
   state.editingProductId = null;
 
   const publishBtn = document.getElementById("publishBtn");
@@ -3943,6 +4145,7 @@ async function editAd(id) {
   draftAd.images = getProductImages(product).filter(Boolean).slice(0, MAX_PHOTOS);
   draftAd.thumbnail = product.thumbnail || "";
   draftAd.thumbnailSource = draftAd.images[0] || "";
+  draftAd.coverCrop = { x: 50, y: 50, zoom: 1 };
 
   showPage("create1", true, true);
   renderPhotoPreview();
@@ -4256,6 +4459,7 @@ function initEvents() {
     }
 
     const filesToAdd = files.slice(0, slotsLeft);
+    const previousCover = draftAd.images[0] || "";
     if (files.length > slotsLeft) {
       alert(`Добавим только ${slotsLeft} фото. Максимум — ${MAX_PHOTOS}.`);
     }
@@ -4272,8 +4476,12 @@ function initEvents() {
         draftAd.images.push(compressed);
       }
 
-      draftAd.thumbnail = "";
-      draftAd.thumbnailSource = "";
+      const currentCover = draftAd.images[0] || "";
+      if (currentCover !== previousCover) {
+        draftAd.thumbnail = "";
+        draftAd.thumbnailSource = "";
+        draftAd.coverCrop = { x: 50, y: 50, zoom: 1 };
+      }
       renderPhotoPreview();
       updatePreviewCard();
       updateCreateButtons();
