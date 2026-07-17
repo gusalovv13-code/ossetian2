@@ -14,7 +14,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.14.0";
+const APP_VERSION = "1.14.1";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -5278,44 +5278,6 @@ app.use("/api", (req, res) => {
   });
 });
 
-
-// iOS Telegram Mini App call bridge
-app.get("/call", (req, res) => {
-  const phone = String(req.query.phone || "").replace(/[^0-9+]/g, "").slice(0, 20);
-
-  if (!phone) {
-    return res.status(400).send("Phone missing");
-  }
-
-  res.send(`<!DOCTYPE html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Позвонить</title>
-<style>
-body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  text-align:center;
-  padding-top:80px;
-}
-a {
- display:inline-block;
- padding:18px 35px;
- background:#635bff;
- color:white;
- border-radius:14px;
- text-decoration:none;
- font-size:20px;
-}
-</style>
-</head>
-<body>
-<h2>Позвонить продавцу</h2>
-<p>${phone}</p>
-<a href="tel:${phone}">📞 Позвонить</a>
-</body>
-</html>`);
-});
 
 app.get("*", (req, res) => {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");

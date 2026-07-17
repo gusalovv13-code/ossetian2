@@ -6513,3 +6513,109 @@ body.dark-mode .admin-settings-copy small {
     aspect-ratio: 3 / 2;
   }
 }
+
+/* ===== v1.14.1: одинаковый размер карточек и прямой системный звонок ===== */
+
+/* В каталоге товарные и рекламные карточки имеют одну фиксированную высоту. */
+#productList.product-list {
+  grid-auto-rows: 226px;
+  align-items: stretch;
+}
+
+#productList.product-list > .product-card,
+#productList.product-list > .advertising-feed {
+  box-sizing: border-box;
+  width: 100%;
+  height: 226px;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Выделенная карточка повторяет геометрию обычной и рекламной карточек. */
+#productList > .product-card.is-featured:not(.owner-product-card) {
+  position: relative;
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  height: 226px;
+  padding: 10px;
+  overflow: hidden;
+  contain-intrinsic-size: 226px;
+}
+
+#productList > .product-card.is-featured:not(.owner-product-card)::before {
+  display: none !important;
+}
+
+#productList > .product-card.is-featured:not(.owner-product-card) > img {
+  display: block;
+  width: 100%;
+  height: 120px;
+  margin: 0 0 8px;
+  border-radius: 14px;
+  object-fit: cover;
+  aspect-ratio: auto;
+  box-shadow: none !important;
+}
+
+#productList > .product-card.is-featured:not(.owner-product-card) > div {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+#productList > .product-card.is-featured:not(.owner-product-card) .featured-card-badge {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  margin: 0;
+  padding: 3px 7px;
+  border: 0;
+  border-radius: 999px;
+  font-size: 8.5px;
+  line-height: 1;
+  letter-spacing: 0;
+  box-shadow: none;
+}
+
+#productList > .product-card.is-featured:not(.owner-product-card) h4 {
+  min-height: 34px;
+  margin: 0 0 5px;
+  color: #f6faf8 !important;
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+#productList > .product-card.is-featured:not(.owner-product-card) .card-price-row {
+  margin-bottom: 4px;
+}
+
+#productList > .product-card.is-featured:not(.owner-product-card) .card-price-row b,
+#productList > .product-card.is-featured:not(.owner-product-card) .discounted-price {
+  color: #fff !important;
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+#productList > .product-card.is-featured:not(.owner-product-card) p,
+body.dark-mode #productList > .product-card.is-featured:not(.owner-product-card) p {
+  color: var(--feature-card-muted) !important;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+#productList > .product-card.is-featured:not(.owner-product-card) > .heart {
+  top: 14px;
+  right: 14px;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  font-size: 21px;
+}

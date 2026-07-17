@@ -2948,7 +2948,7 @@ function renderProductDetails(product) {
   if (productPhoneLine) {
     if (cleanPhone && isAvailable) {
       productPhoneLine.innerHTML = `
-        <a href="tel:${escapeHTML(cleanPhone)}" class="phone-line-link">
+        <a href="tel:${escapeHTML(cleanPhone)}" class="phone-line-link" aria-label="Позвонить ${escapeHTML(sellerPhone)}">
           📞 ${escapeHTML(sellerPhone)}
         </a>
       `;
@@ -2984,9 +2984,7 @@ function renderProductDetails(product) {
       callBtn.dataset.phone = cleanPhone;
       callBtn.onclick = event => {
         event.preventDefault();
-        const url = `/call?phone=${encodeURIComponent(cleanPhone)}`;
-        if (tg?.openLink) tg.openLink(window.location.origin + url);
-        else window.open(url, "_blank", "noopener,noreferrer");
+        startPhoneCall(cleanPhone);
       };
     } else {
       callBtn.textContent = isAvailable ? "📞 Нет номера" : "📞 Недоступно";
@@ -3021,6 +3019,18 @@ function renderProductDetails(product) {
   prepareProductShareMessage(product).catch(() => {});
   state.currentProductImageIndex = 0;
   showProductImage(0);
+}
+
+function startPhoneCall(phone) {
+  const normalizedPhone = normalizePhoneForTel(phone);
+  if (!normalizedPhone) {
+    alert("Телефон продавца не указан");
+    return;
+  }
+
+  // Прямой tel: вызов показывает нативную нижнюю панель звонка на iOS
+  // и системный набор номера на Android без промежуточной веб-страницы.
+  window.location.href = `tel:${normalizedPhone}`;
 }
 
 async function openProduct(id) {
@@ -4305,7 +4315,6 @@ function initEvents() {
   reportDialog?.addEventListener("click", event => {
     if (event.target === reportDialog) closeReportDialog();
   });
-
   document.addEventListener("keydown", event => {
     if (event.key !== "Escape") return;
     const lightbox = document.getElementById("photoLightbox");
