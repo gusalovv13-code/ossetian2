@@ -108,6 +108,15 @@ const CATALOG_PAGE_SIZE = 12;
 const FEATURE_REQUEST_COLOR = "green";
 const DATA_CACHE_TTL_MS = 30_000;
 const PRODUCT_DETAILS_CACHE_TTL_MS = 60_000;
+const LEGAL_DOCUMENT_VERSION = "1.16.0";
+const LEGAL_ACCEPTANCE_STORAGE_KEY = "ossetian_market_legal_acceptance";
+const LEGAL_DOCUMENTS = Object.freeze({
+  terms: LEGAL_DOCUMENT_VERSION,
+  privacy: LEGAL_DOCUMENT_VERSION,
+  pdConsent: LEGAL_DOCUMENT_VERSION,
+  publicDataConsent: LEGAL_DOCUMENT_VERSION,
+  listingRules: LEGAL_DOCUMENT_VERSION
+});
 
 const OTHER_OPTION_VALUE = "__other__";
 const STRUCTURED_SPECIFICATION_KEYS = new Set([
@@ -268,6 +277,82 @@ function writeBrowserStorage(storageName, key, value) {
     return false;
   }
 }
+
+let legalOnboardingResolve = null;
+
+function getStoredLegalAcceptance() {
+  try {
+    const raw = readBrowserStorage("localStorage", LEGAL_ACCEPTANCE_STORAGE_KEY);
+    const value = raw ? JSON.parse(raw) : null;
+    return value && typeof value === "object" ? value : null;
+  } catch (error) {
+    console.warn("Не удалось прочитать подтверждение документов:", error);
+    return null;
+  }
+}
+
+function hasCurrentCoreLegalAcceptance() {
+  const acceptance = getStoredLegalAcceptance();
+  return Boolean(
+    acceptance?.termsAccepted &&
+    acceptance?.pdConsentAccepted &&
+    acceptance?.termsVersion === LEGAL_DOCUMENTS.terms &&
+    acceptance?.pdConsentVersion === LEGAL_DOCUMENTS.pdConsent
+  );
+}
+
+function getLegalAcceptanceHeaders() {
+  const acceptance = getStoredLegalAcceptance();
+  if (!acceptance) return {};
+  return {
+    "X-Legal-Terms-Version": String(acceptance.termsVersion || ""),
+    "X-PD-Consent-Version": String(acceptance.pdConsentVersion || ""),
+    "X-Legal-Accepted-At": String(acceptance.acceptedAt || "")
+  };
+}
+
+function updateLegalOnboardingButton() {
+  const terms = document.getElementById("coreTermsAccepted")?.checked === true;
+  const pd = document.getElementById("corePdConsentAccepted")?.checked === true;
+  const button = document.getElementById("acceptLegalOnboardingBtn");
+  if (button) button.disabled = !(terms && pd);
+}
+
+function ensureCoreLegalAcceptance() {
+  if (hasCurrentCoreLegalAcceptance()) return Promise.resolve(true);
+  const dialog = document.getElementById("legalOnboardingDialog");
+  if (!dialog) return Promise.resolve(false);
+  document.getElementById("coreTermsAccepted").checked = false;
+  document.getElementById("corePdConsentAccepted").checked = false;
+  updateLegalOnboardingButton();
+  if (typeof dialog.showModal === "function") dialog.showModal();
+  else dialog.setAttribute("open", "");
+  return new Promise(resolve => { legalOnboardingResolve = resolve; });
+}
+
+function acceptLegalOnboarding() {
+  const termsAccepted = document.getElementById("coreTermsAccepted")?.checked === true;
+  const pdConsentAccepted = document.getElementById("corePdConsentAccepted")?.checked === true;
+  if (!termsAccepted || !pdConsentAccepted) return;
+  const acceptance = {
+    termsAccepted: true,
+    pdConsentAccepted: true,
+    termsVersion: LEGAL_DOCUMENTS.terms,
+    pdConsentVersion: LEGAL_DOCUMENTS.pdConsent,
+    acceptedAt: new Date().toISOString()
+  };
+  writeBrowserStorage("localStorage", LEGAL_ACCEPTANCE_STORAGE_KEY, JSON.stringify(acceptance));
+  const dialog = document.getElementById("legalOnboardingDialog");
+  if (typeof dialog?.close === "function") dialog.close();
+  else dialog?.removeAttribute("open");
+  legalOnboardingResolve?.(true);
+  legalOnboardingResolve = null;
+}
+
+function closeAppFromLegalDialog() {
+  if (typeof tg?.close === "function") tg.close();
+  else window.location.href = "about:blank";
+}
 let productsAbortController = null;
 let productOpenSequence = 0;
 let galleryImageSequence = 0;
@@ -399,6 +484,7 @@ async function apiRequest(url, options = {}) {
       headers: {
         "Content-Type": "application/json",
         ...getTelegramAuthHeaders(),
+        ...getLegalAcceptanceHeaders(),
         ...headers
       }
     });
@@ -3535,6 +3621,32 @@ function updateCallPreferencesUI() {
   }
 }
 
+function updateListingLegalConsentVisibility() {
+  const allowCalls = document.getElementById("adAllowCalls")?.checked !== false;
+  const allowMessages = document.getElementById("adAllowMessages")?.checked !== false;
+  const phoneRow = document.getElementById("adPublicPhoneConsentRow");
+  const telegramRow = document.getElementById("adPublicTelegramConsentRow");
+  const phoneConsent = document.getElementById("adPublicPhoneConsent");
+  const telegramConsent = document.getElementById("adPublicTelegramConsent");
+  if (phoneRow) phoneRow.hidden = !allowCalls;
+  if (telegramRow) telegramRow.hidden = !allowMessages;
+  if (!allowCalls && phoneConsent) phoneConsent.checked = false;
+  if (!allowMessages && telegramConsent) telegramConsent.checked = false;
+}
+
+function getListingLegalAcceptance() {
+  return {
+    documentVersion: LEGAL_DOCUMENT_VERSION,
+    termsVersion: LEGAL_DOCUMENTS.terms,
+    listingRulesVersion: LEGAL_DOCUMENTS.listingRules,
+    publicDataConsentVersion: LEGAL_DOCUMENTS.publicDataConsent,
+    rulesAccepted: document.getElementById("adRulesAccepted")?.checked === true,
+    publicPhoneConsent: document.getElementById("adPublicPhoneConsent")?.checked === true,
+    publicTelegramConsent: document.getElementById("adPublicTelegramConsent")?.checked === true,
+    acceptedAt: new Date().toISOString()
+  };
+}
+
 function updateListingQuality() {
   const scoreEl = document.getElementById("listingQualityScore");
   const labelEl = document.getElementById("listingQualityLabel");
@@ -3945,7 +4057,23 @@ async function publishAd(status = "active") {
     }
 
     const ad = getAdFormData();
+    const listingLegalAcceptance = getListingLegalAcceptance();
     const priceNumber = getPriceNumber(ad.price);
+
+    if (targetStatus === "active") {
+      if (!listingLegalAcceptance.rulesAccepted) {
+        alert("Подтвердите Пользовательское соглашение и Правила размещения объявлений");
+        return;
+      }
+      if (ad.allowCalls && !listingLegalAcceptance.publicPhoneConsent) {
+        alert("Для показа номера телефона требуется отдельное согласие на распространение");
+        return;
+      }
+      if (ad.allowMessages && !listingLegalAcceptance.publicTelegramConsent) {
+        alert("Для показа Telegram-контакта требуется отдельное согласие на распространение");
+        return;
+      }
+    }
 
     if (!ad.title) {
       alert(isVacancyCategory(ad.category) ? "Введите название вакансии" : "Введите название товара");
@@ -4019,6 +4147,7 @@ async function publishAd(status = "active") {
         phone: ad.phone,
         allowCalls: ad.allowCalls,
         allowMessages: ad.allowMessages,
+        legalAcceptance: listingLegalAcceptance,
         status: targetStatus
       })
     });
@@ -4118,6 +4247,9 @@ function clearCreateForm() {
   const phone = document.getElementById("adPhone");
   const allowCalls = document.getElementById("adAllowCalls");
   const allowMessages = document.getElementById("adAllowMessages");
+  const rulesAccepted = document.getElementById("adRulesAccepted");
+  const publicPhoneConsent = document.getElementById("adPublicPhoneConsent");
+  const publicTelegramConsent = document.getElementById("adPublicTelegramConsent");
   const preview = document.getElementById("previewCard");
   const photoInput = document.getElementById("photoInput");
   const cameraInput = document.getElementById("cameraInput");
@@ -4148,7 +4280,11 @@ function clearCreateForm() {
   if (phone) phone.value = state.telegramUser?.phone || "";
   if (allowCalls) allowCalls.checked = true;
   if (allowMessages) allowMessages.checked = true;
+  if (rulesAccepted) rulesAccepted.checked = false;
+  if (publicPhoneConsent) publicPhoneConsent.checked = false;
+  if (publicTelegramConsent) publicTelegramConsent.checked = false;
   updateCallPreferencesUI();
+  updateListingLegalConsentVisibility();
   if (preview) preview.innerHTML = "";
   if (photoInput) photoInput.value = "";
   if (cameraInput) cameraInput.value = "";
@@ -4214,6 +4350,9 @@ async function editAd(id) {
   const phone = document.getElementById("adPhone");
   const allowCalls = document.getElementById("adAllowCalls");
   const allowMessages = document.getElementById("adAllowMessages");
+  const rulesAccepted = document.getElementById("adRulesAccepted");
+  const publicPhoneConsent = document.getElementById("adPublicPhoneConsent");
+  const publicTelegramConsent = document.getElementById("adPublicTelegramConsent");
 
   if (title) title.value = product.name || "";
   if (price) price.value = product.priceDropped && product.previousPrice ? product.previousPrice : (product.price || "");
@@ -4243,7 +4382,11 @@ async function editAd(id) {
   if (phone) phone.value = product.phone || "";
   if (allowCalls) allowCalls.checked = product.allowCalls !== false;
   if (allowMessages) allowMessages.checked = product.allowMessages !== false;
+  if (rulesAccepted) rulesAccepted.checked = false;
+  if (publicPhoneConsent) publicPhoneConsent.checked = false;
+  if (publicTelegramConsent) publicTelegramConsent.checked = false;
   updateCallPreferencesUI();
+  updateListingLegalConsentVisibility();
 
   draftAd.images = getProductImages(product).filter(Boolean).slice(0, MAX_PHOTOS);
   draftAd.thumbnail = product.thumbnail || "";
@@ -4709,6 +4852,12 @@ function initEvents() {
   document.getElementById("adDistrict")?.addEventListener("change", () => updateCustomSelectInput("adDistrict", "adDistrictCustom"));
   document.getElementById("adAllowCalls")?.addEventListener("change", () => {
     updateCallPreferencesUI();
+    updateListingLegalConsentVisibility();
+    updatePreviewCard();
+    updateCreateButtons();
+  });
+  document.getElementById("adAllowMessages")?.addEventListener("change", () => {
+    updateListingLegalConsentVisibility();
     updatePreviewCard();
     updateCreateButtons();
   });
@@ -5340,6 +5489,9 @@ async function initApp() {
   initKeyboardViewportGuard();
   initEvents();
   syncCatalogFiltersUI();
+  updateListingLegalConsentVisibility();
+  const legalAccepted = await ensureCoreLegalAcceptance();
+  if (!legalAccepted) return;
   const adsPromise = loadAds();
   const configPromise = loadConfig();
   await initTelegramUser();

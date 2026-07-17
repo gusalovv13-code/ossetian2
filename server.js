@@ -20,7 +20,8 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.15.0";
+const APP_VERSION = "1.16.0";
+const LEGAL_DOCUMENT_VERSION = "1.16.0";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -600,6 +601,94 @@ function mapPublicUser(row) {
 
 function normalizeText(value, maxLength) {
   return String(value ?? "").trim().slice(0, maxLength);
+}
+
+function normalizeLegalAcceptance(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function validateListingLegalAcceptance({ legalAcceptance, status, allowCalls, allowMessages }) {
+  if (status !== "active") return null;
+  const acceptance = normalizeLegalAcceptance(legalAcceptance);
+  if (acceptance.documentVersion !== LEGAL_DOCUMENT_VERSION ||
+      acceptance.termsVersion !== LEGAL_DOCUMENT_VERSION ||
+      acceptance.listingRulesVersion !== LEGAL_DOCUMENT_VERSION ||
+      acceptance.rulesAccepted !== true) {
+    return {
+      code: "LEGAL_ACCEPTANCE_REQUIRED",
+      error: "Подтвердите актуальные Пользовательское соглашение и Правила размещения объявлений"
+    };
+  }
+  if (allowCalls !== false && acceptance.publicPhoneConsent !== true) {
+    return {
+      code: "PUBLIC_PHONE_CONSENT_REQUIRED",
+      error: "Для публикации номера требуется отдельное согласие на распространение персональных данных"
+    };
+  }
+  if (allowMessages !== false && acceptance.publicTelegramConsent !== true) {
+    return {
+      code: "PUBLIC_TELEGRAM_CONSENT_REQUIRED",
+      error: "Для публикации Telegram-контакта требуется отдельное согласие на распространение персональных данных"
+    };
+  }
+  if ((allowCalls !== false || allowMessages !== false) && acceptance.publicDataConsentVersion !== LEGAL_DOCUMENT_VERSION) {
+    return {
+      code: "PUBLIC_DATA_CONSENT_VERSION_REQUIRED",
+      error: "Подтвердите актуальную редакцию согласия на распространение персональных данных"
+    };
+  }
+  return null;
+}
+
+async function recordLegalAcceptance(db, { userId, type, version, context = "app", productId = "", metadata = {} }) {
+  const cleanUserId = normalizeText(userId, 64);
+  const cleanType = normalizeText(type, 64);
+  const cleanVersion = normalizeText(version, 32);
+  const cleanContext = normalizeText(context, 40) || "app";
+  const cleanProductId = normalizeText(productId, 64);
+  if (!cleanUserId || !cleanType || !cleanVersion) return;
+  await db.query(
+    `INSERT INTO legal_acceptances (
+       id, user_id, acceptance_type, document_version, context, product_id, evidence
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+     ON CONFLICT (user_id, acceptance_type, document_version, context, product_id) DO NOTHING`,
+    [randomUUID(), cleanUserId, cleanType, cleanVersion, cleanContext, cleanProductId, JSON.stringify(metadata || {})]
+  );
+}
+
+async function recordCoreLegalAcceptancesFromRequest(db, req) {
+  const termsVersion = normalizeText(req.get("x-legal-terms-version"), 32);
+  const pdConsentVersion = normalizeText(req.get("x-pd-consent-version"), 32);
+  const clientAcceptedAt = normalizeText(req.get("x-legal-accepted-at"), 80);
+  const metadata = { source: "mini_app", clientAcceptedAt };
+  if (termsVersion === LEGAL_DOCUMENT_VERSION) {
+    await recordLegalAcceptance(db, {
+      userId: req.telegramUser?.id, type: "user_agreement", version: termsVersion, metadata
+    });
+  }
+  if (pdConsentVersion === LEGAL_DOCUMENT_VERSION) {
+    await recordLegalAcceptance(db, {
+      userId: req.telegramUser?.id, type: "pd_processing", version: pdConsentVersion, metadata
+    });
+  }
+}
+
+async function recordListingLegalAcceptances(db, { userId, productId, legalAcceptance, allowCalls, allowMessages }) {
+  const acceptance = normalizeLegalAcceptance(legalAcceptance);
+  const metadata = { source: "listing_publish", clientAcceptedAt: normalizeText(acceptance.acceptedAt, 80) };
+  await recordLegalAcceptance(db, {
+    userId, productId, type: "listing_rules", version: LEGAL_DOCUMENT_VERSION, context: "listing", metadata
+  });
+  if (allowCalls !== false) {
+    await recordLegalAcceptance(db, {
+      userId, productId, type: "public_phone", version: LEGAL_DOCUMENT_VERSION, context: "listing", metadata
+    });
+  }
+  if (allowMessages !== false) {
+    await recordLegalAcceptance(db, {
+      userId, productId, type: "public_telegram", version: LEGAL_DOCUMENT_VERSION, context: "listing", metadata
+    });
+  }
 }
 
 function normalizePhoneKey(value) {
@@ -1464,6 +1553,28 @@ async function initDb(db = pool) {
   await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
   await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_normalized TEXT DEFAULT '';`);
   await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS listing_limit INTEGER DEFAULT ${DEFAULT_LISTING_LIMIT};`);
+
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS legal_acceptances (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      acceptance_type TEXT NOT NULL,
+      document_version TEXT NOT NULL,
+      context TEXT NOT NULL DEFAULT 'app',
+      product_id TEXT NOT NULL DEFAULT '',
+      accepted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      evidence JSONB NOT NULL DEFAULT '{}'::jsonb
+    );
+  `);
+  await db.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_legal_acceptances_unique
+    ON legal_acceptances (user_id, acceptance_type, document_version, context, product_id);
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_legal_acceptances_user_date
+    ON legal_acceptances (user_id, accepted_at DESC);
+  `);
   await db.query(`
     UPDATE users
     SET listing_limit = ${DEFAULT_LISTING_LIMIT}
@@ -2389,6 +2500,9 @@ async function syncTelegramUser(req, res, next) {
         error: "Ваш аккаунт заблокирован администратором"
       });
     }
+
+
+    await recordCoreLegalAcceptancesFromRequest(pool, req);
   } catch (error) {
     console.error("User profile sync error:", error);
     return res.status(500).json({
@@ -3040,7 +3154,7 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
     const {
       name, price, category, desc, image, thumbnail, images, location, phone,
       allowCalls, allowMessages, condition, negotiable, delivery, district,
-      specifications, status
+      specifications, status, legalAcceptance
     } = req.body;
 
     const cleanName = normalizeText(name, 120);
@@ -3054,6 +3168,10 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
     const cleanDistrict = normalizeText(district, 80);
     const cleanSpecifications = normalizeSpecifications(specifications);
     const requestedStatus = normalizeProductStatus(status, "active");
+    const legalError = validateListingLegalAcceptance({
+      legalAcceptance, status: requestedStatus, allowCalls, allowMessages
+    });
+    if (legalError) return res.status(400).json({ ok: false, ...legalError });
 
     if (!PRODUCT_CATEGORIES.has(cleanCategory)) {
       return res.status(400).json({ ok: false, error: "Выберите допустимую категорию" });
@@ -3148,6 +3266,12 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
       );
     }
 
+    if (finalStatus === "active") {
+      await recordListingLegalAcceptances(client, {
+        userId: req.telegramUser.id, productId: id, legalAcceptance, allowCalls, allowMessages
+      });
+    }
+
     const updatedListingQuota = await getListingQuota(client, req.telegramUser.id);
     await client.query("COMMIT");
     res.status(201).json({
@@ -3175,7 +3299,7 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     const {
       name, price, category, desc, image, thumbnail, images, location, phone,
       allowCalls, allowMessages, condition, negotiable, delivery, district,
-      specifications, status, discountEnabled, originalPrice
+      specifications, status, discountEnabled, originalPrice, legalAcceptance
     } = req.body;
 
     if (!productId) return res.status(400).json({ ok: false, error: "Некорректный ID товара" });
@@ -3195,6 +3319,10 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     const cleanDistrict = normalizeText(district, 80);
     const cleanSpecifications = normalizeSpecifications(specifications);
     const requestedStatus = normalizeProductStatus(status, "active");
+    const legalError = validateListingLegalAcceptance({
+      legalAcceptance, status: requestedStatus, allowCalls, allowMessages
+    });
+    if (legalError) return res.status(400).json({ ok: false, ...legalError });
 
     if (!PRODUCT_CATEGORIES.has(cleanCategory)) {
       return res.status(400).json({ ok: false, error: "Выберите допустимую категорию" });
@@ -3353,6 +3481,12 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
         `INSERT INTO moderation_events (id, product_id, user_id, source, reason, matches) VALUES ($1, $2, $3, 'edit', $4, $5::jsonb) ON CONFLICT DO NOTHING`,
         [randomUUID(), productId, req.telegramUser.id, moderation.adminReason || moderation.reason, JSON.stringify(moderation.matches)]
       );
+    }
+
+    if (finalStatus === "active") {
+      await recordListingLegalAcceptances(client, {
+        userId: req.telegramUser.id, productId, legalAcceptance, allowCalls, allowMessages
+      });
     }
 
     await client.query("COMMIT");

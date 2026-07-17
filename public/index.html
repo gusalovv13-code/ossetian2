@@ -15,8 +15,8 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <link rel="manifest" href="manifest.webmanifest?v=1.15.0" />
-  <link rel="stylesheet" href="style.css?v=1.15.0" />
+  <link rel="manifest" href="manifest.webmanifest?v=1.16.0" />
+  <link rel="stylesheet" href="style.css?v=1.16.0" />
 </head>
 
 <body>
@@ -525,6 +525,23 @@
       <h4>Предпросмотр</h4>
       <div id="previewCard" class="product-card"></div>
 
+      <section class="legal-acceptance-card" aria-labelledby="listingLegalTitle">
+        <h4 id="listingLegalTitle">Правила и публичные контакты</h4>
+        <label class="legal-check-row">
+          <input id="adRulesAccepted" type="checkbox" />
+          <span>Я принимаю <a href="legal/#agreement" target="_blank" rel="noopener">Пользовательское соглашение</a> и <a href="legal/#listing-rules" target="_blank" rel="noopener">Правила размещения объявлений</a>.</span>
+        </label>
+        <label id="adPublicPhoneConsentRow" class="legal-check-row">
+          <input id="adPublicPhoneConsent" type="checkbox" />
+          <span>Отдельно разрешаю показывать номер телефона неопределённому кругу лиц в этом объявлении.</span>
+        </label>
+        <label id="adPublicTelegramConsentRow" class="legal-check-row">
+          <input id="adPublicTelegramConsent" type="checkbox" />
+          <span>Отдельно разрешаю показывать Telegram-контакт и ссылку на чат в этом объявлении.</span>
+        </label>
+        <p class="field-hint">Согласия на распространение можно отозвать, отключив соответствующий способ связи или обратившись в поддержку. Редакция документов 1.16.0.</p>
+      </section>
+
       <div class="create-actions">
         <button
           id="saveDraftBtn"
@@ -585,6 +602,17 @@
         </div>
       </div>
 
+
+      <div class="settings-card legal-settings-card">
+        <a class="settings-legal-link" href="legal/" target="_blank" rel="noopener">
+          <span class="settings-legal-icon" aria-hidden="true">⚖️</span>
+          <span>
+            <b>Документы и правила</b>
+            <small>Соглашение, персональные данные, модерация и безопасность</small>
+          </span>
+          <span aria-hidden="true">›</span>
+        </a>
+      </div>
 
       <div class="settings-card admin-settings-card" id="adminMenu" style="display:none">
         <button onclick="showPage('admin')" class="admin-settings-row" type="button">
@@ -874,6 +902,32 @@
     </form>
   </dialog>
 
+  <dialog id="legalOnboardingDialog" class="legal-onboarding-dialog" aria-labelledby="legalOnboardingTitle" oncancel="event.preventDefault()">
+    <div class="legal-onboarding-panel">
+      <div class="legal-onboarding-heading">
+        <span aria-hidden="true">⚖️</span>
+        <div>
+          <small>Перед началом работы</small>
+          <h3 id="legalOnboardingTitle">Документы и персональные данные</h3>
+        </div>
+      </div>
+      <p>Для работы приложения нужны два отдельных подтверждения. Документы откроются в новой вкладке.</p>
+      <label class="legal-check-row">
+        <input id="coreTermsAccepted" type="checkbox" onchange="updateLegalOnboardingButton()" />
+        <span>Я принимаю <a href="legal/#agreement" target="_blank" rel="noopener">Пользовательское соглашение</a> и <a href="legal/#listing-rules" target="_blank" rel="noopener">Правила сервиса</a>.</span>
+      </label>
+      <label class="legal-check-row">
+        <input id="corePdConsentAccepted" type="checkbox" onchange="updateLegalOnboardingButton()" />
+        <span>Я отдельно даю <a href="legal/#pd-consent" target="_blank" rel="noopener">согласие на обработку персональных данных</a> в целях работы сервиса.</span>
+      </label>
+      <p class="legal-onboarding-note">Согласие на публикацию телефона или Telegram-контакта запрашивается отдельно при размещении объявления.</p>
+      <div class="dialog-actions">
+        <button type="button" class="outline" onclick="closeAppFromLegalDialog()">Закрыть</button>
+        <button id="acceptLegalOnboardingBtn" type="button" class="primary" onclick="acceptLegalOnboarding()" disabled>Продолжить</button>
+      </div>
+    </div>
+  </dialog>
+
   <div id="appToast" class="app-toast" role="status" aria-live="polite" hidden></div>
 
   <dialog id="coverCropDialog" class="cover-crop-dialog" aria-labelledby="coverCropTitle">
@@ -913,6 +967,6 @@
   </div>
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">←</div>
 
-  <script src="script.js?v=1.15.0"></script>
+  <script src="script.js?v=1.16.0"></script>
 </body>
 </html>
