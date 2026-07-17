@@ -9,12 +9,18 @@ import sharp from "sharp";
 import { lookup } from "dns/promises";
 import { isIP } from "net";
 import { createTelegramAuthMiddleware } from "./telegram-auth.js";
+import {
+  DEFAULT_MODERATION_RULES,
+  MODERATION_CATEGORY_LABELS,
+  MODERATION_POLICY_VERSION
+} from "./moderation-policy.js";
+import { containsModerationPattern } from "./moderation-text.js";
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.14.3";
+const APP_VERSION = "1.15.0";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -84,6 +90,8 @@ const PRODUCT_CATEGORIES = new Set([
 ]);
 const MODERATION_STATUSES = new Set(["approved", "blocked", "rejected"]);
 const MODERATION_MATCH_TYPES = new Set(["word", "phrase", "domain"]);
+const MODERATION_RULE_ACTIONS = new Set(["review", "block"]);
+const MODERATION_RULE_CATEGORIES = new Set(Object.keys(MODERATION_CATEGORY_LABELS));
 const AD_PLACEMENTS = new Set(["catalog_top", "catalog_feed", "product_detail"]);
 const AD_STATUSES = new Set(["draft", "active", "paused", "ended"]);
 const AD_BILLING_MODELS = new Set(["flat", "cpm", "cpc"]);
@@ -1089,34 +1097,6 @@ function parsePriceAmount(value) {
     : 0;
 }
 
-function normalizeModerationText(value) {
-  return String(value ?? "")
-    .toLocaleLowerCase("ru-RU")
-    .replace(/ё/g, "е")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function escapeRegExp(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function containsModerationPattern(text, pattern, matchType) {
-  const normalizedText = normalizeModerationText(text);
-  const normalizedPattern = normalizeModerationText(pattern);
-  if (!normalizedText || !normalizedPattern) return false;
-
-  if (matchType === "phrase" || matchType === "domain") {
-    return normalizedText.includes(normalizedPattern);
-  }
-
-  const expression = new RegExp(
-    `(^|[^\p{L}\p{N}])${escapeRegExp(normalizedPattern)}(?=$|[^\p{L}\p{N}])`,
-    "iu"
-  );
-  return expression.test(normalizedText);
-}
-
 function normalizeOptionalDate(value) {
   if (!value) return null;
   const date = new Date(value);
@@ -1169,17 +1149,17 @@ async function evaluateProductModeration(product, database = pool) {
   const phonePattern = /(?:\+?\d[\s().-]*){10,}/u;
 
   if (settings.block_links && linkPattern.test(content)) {
-    matches.push({ type: "link", label: "Ссылка в тексте объявления" });
+    matches.push({ type: "link", category: "custom", action: "review", label: "Ссылка в тексте объявления" });
   }
   if (settings.block_emails && emailPattern.test(content)) {
-    matches.push({ type: "email", label: "Email в тексте объявления" });
+    matches.push({ type: "email", category: "custom", action: "review", label: "Email в тексте объявления" });
   }
   if (settings.block_contacts && (telegramPattern.test(content) || phonePattern.test(content))) {
-    matches.push({ type: "contact", label: "Контактные данные в тексте объявления" });
+    matches.push({ type: "contact", category: "custom", action: "review", label: "Контактные данные в тексте объявления" });
   }
 
   const rulesResult = await database.query(`
-    SELECT id, pattern, match_type
+    SELECT id, pattern, match_type, category, action
     FROM moderation_rules
     WHERE is_active = TRUE
     ORDER BY created_at ASC;
@@ -1187,10 +1167,14 @@ async function evaluateProductModeration(product, database = pool) {
 
   for (const rule of rulesResult.rows) {
     if (containsModerationPattern(content, rule.pattern, rule.match_type)) {
+      const category = MODERATION_RULE_CATEGORIES.has(rule.category) ? rule.category : "custom";
+      const action = MODERATION_RULE_ACTIONS.has(rule.action) ? rule.action : "review";
       matches.push({
         type: rule.match_type,
         ruleId: rule.id,
-        label: `Запрещённое выражение: ${rule.pattern}`
+        category,
+        action,
+        label: `${MODERATION_CATEGORY_LABELS[category]}: ${rule.pattern}`
       });
     }
   }
@@ -1199,10 +1183,21 @@ async function evaluateProductModeration(product, database = pool) {
     items.findIndex(item => item.type === match.type && item.label === match.label) === index
   );
 
+  const decision = uniqueMatches.some(item => item.action === "block") ? "block" : "review";
+  const categories = [...new Set(uniqueMatches.map(item => item.category).filter(Boolean))];
+  const categorySummary = categories
+    .map(category => MODERATION_CATEGORY_LABELS[category] || "Правила публикации")
+    .join(", ");
+
   return {
     blocked: uniqueMatches.length > 0,
-    reason: uniqueMatches.map(item => item.label).join("; ").slice(0, 1000),
-    matches: uniqueMatches.slice(0, 20)
+    decision,
+    policyVersion: MODERATION_POLICY_VERSION,
+    reason: uniqueMatches.length
+      ? `Объявление направлено на проверку: ${categorySummary || "правила публикации"}`.slice(0, 1000)
+      : "",
+    adminReason: uniqueMatches.map(item => item.label).join("; ").slice(0, 1000),
+    matches: uniqueMatches.slice(0, 30)
   };
 }
 
@@ -1329,6 +1324,43 @@ async function fetchTelegramAvatarBuffer(avatarUrl) {
     buffer,
     contentType: contentType.startsWith("image/") ? contentType : "image/jpeg"
   };
+}
+
+async function seedDefaultModerationRules(database = pool) {
+  let inserted = 0;
+  for (const [id, pattern, matchType, category, action] of DEFAULT_MODERATION_RULES) {
+    const values = [
+      id,
+      pattern,
+      matchType,
+      category,
+      action,
+      `Базовый пакет РФ ${MODERATION_POLICY_VERSION}`
+    ];
+    const updated = await database.query(
+      `
+        UPDATE moderation_rules
+        SET category = $4, action = $5, note = $6, updated_at = NOW()
+        WHERE id = $1
+        RETURNING id;
+      `,
+      values
+    );
+    if (updated.rows.length) continue;
+
+    const result = await database.query(
+      `
+        INSERT INTO moderation_rules (
+          id, pattern, match_type, category, action, note, created_by
+        ) VALUES ($1, $2, $3, $4, $5, $6, 'system')
+        ON CONFLICT DO NOTHING
+        RETURNING id;
+      `,
+      values
+    );
+    inserted += result.rows.length;
+  }
+  return inserted;
 }
 
 async function initDb(db = pool) {
@@ -1690,6 +1722,8 @@ async function initDb(db = pool) {
       id TEXT PRIMARY KEY,
       pattern TEXT NOT NULL,
       match_type TEXT DEFAULT 'word',
+      category TEXT DEFAULT 'custom',
+      action TEXT DEFAULT 'review',
       is_active BOOLEAN DEFAULT TRUE,
       note TEXT DEFAULT '',
       created_by TEXT DEFAULT '',
@@ -1702,29 +1736,9 @@ async function initDb(db = pool) {
     ON moderation_rules (LOWER(pattern), match_type);
   `);
 
-  const moderationRuleCount = await db.query(
-    `SELECT COUNT(*)::int AS count FROM moderation_rules`
-  );
-  if ((moderationRuleCount.rows[0]?.count || 0) === 0) {
-    const defaultModerationRules = [
-      ['default-heroin', 'героин', 'word'],
-      ['default-cocaine', 'кокаин', 'word'],
-      ['default-meth', 'метамфетамин', 'word'],
-      ['default-fake-passport', 'поддельный паспорт', 'phrase'],
-      ['default-drug-stash', 'закладка наркотиков', 'phrase'],
-      ['default-ammunition', 'боевые патроны', 'phrase']
-    ];
-    for (const [id, pattern, matchType] of defaultModerationRules) {
-      await db.query(
-        `
-          INSERT INTO moderation_rules (id, pattern, match_type, note, created_by)
-          VALUES ($1, $2, $3, 'Базовое правило проекта', 'system')
-          ON CONFLICT DO NOTHING;
-        `,
-        [id, pattern, matchType]
-      );
-    }
-  }
+  await db.query(`ALTER TABLE moderation_rules ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'custom';`);
+  await db.query(`ALTER TABLE moderation_rules ADD COLUMN IF NOT EXISTS action TEXT DEFAULT 'review';`);
+  await seedDefaultModerationRules(db);
 
   await db.query(`
     CREATE TABLE IF NOT EXISTS moderation_events (
@@ -3130,7 +3144,7 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
     if (moderation.blocked) {
       await client.query(
         `INSERT INTO moderation_events (id, product_id, user_id, source, reason, matches) VALUES ($1, $2, $3, 'publish', $4, $5::jsonb) ON CONFLICT DO NOTHING`,
-        [randomUUID(), id, req.telegramUser.id, moderation.reason, JSON.stringify(moderation.matches)]
+        [randomUUID(), id, req.telegramUser.id, moderation.adminReason || moderation.reason, JSON.stringify(moderation.matches)]
       );
     }
 
@@ -3337,7 +3351,7 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     if (moderation.blocked) {
       await client.query(
         `INSERT INTO moderation_events (id, product_id, user_id, source, reason, matches) VALUES ($1, $2, $3, 'edit', $4, $5::jsonb) ON CONFLICT DO NOTHING`,
-        [randomUUID(), productId, req.telegramUser.id, moderation.reason, JSON.stringify(moderation.matches)]
+        [randomUUID(), productId, req.telegramUser.id, moderation.adminReason || moderation.reason, JSON.stringify(moderation.matches)]
       );
     }
 
@@ -4748,7 +4762,7 @@ app.get(
         LIMIT 100;
       `),
       pool.query(`
-        SELECT id, pattern, match_type, is_active, note, created_by, created_at, updated_at
+        SELECT id, pattern, match_type, category, action, is_active, note, created_by, created_at, updated_at
         FROM moderation_rules
         ORDER BY is_active DESC, created_at DESC;
       `),
@@ -4762,7 +4776,9 @@ app.get(
       ok: true,
       events: events.rows,
       rules: rules.rows,
-      settings: settings.rows[0] || {}
+      settings: settings.rows[0] || {},
+      policyVersion: MODERATION_POLICY_VERSION,
+      categories: MODERATION_CATEGORY_LABELS
     });
   })
 );
@@ -4776,18 +4792,22 @@ app.post(
     const pattern = normalizeText(req.body?.pattern, 200);
     const matchType = normalizeText(req.body?.matchType, 20).toLowerCase();
     const note = normalizeText(req.body?.note, 500);
+    const requestedCategory = normalizeText(req.body?.category, 40).toLowerCase();
+    const requestedAction = normalizeText(req.body?.action, 20).toLowerCase();
+    const category = MODERATION_RULE_CATEGORIES.has(requestedCategory) ? requestedCategory : "custom";
+    const action = MODERATION_RULE_ACTIONS.has(requestedAction) ? requestedAction : "review";
     if (pattern.length < 2 || !MODERATION_MATCH_TYPES.has(matchType)) {
       return res.status(400).json({ ok: false, error: "Проверьте выражение и тип правила" });
     }
 
     const result = await pool.query(
       `
-        INSERT INTO moderation_rules (id, pattern, match_type, note, created_by)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO moderation_rules (id, pattern, match_type, category, action, note, created_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT DO NOTHING
         RETURNING *;
       `,
-      [randomUUID(), pattern, matchType, note, req.telegramUser.id]
+      [randomUUID(), pattern, matchType, category, action, note, req.telegramUser.id]
     );
     if (!result.rows.length) {
       return res.status(409).json({ ok: false, error: "Такое правило уже существует" });
@@ -4825,6 +4845,28 @@ app.delete(
     if (!result.rows.length) return res.status(404).json({ ok: false, error: "Правило не найдено" });
     await addAdminLog(req.telegramUser.id, "moderation_rule_delete", ruleId, result.rows[0].pattern);
     res.json({ ok: true });
+  })
+);
+
+app.post(
+  "/api/admin/moderation/defaults",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const inserted = await seedDefaultModerationRules(pool);
+    await addAdminLog(
+      req.telegramUser.id,
+      "moderation_defaults_sync",
+      MODERATION_POLICY_VERSION,
+      `Добавлено правил: ${inserted}`
+    );
+    res.json({
+      ok: true,
+      inserted,
+      policyVersion: MODERATION_POLICY_VERSION,
+      totalInPack: DEFAULT_MODERATION_RULES.length
+    });
   })
 );
 

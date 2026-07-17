@@ -3180,7 +3180,9 @@ body.dark-mode .admin-badge.warning {
 }
 .moderation-switches { display: grid; gap: 10px; margin-bottom: 14px; }
 .moderation-switches label { display: flex; align-items: center; gap: 9px; font-weight: 650; }
-.moderation-rule-form { display: grid; grid-template-columns: 1.3fr .8fr 1.2fr auto; gap: 8px; margin-bottom: 12px; }
+.moderation-rule-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+#moderationRulePattern,
+#moderationRuleNote { grid-column: span 2; }
 .moderation-rule-form input,
 .moderation-rule-form select,
 .admin-moderation-record input,
@@ -3225,6 +3227,8 @@ body.dark-mode .ad-editor-grid select { background: #121620; border-color: #343b
 
 @media (max-width: 640px) {
   .moderation-rule-form { grid-template-columns: 1fr; }
+  #moderationRulePattern,
+  #moderationRuleNote { grid-column: auto; }
   .ad-editor-grid { grid-template-columns: 1fr; }
   .ad-editor-grid label.wide { grid-column: auto; }
 }

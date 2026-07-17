@@ -6031,6 +6031,7 @@ function getAdminActionLabel(action) {
     moderation_rule_toggle: "Изменил правило модерации",
     moderation_rule_delete: "Удалил правило модерации",
     moderation_settings_update: "Обновил автомодерацию",
+    moderation_defaults_sync: "Обновил базовый пакет модерации",
     ad_create: "Создал рекламную кампанию",
     ad_update: "Обновил рекламную кампанию",
     ad_delete: "Удалил рекламную кампанию",
@@ -6158,21 +6159,28 @@ function renderAdminModeration(data) {
   const settings = data.settings || {};
   const events = data.events || [];
   const rules = data.rules || [];
+  const categories = data.categories || {};
+  const categoryOptions = Object.entries(categories)
+    .map(([value, label]) => `<option value="${escapeHTML(value)}">${escapeHTML(label)}</option>`)
+    .join("");
 
   root.innerHTML = `
     <section class="admin-config-card">
-      <div class="admin-section-heading"><div><b>Автоматическая модерация</b><small>Ссылки, контакты, email и запрещённые выражения</small></div></div>
+      <div class="admin-section-heading"><div><b>Автоматическая модерация</b><small>Пакет РФ ${escapeHTML(data.policyVersion || "")}: ссылки, контакты, маскировки и категории риска</small></div></div>
       <div class="moderation-switches">
         <label><input id="moderationEnabled" type="checkbox" ${settings.enabled !== false ? "checked" : ""}> Автомодерация включена</label>
         <label><input id="moderationLinks" type="checkbox" ${settings.block_links !== false ? "checked" : ""}> Блокировать ссылки и домены</label>
         <label><input id="moderationContacts" type="checkbox" ${settings.block_contacts !== false ? "checked" : ""}> Блокировать телефоны и @username в тексте</label>
         <label><input id="moderationEmails" type="checkbox" ${settings.block_emails !== false ? "checked" : ""}> Блокировать email</label>
       </div>
-      <button class="admin-action-button restore" type="button" onclick="saveModerationSettings(this)">Сохранить настройки</button>
+      <div class="admin-report-actions">
+        <button class="admin-action-button restore" type="button" onclick="saveModerationSettings(this)">Сохранить настройки</button>
+        <button class="admin-action-button" type="button" onclick="syncDefaultModerationRules(this)">Обновить базовый пакет РФ</button>
+      </div>
     </section>
 
     <section class="admin-config-card">
-      <div class="admin-section-heading"><div><b>Запрещённые слова и фразы</b><small>Совпадение проверяется без учёта регистра и буквы ё</small></div></div>
+      <div class="admin-section-heading"><div><b>Запрещённые слова и фразы</b><small>Фильтр распознаёт регистр, ё/е, латинские подмены, цифры, пробелы, точки и повторение букв</small></div></div>
       <div class="moderation-rule-form">
         <input id="moderationRulePattern" maxlength="200" placeholder="Слово, фраза или домен">
         <select id="moderationRuleType">
@@ -6180,13 +6188,20 @@ function renderAdminModeration(data) {
           <option value="phrase">Фраза</option>
           <option value="domain">Домен</option>
         </select>
+        <select id="moderationRuleCategory">
+          ${categoryOptions || '<option value="custom">Пользовательское правило</option>'}
+        </select>
+        <select id="moderationRuleAction">
+          <option value="review">На ручную проверку</option>
+          <option value="block">Высокий риск</option>
+        </select>
         <input id="moderationRuleNote" maxlength="500" placeholder="Комментарий для модераторов">
         <button class="admin-action-button" type="button" onclick="createModerationRule(this)">Добавить</button>
       </div>
       <div class="moderation-rule-list">
         ${rules.length ? rules.map(rule => `
           <div class="moderation-rule-row ${rule.is_active ? "" : "is-muted"}">
-            <div><b>${escapeHTML(rule.pattern)}</b><small>${escapeHTML(rule.match_type)}${rule.note ? ` · ${escapeHTML(rule.note)}` : ""}</small></div>
+            <div><b>${escapeHTML(rule.pattern)}</b><small>${escapeHTML(categories[rule.category] || rule.category || "Пользовательское правило")} · ${rule.action === "block" ? "высокий риск" : "ручная проверка"} · ${escapeHTML(rule.match_type)}${rule.note ? ` · ${escapeHTML(rule.note)}` : ""}</small></div>
             <button type="button" class="admin-action-button ${rule.is_active ? "danger" : "restore"}" onclick="toggleModerationRule('${escapeHTML(rule.id)}', this)">${rule.is_active ? "Выключить" : "Включить"}</button>
             <button type="button" class="admin-action-button danger" onclick="deleteModerationRule('${escapeHTML(rule.id)}', this)">Удалить</button>
           </div>`).join("") : '<p class="muted">Правил пока нет.</p>'}
@@ -6233,13 +6248,29 @@ async function saveModerationSettings(button) {
 async function createModerationRule(button) {
   const pattern = document.getElementById("moderationRulePattern")?.value.trim() || "";
   const matchType = document.getElementById("moderationRuleType")?.value || "word";
+  const category = document.getElementById("moderationRuleCategory")?.value || "custom";
+  const action = document.getElementById("moderationRuleAction")?.value || "review";
   const note = document.getElementById("moderationRuleNote")?.value.trim() || "";
   if (!pattern) return alert("Введите запрещённое выражение");
   if (button) button.disabled = true;
   try {
-    await apiRequest("/api/admin/moderation/rules", { method: "POST", body: JSON.stringify({ pattern, matchType, note }) });
+    await apiRequest("/api/admin/moderation/rules", { method: "POST", body: JSON.stringify({ pattern, matchType, category, action, note }) });
     await loadAdminModeration();
   } catch (error) { alert(error.message); if (button) button.disabled = false; }
+}
+
+async function syncDefaultModerationRules(button) {
+  if (button) button.disabled = true;
+  try {
+    const result = await apiRequest("/api/admin/moderation/defaults", { method: "POST" });
+    alert(result.inserted > 0
+      ? `Добавлено правил: ${result.inserted}`
+      : "Базовый пакет уже актуален");
+    await loadAdminModeration();
+  } catch (error) {
+    alert(error.message || "Не удалось обновить пакет модерации");
+    if (button) button.disabled = false;
+  }
 }
 
 async function toggleModerationRule(id, button) {

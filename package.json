@@ -1,12 +1,13 @@
 {
   "name": "ossetian-market",
-  "version": "1.14.4",
+  "version": "1.15.0",
   "type": "module",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
     "test": "node --test",
-    "check": "node --check server.js && node --check telegram-auth.js && node --check public/script.js"
+    "check": "node --check server.js && node --check telegram-auth.js && node --check moderation-policy.js && node --check moderation-text.js && node --check public/script.js",
+    "test:moderation": "node --test test/moderation-v1.15.0.test.js"
   },
   "dependencies": {
     "compression": "^1.8.1",
