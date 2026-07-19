@@ -16,7 +16,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.19.1";
+const APP_VERSION = "1.19.2";
 const LEGAL_DOCUMENT_VERSION = "1.16.0";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -83,6 +83,7 @@ const PRODUCT_CATEGORIES = new Set([
   "Инструменты",
   "Сад и огород",
   "Животные",
+  "Недвижимость",
   "Вакансии"
 ]);
 const MODERATION_STATUSES = new Set(["approved", "blocked", "rejected"]);
@@ -96,10 +97,15 @@ const DELETED_PRODUCT_RETENTION_DAYS = Math.max(1, Math.min(3650, Number(process
 const FEATURE_HIGHLIGHT_PRICE_RUB = Math.max(0, Number(process.env.FEATURE_HIGHLIGHT_PRICE_RUB) || 199);
 const FEATURE_HIGHLIGHT_DAYS = Math.max(1, Math.min(90, Number(process.env.FEATURE_HIGHLIGHT_DAYS) || 7));
 const DEFAULT_LISTING_LIMIT = 3;
-const PROFESSIONAL_LISTING_LIMIT = 10;
-const BUSINESS_LISTING_LIMIT = 50;
-const MAX_LISTING_LIMIT = 100;
-const BUSINESS_LISTING_PRICE_RUB = Math.max(0, Number(process.env.BUSINESS_LISTING_PRICE_RUB) || 299);
+const PROFESSIONAL_SUBSCRIPTION_PRICE_RUB = Math.max(0, Number(process.env.PROFESSIONAL_SUBSCRIPTION_PRICE_RUB) || 499);
+const PROFESSIONAL_SUBSCRIPTION_DAYS = Math.max(1, Math.min(365, Number(process.env.PROFESSIONAL_SUBSCRIPTION_DAYS) || 30));
+const PAID_LISTING_PRICES = Object.freeze({
+  automobile: Math.max(0, Number(process.env.PAID_LISTING_AUTOMOBILE_PRICE_RUB) || 199),
+  vacancy: Math.max(0, Number(process.env.PAID_LISTING_VACANCY_PRICE_RUB) || 99),
+  apartment: Math.max(0, Number(process.env.PAID_LISTING_APARTMENT_PRICE_RUB) || 299),
+  house: Math.max(0, Number(process.env.PAID_LISTING_HOUSE_PRICE_RUB) || 299),
+  land: Math.max(0, Number(process.env.PAID_LISTING_LAND_PRICE_RUB) || 199)
+});
 const FEATURE_COLOR = "green";
 const OPENAI_API_KEY = String(process.env.OPENAI_API_KEY || "").trim();
 const OPENAI_MODEL = String(process.env.OPENAI_MODEL || "gpt-5.6-terra").trim();
@@ -496,9 +502,9 @@ const PRODUCT_SUMMARY_COLUMNS = `
   p.owner_id,
   p.owner_name,
   p.owner_username,
-  COALESCE((SELECT u.is_business FROM users u WHERE u.telegram_id = p.owner_id LIMIT 1), FALSE) AS owner_is_business,
+  COALESCE((SELECT (u.professional_subscription_until > NOW()) FROM users u WHERE u.telegram_id = p.owner_id LIMIT 1), FALSE) AS owner_is_business,
   COALESCE((SELECT u.business_name FROM users u WHERE u.telegram_id = p.owner_id LIMIT 1), '') AS owner_business_name,
-  COALESCE((SELECT u.business_verified OR (u.is_business AND COALESCE(u.listing_limit, ${DEFAULT_LISTING_LIMIT}) >= ${BUSINESS_LISTING_LIMIT}) FROM users u WHERE u.telegram_id = p.owner_id LIMIT 1), FALSE) AS owner_business_verified,
+  FALSE AS owner_business_verified,
   p.name,
   p.price,
   p.price_amount,
@@ -542,9 +548,9 @@ const PRODUCT_PUBLIC_DETAIL_COLUMNS = `
   p.owner_id,
   p.owner_name,
   p.owner_username,
-  COALESCE((SELECT u.is_business FROM users u WHERE u.telegram_id = p.owner_id LIMIT 1), FALSE) AS owner_is_business,
+  COALESCE((SELECT (u.professional_subscription_until > NOW()) FROM users u WHERE u.telegram_id = p.owner_id LIMIT 1), FALSE) AS owner_is_business,
   COALESCE((SELECT u.business_name FROM users u WHERE u.telegram_id = p.owner_id LIMIT 1), '') AS owner_business_name,
-  COALESCE((SELECT u.business_verified OR (u.is_business AND COALESCE(u.listing_limit, ${DEFAULT_LISTING_LIMIT}) >= ${BUSINESS_LISTING_LIMIT}) FROM users u WHERE u.telegram_id = p.owner_id LIMIT 1), FALSE) AS owner_business_verified,
+  FALSE AS owner_business_verified,
   p.name,
   p.price,
   p.price_amount,
@@ -790,14 +796,16 @@ function mapPublicUser(row) {
     description: row.profile_description || "",
     city: row.city || "",
     phone: row.phone || "",
-    listingLimit: resolveEffectiveListingLimit(row),
-    isBusiness: Boolean(row.is_business),
+    listingLimit: isProfessionalSubscriptionActive(row) ? null : DEFAULT_LISTING_LIMIT,
+    isBusiness: isProfessionalSubscriptionActive(row),
     businessName: row.business_name || "",
     businessCategory: row.business_category || "",
     businessAddress: row.business_address || "",
     businessHours: row.business_hours || "",
-    businessWebsite: row.business_website || "",
-    businessVerified: Boolean(row.is_business && (row.business_verified || normalizeListingLimit(row.listing_limit) >= BUSINESS_LISTING_LIMIT)),
+    businessWebsite: "",
+    businessVerified: false,
+    professionalSubscriptionActive: isProfessionalSubscriptionActive(row),
+    professionalSubscriptionUntil: row.professional_subscription_until ? new Date(row.professional_subscription_until).toISOString() : null,
     lastSeen: row.last_seen ? new Date(row.last_seen).getTime() : null,
     createdAt: row.created_at ? new Date(row.created_at).getTime() : null,
     updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : null
@@ -982,7 +990,7 @@ function buildSellerTrust(row = {}) {
   const pendingReports = Math.max(0, Number(row.pending_reports) || 0);
   const phoneVerified = Boolean(row.phone_verified);
   const telegramVerified = Boolean(row.telegram_verified);
-  const businessVerified = Boolean(row.business_verified);
+  const professionalSeller = Boolean(row.professional_seller);
   const profileComplete = Boolean(row.profile_complete);
   const memberSince = row.member_since ? new Date(row.member_since).getTime() : null;
   const accountAgeDays = memberSince ? Math.max(0, Math.floor((Date.now() - memberSince) / 86_400_000)) : 0;
@@ -992,7 +1000,7 @@ function buildSellerTrust(row = {}) {
     (telegramVerified ? 15 : 0) +
     (phoneVerified ? 15 : 0) +
     (profileComplete ? 5 : 0) +
-    (businessVerified ? 10 : 0) +
+    (professionalSeller ? 10 : 0) +
     Math.min(10, Math.floor(accountAgeDays / 30) * 2) +
     Math.min(15, soldListings * 3) +
     Math.min(10, ratingCount * 2) +
@@ -1023,7 +1031,7 @@ function buildSellerTrust(row = {}) {
     pendingReports,
     phoneVerified,
     telegramVerified,
-    businessVerified,
+    professionalSeller,
     profileComplete,
     memberSince,
     accountAgeDays,
@@ -1045,7 +1053,7 @@ async function getSellerTrust(db, sellerId) {
        (SELECT COUNT(*)::int FROM reports r JOIN products p ON p.id = r.product_id WHERE p.owner_id = $1 AND r.status = 'pending') AS pending_reports,
        COALESCE((SELECT phone_normalized <> '' FROM users WHERE telegram_id = $1), FALSE) AS phone_verified,
        EXISTS(SELECT 1 FROM users WHERE telegram_id = $1) AS telegram_verified,
-       COALESCE((SELECT business_verified FROM users WHERE telegram_id = $1), FALSE) AS business_verified,
+       COALESCE((SELECT professional_subscription_until > NOW() FROM users WHERE telegram_id = $1), FALSE) AS professional_seller,
        COALESCE((SELECT (COALESCE(profile_description, '') <> '' AND COALESCE(city, '') <> '') FROM users WHERE telegram_id = $1), FALSE) AS profile_complete,
        COALESCE((SELECT created_at FROM users WHERE telegram_id = $1), (SELECT MIN(created_at) FROM products WHERE owner_id = $1)) AS member_since`,
     [String(sellerId)]
@@ -1071,47 +1079,90 @@ function normalizePhoneKey(value) {
   return digits.slice(0, 15);
 }
 
-function normalizeListingLimit(value, fallback = DEFAULT_LISTING_LIMIT) {
-  const parsed = Number.parseInt(String(value ?? ""), 10);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.max(1, Math.min(MAX_LISTING_LIMIT, parsed));
+function isProfessionalSubscriptionActive(row = {}, now = Date.now()) {
+  const until = row.professional_subscription_until ?? row.professionalSubscriptionUntil;
+  if (!until) return false;
+  const timestamp = new Date(until).getTime();
+  return Number.isFinite(timestamp) && timestamp > now;
 }
 
-function resolveEffectiveListingLimit(row = {}) {
-  const storedLimit = normalizeListingLimit(row.listing_limit ?? row.listingLimit);
-  const isBusiness = Boolean(row.is_business ?? row.isBusiness);
-  const businessVerified = Boolean(row.business_verified ?? row.businessVerified);
 
-  if (isBusiness && (businessVerified || storedLimit >= BUSINESS_LISTING_LIMIT)) {
-    return Math.max(storedLimit, BUSINESS_LISTING_LIMIT);
-  }
-  if (isBusiness) {
-    return Math.max(storedLimit, PROFESSIONAL_LISTING_LIMIT);
-  }
-  return storedLimit;
+function normalizeListingFeeType(value) {
+  const normalized = normalizeText(value, 30).toLowerCase();
+  return ["automobile", "vacancy", "apartment", "house", "land"].includes(normalized) ? normalized : "";
 }
 
-function resolveListingTier(row = {}) {
-  const storedLimit = normalizeListingLimit(row.listing_limit ?? row.listingLimit);
-  const isBusiness = Boolean(row.is_business ?? row.isBusiness);
-  const businessVerified = Boolean(row.business_verified ?? row.businessVerified);
+function getListingFeeType(category, specifications = {}) {
+  const cleanCategory = normalizeText(category, 60);
+  const specs = specifications && typeof specifications === "object" ? specifications : {};
+  const itemType = normalizeText(
+    specs["Тип товара"] || specs["Подкатегория"] || specs["Тип"] || specs["Тип недвижимости"] || "",
+    80
+  ).toLowerCase();
 
-  if (isBusiness && (businessVerified || storedLimit >= BUSINESS_LISTING_LIMIT)) return "business";
-  if (isBusiness) return "professional";
-  if (storedLimit > DEFAULT_LISTING_LIMIT) return "custom";
-  return "standard";
+  if (cleanCategory === "Вакансии") return "vacancy";
+  if (cleanCategory === "Авто" && itemType !== "автозапчасть") return "automobile";
+  if (cleanCategory === "Недвижимость") {
+    if (itemType.includes("квартир")) return "apartment";
+    if (itemType.includes("участ")) return "land";
+    if (itemType.includes("дом") || itemType.includes("коттедж")) return "house";
+  }
+  return "";
+}
+
+async function getMonetizationSettings(database = pool) {
+  const result = await database.query(`
+    SELECT automobile_paid, vacancy_paid, apartment_paid, house_paid, land_paid
+    FROM monetization_settings WHERE id = TRUE LIMIT 1
+  `);
+  const row = result.rows[0] || {};
+  return {
+    automobile: row.automobile_paid === true,
+    vacancy: row.vacancy_paid === true,
+    apartment: row.apartment_paid === true,
+    house: row.house_paid === true,
+    land: row.land_paid === true
+  };
+}
+
+async function getListingFeeRequirement(database, category, specifications = {}) {
+  const feeType = getListingFeeType(category, specifications);
+  if (!feeType) return { required: false, feeType: "", priceRub: 0 };
+  const settings = await getMonetizationSettings(database);
+  return {
+    required: settings[feeType] === true,
+    feeType,
+    priceRub: PAID_LISTING_PRICES[feeType] || 0
+  };
+}
+
+async function hasSuccessfulListingPayment(database, userId, productId, feeType = "") {
+  const values = [String(userId), String(productId)];
+  let extra = "";
+  if (feeType) {
+    values.push(feeType);
+    extra = ` AND plan = $3`;
+  }
+  const result = await database.query(
+    `SELECT 1 FROM payment_orders
+     WHERE user_id = $1 AND product_id = $2 AND purpose = 'listing_fee' AND status = 'succeeded'${extra}
+     LIMIT 1`,
+    values
+  );
+  return result.rows.length > 0;
 }
 
 async function getListingQuota(db, userId, { lockUser = false } = {}) {
   const userResult = await db.query(
-    `SELECT listing_limit, is_business, business_verified
+    `SELECT professional_subscription_started_at, professional_subscription_until
      FROM users
      WHERE telegram_id = $1
      ${lockUser ? "FOR UPDATE" : ""}`,
     [String(userId)]
   );
   const userRow = userResult.rows[0] || {};
-  const limit = resolveEffectiveListingLimit(userRow);
+  const unlimited = isProfessionalSubscriptionActive(userRow);
+  const limit = unlimited ? null : DEFAULT_LISTING_LIMIT;
   const countResult = await db.query(
     `SELECT COUNT(*)::int AS used
      FROM products
@@ -1120,15 +1171,20 @@ async function getListingQuota(db, userId, { lockUser = false } = {}) {
     [String(userId)]
   );
   const used = Number(countResult.rows[0]?.used) || 0;
+  const subscriptionUntil = userRow.professional_subscription_until
+    ? new Date(userRow.professional_subscription_until).toISOString()
+    : null;
   return {
     used,
     limit,
-    remaining: Math.max(0, limit - used),
-    tier: resolveListingTier(userRow),
-    professionalLimit: PROFESSIONAL_LISTING_LIMIT,
-    businessLimit: BUSINESS_LISTING_LIMIT,
-    businessPriceRub: BUSINESS_LISTING_PRICE_RUB,
-    maxLimit: MAX_LISTING_LIMIT
+    unlimited,
+    remaining: unlimited ? null : Math.max(0, DEFAULT_LISTING_LIMIT - used),
+    tier: unlimited ? "professional" : "standard",
+    professionalSubscriptionActive: unlimited,
+    professionalSubscriptionUntil: subscriptionUntil,
+    professionalSubscriptionPriceRub: PROFESSIONAL_SUBSCRIPTION_PRICE_RUB,
+    professionalSubscriptionDays: PROFESSIONAL_SUBSCRIPTION_DAYS,
+    defaultLimit: DEFAULT_LISTING_LIMIT
   };
 }
 
@@ -1760,6 +1816,97 @@ function paymentAmountString(value) {
   return Math.max(0, Number(value) || 0).toFixed(2);
 }
 
+async function createCheckoutPayment({ userId, productId = null, purpose, plan, amount, description, metadata = {}, lockKey = "" }) {
+  if (!isYooKassaConfigured()) {
+    const error = new Error("Онлайн-оплата пока не настроена");
+    error.code = "PAYMENTS_NOT_CONFIGURED";
+    throw error;
+  }
+  const cleanPurpose = normalizeText(purpose, 50);
+  const cleanPlan = normalizeText(plan, 50);
+  const cleanProductId = productId ? normalizeText(productId, 64) : null;
+  const orderClient = await pool.connect();
+  let orderId = "";
+  let idempotenceKey = "";
+  try {
+    await orderClient.query("BEGIN");
+    await orderClient.query("SELECT pg_advisory_xact_lock(hashtext($1))", [lockKey || `${cleanPurpose}:${userId}:${cleanProductId || "none"}:${cleanPlan}`]);
+    await orderClient.query(`
+      UPDATE payment_orders SET status='failed', updated_at=NOW()
+      WHERE user_id=$1 AND purpose=$2 AND plan=$3
+        AND (($4::text IS NULL AND product_id IS NULL) OR product_id=$4)
+        AND status='creating' AND created_at < NOW() - INTERVAL '15 minutes'
+    `, [String(userId), cleanPurpose, cleanPlan, cleanProductId]);
+    const existingResult = await orderClient.query(`
+      SELECT id, status, confirmation_url, amount, currency
+      FROM payment_orders
+      WHERE user_id=$1 AND purpose=$2 AND plan=$3
+        AND (($4::text IS NULL AND product_id IS NULL) OR product_id=$4)
+        AND status IN ('creating','pending','waiting_for_capture')
+      ORDER BY created_at DESC LIMIT 1
+    `, [String(userId), cleanPurpose, cleanPlan, cleanProductId]);
+    if (existingResult.rows.length) {
+      await orderClient.query("COMMIT");
+      const existing = existingResult.rows[0];
+      return {
+        reused: true,
+        orderId: existing.id,
+        status: existing.status,
+        confirmationUrl: existing.confirmation_url || "",
+        amount: Number(existing.amount) || Number(amount) || 0,
+        currency: existing.currency || "RUB"
+      };
+    }
+    orderId = randomUUID();
+    idempotenceKey = randomUUID();
+    await orderClient.query(`
+      INSERT INTO payment_orders (id,user_id,product_id,purpose,plan,amount,currency,status,provider,idempotence_key,metadata)
+      VALUES ($1,$2,$3,$4,$5,$6,'RUB','creating','yookassa',$7,$8::jsonb)
+    `, [orderId, String(userId), cleanProductId, cleanPurpose, cleanPlan, Number(amount) || 0, idempotenceKey, JSON.stringify(metadata)]);
+    await orderClient.query("COMMIT");
+  } catch (error) {
+    await orderClient.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    orderClient.release();
+  }
+
+  try {
+    const payment = await requestYooKassa("/payments", {
+      method: "POST",
+      headers: { "Idempotence-Key": idempotenceKey },
+      body: JSON.stringify({
+        amount: { value: paymentAmountString(amount), currency: "RUB" },
+        capture: true,
+        confirmation: { type: "redirect", return_url: `${PUBLIC_BASE_URL}/?payment=return&order=${encodeURIComponent(orderId)}` },
+        description: normalizeText(description, 120),
+        metadata: {
+          order_id: orderId,
+          user_id: String(userId),
+          product_id: cleanProductId || "",
+          purpose: cleanPurpose,
+          plan: cleanPlan,
+          app: "ossetian-market"
+        }
+      })
+    });
+    await pool.query(`
+      UPDATE payment_orders SET status=$2, provider_payment_id=$3, confirmation_url=$4, updated_at=NOW() WHERE id=$1
+    `, [orderId, normalizeText(payment.status, 30) || "pending", normalizeText(payment.id, 100), normalizeText(payment.confirmation?.confirmation_url, 1200)]);
+    return {
+      reused: false,
+      orderId,
+      status: payment.status || "pending",
+      confirmationUrl: payment.confirmation?.confirmation_url || "",
+      amount: Number(amount) || 0,
+      currency: "RUB"
+    };
+  } catch (error) {
+    await pool.query(`UPDATE payment_orders SET status='failed', updated_at=NOW() WHERE id=$1`, [orderId]).catch(() => {});
+    throw error;
+  }
+}
+
 async function activatePaidPromotion(client, order, providerPayment = null) {
   const plan = PROMOTION_PLANS[order.plan];
   if (!plan) throw new Error("Неизвестный тариф продвижения");
@@ -1793,6 +1940,54 @@ async function activatePaidPromotion(client, order, providerPayment = null) {
   return { featuredUntil, plan };
 }
 
+async function activateProfessionalSubscription(client, order, providerPayment = null) {
+  const userResult = await client.query(
+    `SELECT telegram_id, professional_subscription_until FROM users WHERE telegram_id = $1 FOR UPDATE`,
+    [String(order.user_id)]
+  );
+  if (!userResult.rows.length) throw new Error("Пользователь подписки не найден");
+  const currentUntil = userResult.rows[0].professional_subscription_until
+    ? new Date(userResult.rows[0].professional_subscription_until).getTime()
+    : 0;
+  const startAt = Math.max(Date.now(), Number.isFinite(currentUntil) ? currentUntil : 0);
+  const subscriptionUntil = new Date(startAt + PROFESSIONAL_SUBSCRIPTION_DAYS * 86_400_000);
+  await client.query(`
+    UPDATE users
+    SET is_business = TRUE,
+        business_verified = FALSE,
+        listing_limit = ${DEFAULT_LISTING_LIMIT},
+        professional_subscription_started_at = COALESCE(professional_subscription_started_at, NOW()),
+        professional_subscription_until = $2,
+        updated_at = NOW()
+    WHERE telegram_id = $1
+  `, [String(order.user_id), subscriptionUntil]);
+  return { subscriptionUntil };
+}
+
+async function activatePaidListing(client, order) {
+  const feeType = normalizeListingFeeType(order.plan);
+  if (!feeType) throw new Error("Неизвестный тип платной публикации");
+  const productResult = await client.query(
+    `SELECT id, owner_id, status, hidden, moderation_status, category, specifications
+     FROM products WHERE id = $1 FOR UPDATE`,
+    [order.product_id]
+  );
+  if (!productResult.rows.length) throw new Error("Объявление для оплаты не найдено");
+  const product = productResult.rows[0];
+  if (String(product.owner_id) !== String(order.user_id)) throw new Error("Владелец платежа не совпадает с владельцем объявления");
+  if (getListingFeeType(product.category, product.specifications || {}) !== feeType) throw new Error("Тип оплаченного объявления изменился");
+  if (product.hidden || (product.moderation_status || "approved") !== "approved") {
+    throw new Error("Оплаченное объявление ожидает модерацию и пока не может быть опубликовано");
+  }
+  await client.query(`
+    UPDATE products
+    SET status = 'active', published_at = COALESCE(published_at, NOW()),
+        expires_at = NOW() + ($2::int * INTERVAL '1 day'), updated_at = NOW()
+    WHERE id = $1
+  `, [order.product_id, PRODUCT_ARCHIVE_DAYS]);
+  return { productId: order.product_id };
+}
+
 async function finalizePaymentOrder(orderId, providerPayment) {
   const client = await pool.connect();
   try {
@@ -1804,17 +1999,25 @@ async function finalizePaymentOrder(orderId, providerPayment) {
     if (!providerPayment || String(providerPayment.id || "") !== String(order.provider_payment_id || "")) throw new Error("Платёж провайдера не совпадает с заказом");
     if (String(providerPayment.metadata?.order_id || "") !== String(order.id)) throw new Error("Некорректный metadata.order_id");
     if (String(providerPayment.metadata?.user_id || "") !== String(order.user_id)) throw new Error("Некорректный metadata.user_id");
-    if (String(providerPayment.metadata?.product_id || "") !== String(order.product_id)) throw new Error("Некорректный metadata.product_id");
+    if (String(providerPayment.metadata?.product_id || "") !== String(order.product_id || "")) throw new Error("Некорректный metadata.product_id");
+    if (String(providerPayment.metadata?.purpose || order.purpose || "") !== String(order.purpose || "")) throw new Error("Некорректный metadata.purpose");
     const providerAmount = Number(providerPayment.amount?.value);
     if (!Number.isFinite(providerAmount) || Math.abs(providerAmount - Number(order.amount)) > 0.001 || providerPayment.amount?.currency !== order.currency) {
       throw new Error("Сумма или валюта платежа не совпадает с заказом");
     }
     if (providerPayment.status === "succeeded" && providerPayment.paid === true) {
-      const promotion = await activatePaidPromotion(client, order, providerPayment);
-      await client.query(`UPDATE payment_orders SET status='succeeded', paid_at=NOW(), updated_at=NOW(), metadata=$2::jsonb WHERE id=$1`,
-        [order.id, JSON.stringify({ ...(order.metadata || {}), providerStatus: providerPayment.status, featuredUntil: promotion.featuredUntil.toISOString() })]);
+      let activation = {};
+      if (order.purpose === "promotion") activation = await activatePaidPromotion(client, order, providerPayment);
+      else if (order.purpose === "professional_subscription") activation = await activateProfessionalSubscription(client, order, providerPayment);
+      else if (order.purpose === "listing_fee") activation = await activatePaidListing(client, order, providerPayment);
+      else throw new Error("Неизвестное назначение платежа");
+
+      await client.query(
+        `UPDATE payment_orders SET status='succeeded', paid_at=NOW(), updated_at=NOW(), metadata=$2::jsonb WHERE id=$1`,
+        [order.id, JSON.stringify({ ...(order.metadata || {}), providerStatus: providerPayment.status, activation })]
+      );
       await client.query("COMMIT");
-      return { ok: true, status: "succeeded", orderId: order.id, featuredUntil: promotion.featuredUntil };
+      return { ok: true, status: "succeeded", orderId: order.id, ...activation };
     }
     if (providerPayment.status === "canceled") {
       await client.query(`UPDATE payment_orders SET status='canceled', canceled_at=NOW(), updated_at=NOW() WHERE id=$1`, [order.id]);
@@ -2400,19 +2603,15 @@ async function initDb(db = pool) {
   await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_hours TEXT DEFAULT '';`);
   await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_website TEXT DEFAULT '';`);
   await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_verified BOOLEAN DEFAULT FALSE;`);
+  await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS professional_subscription_started_at TIMESTAMPTZ;`);
+  await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS professional_subscription_until TIMESTAMPTZ;`);
+  // v1.19.2: профессиональный статус выдаётся только активной платной подпиской.
+  // Старые бесплатные/ручные бизнес-флаги больше не дают профессиональный статус.
   await db.query(`
     UPDATE users
-    SET listing_limit = ${DEFAULT_LISTING_LIMIT}
-    WHERE listing_limit IS NULL OR listing_limit < 1 OR listing_limit > ${MAX_LISTING_LIMIT};
-  `);
-  // Сохраняем совместимость со старыми платными бизнес-аккаунтами: лимит 50+
-  // считается признаком подтверждённого/подключённого бизнес-тарифа.
-  await db.query(`
-    UPDATE users
-    SET business_verified = TRUE
-    WHERE COALESCE(is_business, FALSE) = TRUE
-      AND COALESCE(listing_limit, ${DEFAULT_LISTING_LIMIT}) >= ${BUSINESS_LISTING_LIMIT}
-      AND COALESCE(business_verified, FALSE) = FALSE;
+    SET is_business = CASE WHEN professional_subscription_until > NOW() THEN TRUE ELSE FALSE END,
+        business_verified = FALSE,
+        listing_limit = ${DEFAULT_LISTING_LIMIT}
   `);
   await db.query(`
     UPDATE users
@@ -2665,6 +2864,21 @@ async function initDb(db = pool) {
   `);
   await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_orders_provider_id ON payment_orders(provider_payment_id) WHERE provider_payment_id <> '';`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_payment_orders_user_created ON payment_orders(user_id, created_at DESC);`);
+  await db.query(`ALTER TABLE payment_orders ALTER COLUMN product_id DROP NOT NULL;`);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS monetization_settings (
+      id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id = TRUE),
+      automobile_paid BOOLEAN DEFAULT FALSE,
+      vacancy_paid BOOLEAN DEFAULT FALSE,
+      apartment_paid BOOLEAN DEFAULT FALSE,
+      house_paid BOOLEAN DEFAULT FALSE,
+      land_paid BOOLEAN DEFAULT FALSE,
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_by TEXT DEFAULT ''
+    );
+  `);
+  await db.query(`INSERT INTO monetization_settings (id) VALUES (TRUE) ON CONFLICT (id) DO NOTHING;`);
 
   await db.query(`
     CREATE TABLE IF NOT EXISTS legal_acceptances (
@@ -2679,25 +2893,7 @@ async function initDb(db = pool) {
   `);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_legal_acceptances_user ON legal_acceptances(user_id, accepted_at DESC);`);
 
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS business_verification_requests (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      legal_name TEXT NOT NULL,
-      inn TEXT NOT NULL,
-      ogrn TEXT DEFAULT '',
-      contact_phone TEXT DEFAULT '',
-      comment TEXT DEFAULT '',
-      status TEXT DEFAULT 'pending',
-      admin_note TEXT DEFAULT '',
-      reviewed_by TEXT DEFAULT '',
-      reviewed_at TIMESTAMPTZ,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
-  await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_business_verification_pending ON business_verification_requests(user_id) WHERE status = 'pending';`);
-  await db.query(`CREATE INDEX IF NOT EXISTS idx_business_verification_status_created ON business_verification_requests(status, created_at DESC);`);
+  // v1.19.2: отдельная верификация бизнеса удалена; старые таблицы в существующей БД не используются.
 
   await db.query(`
     CREATE TABLE IF NOT EXISTS product_engagement_events (
@@ -3254,7 +3450,15 @@ app.get("/api/ready", (req, res) => {
   });
 });
 
-app.get("/api/config", (req, res) => {
+app.get("/api/config", async (req, res) => {
+  let paidListingEnabled = { automobile: false, vacancy: false, apartment: false, house: false, land: false };
+  if (databaseState.ready) {
+    try {
+      paidListingEnabled = await getMonetizationSettings(pool);
+    } catch (error) {
+      console.warn("Monetization config unavailable:", error?.message || error);
+    }
+  }
   res.json({
     ok: true,
     version: APP_VERSION,
@@ -3264,17 +3468,18 @@ app.get("/api/config", (req, res) => {
     featureHighlightPriceRub: FEATURE_HIGHLIGHT_PRICE_RUB,
     featureHighlightDays: FEATURE_HIGHLIGHT_DAYS,
     defaultListingLimit: DEFAULT_LISTING_LIMIT,
-    professionalListingLimit: PROFESSIONAL_LISTING_LIMIT,
-    businessListingLimit: BUSINESS_LISTING_LIMIT,
-    businessListingPriceRub: BUSINESS_LISTING_PRICE_RUB,
-    maxListingLimit: MAX_LISTING_LIMIT,
+    professionalListingLimit: null,
+    professionalSubscriptionPriceRub: PROFESSIONAL_SUBSCRIPTION_PRICE_RUB,
+    professionalSubscriptionDays: PROFESSIONAL_SUBSCRIPTION_DAYS,
     aiListingAssistantEnabled: AI_LISTING_ASSISTANT_ENABLED,
     aiModerationEnabled: AI_MODERATION_ENABLED,
     aiProviderConfigured: Boolean(OPENAI_API_KEY),
     aiDailyBudgetUsd: AI_DAILY_BUDGET_USD,
     paymentEnabled: isYooKassaConfigured(),
     paymentProvider: isYooKassaConfigured() ? "yookassa" : "manual",
-    promotionPlans: Object.values(PROMOTION_PLANS)
+    promotionPlans: Object.values(PROMOTION_PLANS),
+    paidListingEnabled,
+    paidListingPrices: PAID_LISTING_PRICES
   });
 });
 
@@ -3571,6 +3776,7 @@ app.get("/api/me", requireTelegramAuth, syncTelegramUser, async (req, res) => {
       `SELECT telegram_id, username, first_name, last_name, avatar, profile_description,
               city, phone, contact_username, listing_limit, is_business, business_name, business_category,
               business_address, business_hours, business_website, business_verified,
+              professional_subscription_started_at, professional_subscription_until,
               last_seen, created_at, updated_at
        FROM users WHERE telegram_id = $1 LIMIT 1`,
       [String(req.telegramUser.id)]
@@ -3624,19 +3830,10 @@ app.patch("/api/me/profile", requireTelegramAuth, syncTelegramUser, async (req, 
     const phone = normalizeText(req.body?.phone, 30);
     const phoneKey = normalizePhoneKey(phone);
     const contactUsername = normalizeText(req.body?.contactUsername, 40).replace(/^@/, "");
-    const isBusiness = Boolean(req.body?.isBusiness);
     const businessName = normalizeText(req.body?.businessName, 120);
     const businessCategory = normalizeText(req.body?.businessCategory, 120);
     const businessAddress = normalizeText(req.body?.businessAddress, 180);
     const businessHours = normalizeText(req.body?.businessHours, 180);
-    const businessWebsite = normalizeText(req.body?.businessWebsite, 180);
-
-    if (isBusiness && businessName.length < 2) {
-      return res.status(400).json({ ok: false, code: "BUSINESS_NAME_REQUIRED", error: "Для бизнес-профиля укажите название магазина или компании" });
-    }
-    if (businessWebsite && !/^(https?:\/\/)?[a-z0-9а-яё][a-z0-9а-яё.-]+(?:\/[^\s]*)?$/iu.test(businessWebsite)) {
-      return res.status(400).json({ ok: false, code: "INVALID_BUSINESS_WEBSITE", error: "Проверьте адрес сайта" });
-    }
 
     if (contactUsername && !/^[A-Za-z0-9_]{5,32}$/.test(contactUsername)) {
       return res.status(400).json({
@@ -3655,16 +3852,17 @@ app.patch("/api/me/profile", requireTelegramAuth, syncTelegramUser, async (req, 
     const result = await pool.query(
       `UPDATE users
        SET profile_description = $2, city = $3, phone = $4, phone_normalized = $5,
-           contact_username = $6, is_business = $7, business_name = $8,
-           business_category = $9, business_address = $10, business_hours = $11,
-           business_website = $12, updated_at = NOW()
+           contact_username = $6, business_name = $7,
+           business_category = $8, business_address = $9, business_hours = $10,
+           business_website = '', updated_at = NOW()
        WHERE telegram_id = $1
        RETURNING telegram_id, username, first_name, last_name, avatar, profile_description,
                  city, phone, contact_username, listing_limit, is_business, business_name, business_category,
                  business_address, business_hours, business_website, business_verified,
+                 professional_subscription_started_at, professional_subscription_until,
                  last_seen, created_at, updated_at`,
       [String(req.telegramUser.id), description, city, phone, phoneKey, contactUsername,
-       isBusiness, businessName, businessCategory, businessAddress, businessHours, businessWebsite]
+       businessName, businessCategory, businessAddress, businessHours]
     );
 
     const preferredUsername = contactUsername || result.rows[0]?.username || req.telegramUser.username || "";
@@ -3718,53 +3916,8 @@ app.post("/api/legal/core-acceptances", requireTelegramAuth, syncTelegramUser, a
   res.json({ ok: true, version: LEGAL_DOCUMENT_VERSION });
 });
 
-app.get("/api/me/business-verification", requireTelegramAuth, syncTelegramUser, async (req, res) => {
-  try {
-    const result = await pool.query(`
-      SELECT id, legal_name, inn, ogrn, contact_phone, comment, status, admin_note, reviewed_at, created_at, updated_at
-      FROM business_verification_requests
-      WHERE user_id = $1
-      ORDER BY created_at DESC
-      LIMIT 10
-    `, [String(req.telegramUser.id)]);
-    res.setHeader("Cache-Control", "no-store");
-    res.json({ ok: true, requests: result.rows });
-  } catch (error) {
-    console.error("Business verification history error:", error);
-    res.status(500).json({ ok: false, error: "Не удалось загрузить статус верификации" });
-  }
-});
-
-app.post("/api/me/business-verification", requireTelegramAuth, syncTelegramUser, async (req, res) => {
-  try {
-    const userId = String(req.telegramUser.id);
-    const legalName = normalizeText(req.body?.legalName, 180);
-    const inn = normalizeText(req.body?.inn, 12).replace(/\D/g, "");
-    const ogrn = normalizeText(req.body?.ogrn, 15).replace(/\D/g, "");
-    const contactPhone = normalizeText(req.body?.contactPhone, 30);
-    const comment = normalizeText(req.body?.comment, 1000);
-    if (legalName.length < 2 || ![10, 12].includes(inn.length)) {
-      return res.status(400).json({ ok: false, error: "Укажите юридическое название и корректный ИНН (10 или 12 цифр)" });
-    }
-    if (ogrn && ![13, 15].includes(ogrn.length)) {
-      return res.status(400).json({ ok: false, error: "ОГРН должен содержать 13 цифр, ОГРНИП — 15 цифр" });
-    }
-    const userResult = await pool.query(`SELECT is_business, business_name FROM users WHERE telegram_id=$1`, [userId]);
-    if (!userResult.rows[0]?.is_business) {
-      return res.status(409).json({ ok: false, code: "BUSINESS_PROFILE_REQUIRED", error: "Сначала включите профессиональный профиль продавца" });
-    }
-    const result = await pool.query(`
-      INSERT INTO business_verification_requests (id, user_id, legal_name, inn, ogrn, contact_phone, comment)
-      VALUES ($1,$2,$3,$4,$5,$6,$7)
-      RETURNING *
-    `, [randomUUID(), userId, legalName, inn, ogrn, contactPhone, comment]);
-    await recordSecurityEvent(req, "business_verification_requested", "info", { requestId: result.rows[0].id }, userId);
-    res.status(201).json({ ok: true, request: result.rows[0] });
-  } catch (error) {
-    if (error?.code === "23505") return res.status(409).json({ ok: false, error: "У вас уже есть заявка на проверке" });
-    console.error("Business verification create error:", error);
-    res.status(500).json({ ok: false, error: "Не удалось отправить заявку на верификацию" });
-  }
+app.all("/api/me/business-verification", requireTelegramAuth, syncTelegramUser, (req, res) => {
+  res.status(410).json({ ok: false, code: "BUSINESS_VERIFICATION_REMOVED", error: "Верификация бизнеса больше не используется" });
 });
 
 app.get("/api/payments", requireTelegramAuth, syncTelegramUser, async (req, res) => {
@@ -3777,6 +3930,92 @@ app.get("/api/payments", requireTelegramAuth, syncTelegramUser, async (req, res)
     res.json({ ok: true, payments: result.rows });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Не удалось загрузить историю платежей" });
+  }
+});
+
+app.get("/api/me/professional-subscription", requireTelegramAuth, syncTelegramUser, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT professional_subscription_started_at, professional_subscription_until
+      FROM users WHERE telegram_id=$1 LIMIT 1
+    `, [String(req.telegramUser.id)]);
+    const row = result.rows[0] || {};
+    const active = isProfessionalSubscriptionActive(row);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      ok: true,
+      subscription: {
+        active,
+        startedAt: row.professional_subscription_started_at || null,
+        until: row.professional_subscription_until || null,
+        priceRub: PROFESSIONAL_SUBSCRIPTION_PRICE_RUB,
+        days: PROFESSIONAL_SUBSCRIPTION_DAYS,
+        unlimitedListings: true
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Не удалось получить статус подписки" });
+  }
+});
+
+app.post("/api/payments/professional-subscription", requireTelegramAuth, syncTelegramUser, paymentRateLimiter, async (req, res) => {
+  const userId = String(req.telegramUser.id);
+  try {
+    const checkout = await createCheckoutPayment({
+      userId,
+      purpose: "professional_subscription",
+      plan: "professional_monthly",
+      amount: PROFESSIONAL_SUBSCRIPTION_PRICE_RUB,
+      description: `Подписка «Профессиональный продавец» на ${PROFESSIONAL_SUBSCRIPTION_DAYS} дней`,
+      metadata: { subscriptionDays: PROFESSIONAL_SUBSCRIPTION_DAYS },
+      lockKey: `professional_subscription:${userId}`
+    });
+    res.status(checkout.reused ? 200 : 201).json({ ok: true, ...checkout });
+  } catch (error) {
+    console.error("Create professional subscription payment error:", error);
+    const code = error?.code === "PAYMENTS_NOT_CONFIGURED" ? "PAYMENTS_NOT_CONFIGURED" : "PAYMENT_PROVIDER_ERROR";
+    res.status(code === "PAYMENTS_NOT_CONFIGURED" ? 503 : 502).json({ ok: false, code, error: code === "PAYMENTS_NOT_CONFIGURED" ? "Онлайн-оплата пока не настроена" : "Не удалось создать платёж. Попробуйте позже." });
+  }
+});
+
+app.post("/api/payments/listing", requireTelegramAuth, syncTelegramUser, paymentRateLimiter, async (req, res) => {
+  const userId = String(req.telegramUser.id);
+  const productId = normalizeText(req.body?.productId, 64);
+  if (!productId) return res.status(400).json({ ok: false, error: "Не указано объявление" });
+  try {
+    const productResult = await pool.query(`
+      SELECT id, owner_id, name, status, hidden, moderation_status, category, specifications
+      FROM products WHERE id=$1 AND owner_id=$2 AND COALESCE(status,'active') <> 'deleted' LIMIT 1
+    `, [productId, userId]);
+    const product = productResult.rows[0];
+    if (!product) return res.status(404).json({ ok: false, error: "Объявление не найдено" });
+    if (product.hidden || (product.moderation_status || "approved") !== "approved") {
+      return res.status(409).json({ ok: false, code: "LISTING_NOT_APPROVED", error: "Сначала дождитесь одобрения объявления модерацией" });
+    }
+    const requirement = await getListingFeeRequirement(pool, product.category, product.specifications || {});
+    if (!requirement.required) {
+      return res.status(409).json({ ok: false, code: "LISTING_PAYMENT_NOT_REQUIRED", error: "Для этой категории платная публикация сейчас выключена" });
+    }
+    const alreadyPaid = await hasSuccessfulListingPayment(pool, userId, productId, requirement.feeType);
+    if (alreadyPaid) {
+      await pool.query(`UPDATE products SET status='active', published_at=COALESCE(published_at,NOW()), expires_at=NOW()+($2::int*INTERVAL '1 day'), updated_at=NOW() WHERE id=$1`, [productId, PRODUCT_ARCHIVE_DAYS]);
+      return res.json({ ok: true, alreadyPaid: true, productId, status: "succeeded" });
+    }
+    const checkout = await createCheckoutPayment({
+      userId,
+      productId,
+      purpose: "listing_fee",
+      plan: requirement.feeType,
+      amount: requirement.priceRub,
+      description: `Публикация объявления — ${normalizeText(product.name, 80)}`,
+      metadata: { category: product.category, feeType: requirement.feeType },
+      lockKey: `listing_fee:${userId}:${productId}:${requirement.feeType}`
+    });
+    res.status(checkout.reused ? 200 : 201).json({ ok: true, ...checkout, feeType: requirement.feeType });
+  } catch (error) {
+    console.error("Create listing payment error:", error);
+    const code = error?.code === "PAYMENTS_NOT_CONFIGURED" ? "PAYMENTS_NOT_CONFIGURED" : "PAYMENT_PROVIDER_ERROR";
+    res.status(code === "PAYMENTS_NOT_CONFIGURED" ? 503 : 502).json({ ok: false, code, error: code === "PAYMENTS_NOT_CONFIGURED" ? "Онлайн-оплата пока не настроена" : "Не удалось создать платёж. Попробуйте позже." });
   }
 });
 
@@ -3889,7 +4128,7 @@ app.get("/api/payments/:id", requireTelegramAuth, syncTelegramUser, paymentRateL
       }
     }
     res.setHeader("Cache-Control", "no-store");
-    res.json({ ok: true, payment: { id: order.id, productId: order.product_id, plan: order.plan, amount: Number(order.amount) || 0, currency: order.currency, status: order.status, paidAt: order.paid_at, createdAt: order.created_at } });
+    res.json({ ok: true, payment: { id: order.id, productId: order.product_id, purpose: order.purpose, plan: order.plan, amount: Number(order.amount) || 0, currency: order.currency, status: order.status, paidAt: order.paid_at, createdAt: order.created_at } });
   } catch (error) {
     res.status(500).json({ ok: false, error: "Не удалось проверить платёж" });
   }
@@ -3985,6 +4224,7 @@ app.get("/api/users/:id", async (req, res) => {
         `SELECT telegram_id, username, first_name, last_name, avatar, profile_description,
                 city, phone, contact_username, listing_limit, is_business, business_name, business_category,
                 business_address, business_hours, business_website, business_verified,
+                professional_subscription_started_at, professional_subscription_until,
                 last_seen, created_at, updated_at
          FROM users
          WHERE telegram_id = $1
@@ -4082,6 +4322,7 @@ app.get("/api/users/:id/store", async (req, res) => {
       pool.query(
         `SELECT telegram_id, username, first_name, last_name, avatar, profile_description, city, phone, contact_username,
                 listing_limit, is_business, business_name, business_category, business_address, business_hours, business_website, business_verified,
+                professional_subscription_started_at, professional_subscription_until,
                 last_seen, created_at, updated_at FROM users WHERE telegram_id = $1 LIMIT 1`, [userId]),
       getSellerTrust(pool, userId),
       pool.query(
@@ -4654,12 +4895,12 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
     await client.query("BEGIN");
     await recordListingLegalAcceptances(client, req.telegramUser.id, { publicPhoneConsent, publicTelegramConsent });
     const listingQuota = await getListingQuota(client, req.telegramUser.id, { lockUser: true });
-    if (listingQuota.used >= listingQuota.limit) {
+    if (!listingQuota.unlimited && listingQuota.used >= listingQuota.limit) {
       await client.query("ROLLBACK");
       return res.status(409).json({
         ok: false,
         code: "LISTING_LIMIT_REACHED",
-        error: `У вас уже ${listingQuota.used} из ${listingQuota.limit} доступных объявлений. Удалите одно объявление или отметьте его проданным.`,
+        error: `У вас уже ${listingQuota.used} из ${listingQuota.limit} доступных объявлений. Удалите одно объявление или отметьте его проданным либо подключите подписку «Профессиональный продавец».`,
         listingQuota
       });
     }
@@ -4679,7 +4920,12 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
       specifications: cleanSpecifications,
       ownerId: req.telegramUser.id
     }, client);
-    const finalStatus = moderation.blocked ? "draft" : (requestedStatus === "draft" ? "draft" : "active");
+    const listingFeeRequirement = requestedStatus === "active"
+      ? await getListingFeeRequirement(client, cleanCategory, cleanSpecifications)
+      : { required: false, feeType: "", priceRub: 0 };
+    const finalStatus = moderation.blocked
+      ? "draft"
+      : (requestedStatus === "draft" || listingFeeRequirement.required ? "draft" : "active");
     const duplicateFingerprint = buildDuplicateFingerprint({
       name: cleanName,
       priceAmount: cleanPriceAmount,
@@ -4771,7 +5017,10 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
       ok: true,
       product: mapProduct(result.rows[0]),
       listingQuota: updatedListingQuota,
-      moderation: { blocked: moderation.blocked, aiReview: Boolean(moderation.aiReview), aiScore: Number(moderation.aiScore) || 0, reason: moderation.reason }
+      moderation: { blocked: moderation.blocked, aiReview: Boolean(moderation.aiReview), aiScore: Number(moderation.aiScore) || 0, reason: moderation.reason },
+      paymentRequired: (!moderation.blocked && requestedStatus === "active" && listingFeeRequirement.required)
+        ? { type: "listing_fee", feeType: listingFeeRequirement.feeType, priceRub: listingFeeRequirement.priceRub, productId: id }
+        : null
     });
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
@@ -4905,9 +5154,15 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
       specifications: cleanSpecifications,
       ownerId: req.telegramUser.id
     }, client);
+    const listingFeeRequirement = requestedStatus === "active" && (existing.status || "active") !== "active"
+      ? await getListingFeeRequirement(client, cleanCategory, cleanSpecifications)
+      : { required: false, feeType: "", priceRub: 0 };
+    const listingFeePaid = listingFeeRequirement.required
+      ? await hasSuccessfulListingPayment(client, req.telegramUser.id, productId, listingFeeRequirement.feeType)
+      : false;
     const finalStatus = moderation.blocked
       ? "draft"
-      : (["active", "draft"].includes(requestedStatus) ? requestedStatus : "active");
+      : (requestedStatus === "draft" || (listingFeeRequirement.required && !listingFeePaid) ? "draft" : "active");
     const duplicateFingerprint = buildDuplicateFingerprint({
       name: cleanName,
       priceAmount: cleanPriceAmount,
@@ -5012,7 +5267,10 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
         changed: priceChanged || discountMetadataChanged,
         dropped: priceDropped,
         discountEnabled: priceDropped
-      }
+      },
+      paymentRequired: (!moderation.blocked && requestedStatus === "active" && listingFeeRequirement.required && !listingFeePaid)
+        ? { type: "listing_fee", feeType: listingFeeRequirement.feeType, priceRub: listingFeeRequirement.priceRub, productId }
+        : null
     });
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
@@ -6018,7 +6276,7 @@ app.get(
   syncTelegramUser,
   requireAdmin,
   adminRoute(async (req, res) => {
-    const [users, products, hidden, banned, pendingReports, pendingModeration, pendingFeatureRequests, pendingBusinessVerifications, activeAds, adRevenue, promotionRevenue, newUsersToday, newProductsToday] =
+    const [users, products, hidden, banned, pendingReports, pendingModeration, pendingFeatureRequests, activeAds, adRevenue, promotionRevenue, newUsersToday, newProductsToday] =
       await Promise.all([
         pool.query("SELECT COUNT(*)::int AS count FROM users"),
         pool.query(
@@ -6038,9 +6296,6 @@ app.get(
         ),
         pool.query(
           "SELECT COUNT(*)::int AS count FROM product_feature_requests WHERE status = 'pending'"
-        ),
-        pool.query(
-          "SELECT COUNT(*)::int AS count FROM business_verification_requests WHERE status = 'pending'"
         ),
         pool.query(
           "SELECT COUNT(*)::int AS count FROM advertising_campaigns WHERE status = 'active' AND (ends_at IS NULL OR ends_at >= NOW())"
@@ -6071,13 +6326,57 @@ app.get(
       pendingReports: pendingReports.rows[0].count,
       pendingModeration: pendingModeration.rows[0].count,
       pendingFeatureRequests: pendingFeatureRequests.rows[0].count,
-      pendingBusinessVerifications: pendingBusinessVerifications.rows[0].count,
       activeAds: activeAds.rows[0].count,
       adRevenue: Number(adRevenue.rows[0].amount) || 0,
       promotionRevenue: Number(promotionRevenue.rows[0].amount) || 0,
       newUsersToday: newUsersToday.rows[0].count,
       newProductsToday: newProductsToday.rows[0].count
     });
+  })
+);
+
+
+app.get(
+  "/api/admin/monetization",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const settings = await getMonetizationSettings(pool);
+    res.json({
+      ok: true,
+      paidListingEnabled: settings,
+      paidListingPrices: PAID_LISTING_PRICES,
+      professionalSubscription: {
+        alwaysPaid: true,
+        priceRub: PROFESSIONAL_SUBSCRIPTION_PRICE_RUB,
+        days: PROFESSIONAL_SUBSCRIPTION_DAYS,
+        unlimitedListings: true
+      }
+    });
+  })
+);
+
+app.patch(
+  "/api/admin/monetization",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const automobile = req.body?.automobile === true;
+    const vacancy = req.body?.vacancy === true;
+    const apartment = req.body?.apartment === true;
+    const house = req.body?.house === true;
+    const land = req.body?.land === true;
+    const result = await pool.query(`
+      UPDATE monetization_settings
+      SET automobile_paid=$1, vacancy_paid=$2, apartment_paid=$3, house_paid=$4, land_paid=$5,
+          updated_at=NOW(), updated_by=$6
+      WHERE id=TRUE
+      RETURNING automobile_paid, vacancy_paid, apartment_paid, house_paid, land_paid
+    `, [automobile, vacancy, apartment, house, land, String(req.telegramUser.id)]);
+    await addAdminLog(req.telegramUser.id, "monetization_settings_update", "settings", JSON.stringify(result.rows[0] || {}));
+    res.json({ ok: true, paidListingEnabled: await getMonetizationSettings(pool) });
   })
 );
 
@@ -6118,81 +6417,12 @@ app.get(
   })
 );
 
-app.get(
-  "/api/admin/business-verifications",
+app.all(
+  ["/api/admin/business-verifications", "/api/admin/business-verifications/:id"],
   requireTelegramAuth,
   syncTelegramUser,
   requireAdmin,
-  adminRoute(async (req, res) => {
-    const requestedStatus = normalizeText(req.query.status, 20).toLowerCase();
-    const allowed = new Set(["pending", "approved", "rejected"]);
-    const status = allowed.has(requestedStatus) ? requestedStatus : "pending";
-    const result = await pool.query(`
-      SELECT bvr.id, bvr.user_id, bvr.legal_name, bvr.inn, bvr.ogrn, bvr.contact_phone,
-             bvr.comment, bvr.status, bvr.admin_note, bvr.reviewed_by, bvr.reviewed_at,
-             bvr.created_at, bvr.updated_at,
-             u.first_name, u.last_name, u.username, u.business_name, u.business_category,
-             u.business_verified, u.listing_limit
-      FROM business_verification_requests bvr
-      JOIN users u ON u.telegram_id = bvr.user_id
-      WHERE bvr.status = $1
-      ORDER BY bvr.created_at DESC
-      LIMIT 200
-    `, [status]);
-    res.json({ ok: true, requests: result.rows });
-  })
-);
-
-app.patch(
-  "/api/admin/business-verifications/:id",
-  requireTelegramAuth,
-  syncTelegramUser,
-  requireAdmin,
-  adminRoute(async (req, res) => {
-    const requestId = normalizeText(req.params.id, 64);
-    const decision = normalizeText(req.body?.decision, 20).toLowerCase();
-    const adminNote = normalizeText(req.body?.adminNote, 1000);
-    if (!["approve", "reject"].includes(decision)) {
-      return res.status(400).json({ ok: false, error: "Выберите решение по заявке" });
-    }
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      const current = await client.query(`SELECT * FROM business_verification_requests WHERE id=$1 FOR UPDATE`, [requestId]);
-      const verification = current.rows[0];
-      if (!verification) {
-        await client.query("ROLLBACK");
-        return res.status(404).json({ ok: false, error: "Заявка не найдена" });
-      }
-      if (verification.status !== "pending") {
-        await client.query("ROLLBACK");
-        return res.status(409).json({ ok: false, error: "Заявка уже обработана" });
-      }
-      const status = decision === "approve" ? "approved" : "rejected";
-      const updated = await client.query(`
-        UPDATE business_verification_requests
-        SET status=$2, admin_note=$3, reviewed_by=$4, reviewed_at=NOW(), updated_at=NOW()
-        WHERE id=$1 RETURNING *
-      `, [requestId, status, adminNote, String(req.telegramUser.id)]);
-      if (decision === "approve") {
-        await client.query(`
-          UPDATE users
-          SET is_business=TRUE, business_verified=TRUE,
-              listing_limit=GREATEST(COALESCE(listing_limit, 3), 50), updated_at=NOW()
-          WHERE telegram_id=$1
-        `, [verification.user_id]);
-      }
-      await addAdminLog(req.telegramUser.id, `business_verification_${status}`, verification.user_id, `${verification.legal_name}; ИНН ${verification.inn}${adminNote ? `; ${adminNote}` : ""}`, client);
-      await client.query("COMMIT");
-      await recordSecurityEvent(req, `business_verification_${status}`, "info", { requestId, userId: verification.user_id }, verification.user_id);
-      res.json({ ok: true, request: updated.rows[0] });
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    } finally {
-      client.release();
-    }
-  })
+  (req, res) => res.status(410).json({ ok: false, code: "BUSINESS_VERIFICATION_REMOVED", error: "Верификация бизнеса больше не используется" })
 );
 
 app.post(
@@ -6604,48 +6834,12 @@ app.post(
   })
 );
 
-app.patch(
+app.all(
   "/api/admin/users/:id/listing-limit",
   requireTelegramAuth,
   syncTelegramUser,
   requireAdmin,
-  adminRoute(async (req, res) => {
-    const userId = normalizeText(req.params.id, 64);
-    const requestedLimit = Number.parseInt(String(req.body?.limit ?? ""), 10);
-
-    if (!userId || !Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > MAX_LISTING_LIMIT) {
-      return res.status(400).json({
-        ok: false,
-        error: `Лимит должен быть от 1 до ${MAX_LISTING_LIMIT}`
-      });
-    }
-
-    const result = await pool.query(
-      `UPDATE users
-       SET listing_limit = $2,
-           business_verified = CASE
-             WHEN COALESCE(is_business, FALSE) = TRUE THEN ($2 >= ${BUSINESS_LISTING_LIMIT})
-             ELSE COALESCE(business_verified, FALSE)
-           END,
-           updated_at = NOW()
-       WHERE telegram_id = $1
-       RETURNING telegram_id, username, first_name, last_name, listing_limit, is_business, business_verified`,
-      [userId, requestedLimit]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ ok: false, error: "Пользователь не найден" });
-    }
-
-    await addAdminLog(
-      req.telegramUser.id,
-      "set_listing_limit",
-      userId,
-      `Лимит объявлений: ${requestedLimit}`
-    );
-
-    res.json({ ok: true, user: result.rows[0] });
-  })
+  (req, res) => res.status(410).json({ ok: false, code: "CUSTOM_LISTING_LIMIT_REMOVED", error: "Индивидуальные лимиты больше не используются: стандарт — 3 объявления, активная профессиональная подписка — без ограничений" })
 );
 
 app.get(
@@ -7335,6 +7529,7 @@ app.delete(
   })
 );
 
+
 app.get(
   "/api/admin/users",
   requireTelegramAuth,
@@ -7351,16 +7546,10 @@ app.get(
         u.created_at,
         u.banned,
         u.listing_limit,
-        u.is_business,
-        u.business_verified,
-        CASE
-          WHEN COALESCE(u.is_business, FALSE) = TRUE
-               AND (COALESCE(u.business_verified, FALSE) = TRUE OR COALESCE(u.listing_limit, ${DEFAULT_LISTING_LIMIT}) >= ${BUSINESS_LISTING_LIMIT})
-            THEN GREATEST(COALESCE(u.listing_limit, ${DEFAULT_LISTING_LIMIT}), ${BUSINESS_LISTING_LIMIT})
-          WHEN COALESCE(u.is_business, FALSE) = TRUE
-            THEN GREATEST(COALESCE(u.listing_limit, ${DEFAULT_LISTING_LIMIT}), ${PROFESSIONAL_LISTING_LIMIT})
-          ELSE COALESCE(u.listing_limit, ${DEFAULT_LISTING_LIMIT})
-        END AS effective_listing_limit,
+        (u.professional_subscription_until > NOW()) AS is_business,
+        FALSE AS business_verified,
+        u.professional_subscription_until,
+        CASE WHEN u.professional_subscription_until > NOW() THEN NULL ELSE ${DEFAULT_LISTING_LIMIT} END AS effective_listing_limit,
         COUNT(p.id)::int AS products_count,
         COUNT(p.id) FILTER (
           WHERE COALESCE(p.status, 'active') NOT IN ('deleted', 'sold')

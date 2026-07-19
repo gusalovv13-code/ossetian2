@@ -15,8 +15,8 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <link rel="manifest" href="manifest.webmanifest?v=1.19.1" />
-  <link rel="stylesheet" href="style.css?v=1.19.1" />
+  <link rel="manifest" href="manifest.webmanifest?v=1.19.2" />
+  <link rel="stylesheet" href="style.css?v=1.19.2" />
 </head>
 
 <body>
@@ -196,6 +196,7 @@
     <button type="button" data-category="Инструменты" aria-pressed="false">🔧 Инструменты</button>
     <button type="button" data-category="Сад и огород" aria-pressed="false">🌱 Сад и огород</button>
     <button type="button" data-category="Животные" aria-pressed="false">🐄 Животные</button>
+    <button type="button" data-category="Недвижимость" aria-pressed="false">🏢 Недвижимость</button>
     <button type="button" data-category="Вакансии" aria-pressed="false">💼 Вакансии</button>
   </div>
 
@@ -331,8 +332,10 @@
         <option value="Инструменты">Инструменты</option>
         <option value="Сад и огород">Сад и огород</option>
         <option value="Животные">Животные</option>
+        <option value="Недвижимость">Недвижимость</option>
         <option value="Вакансии">Вакансии</option>
       </select>
+      <p id="adPublicationFeeHint" class="muted profile-edit-hint" hidden></p>
 
       <section id="adStructuredFields" class="structured-fields-card" hidden>
         <div class="structured-fields-heading">
@@ -644,8 +647,8 @@
         📊 Аналитика продавца
       </button>
 
-      <button onclick="openBusinessVerificationDialog()" class="profile-row" type="button">
-        ✅ Верификация бизнеса
+      <button id="professionalSubscriptionRow" onclick="buyProfessionalSubscription()" class="profile-row" type="button">
+        🏪 Профессиональный продавец <b id="professionalSubscriptionStatus">Подключить</b>
       </button>
 
       <button onclick="openPaymentHistoryDialog()" class="profile-row" type="button">
@@ -824,7 +827,7 @@
     <div class="admin-tabs" role="tablist" aria-label="Разделы админ-панели">
       <button data-admin-tab="products" class="active" onclick="loadAdminPanel()" type="button">📦 Объявления</button>
       <button data-admin-tab="featureRequests" onclick="loadAdminFeatureRequests()" type="button">★ Выделение</button>
-      <button data-admin-tab="businessVerifications" onclick="loadAdminBusinessVerifications()" type="button">✅ Верификация</button>
+      <button data-admin-tab="monetization" onclick="loadAdminMonetization()" type="button">💰 Монетизация</button>
       <button data-admin-tab="reports" onclick="loadAdminReports()" type="button">⚑ Жалобы</button>
       <button data-admin-tab="moderation" onclick="loadAdminModeration()" type="button">🛡 Автомодерация</button>
       <button data-admin-tab="ads" onclick="loadAdminAds()" type="button">📣 Реклама</button>
@@ -897,20 +900,6 @@
     </form>
   </dialog>
 
-  <dialog id="businessVerificationDialog" class="profile-edit-dialog business-verification-dialog">
-    <form onsubmit="submitBusinessVerification(event)">
-      <div class="dialog-heading"><div><small>Проверенный бизнес</small><h3>Верификация компании</h3></div><button type="button" class="dialog-close" onclick="closeBusinessVerificationDialog()" aria-label="Закрыть">×</button></div>
-      <p id="businessVerificationStatus" class="muted">Загружаем статус…</p>
-      <label for="businessVerificationLegalName">Юридическое название</label><input id="businessVerificationLegalName" maxlength="180" required placeholder="ООО / ИП ...">
-      <label for="businessVerificationInn">ИНН</label><input id="businessVerificationInn" inputmode="numeric" maxlength="12" required placeholder="10 или 12 цифр">
-      <label for="businessVerificationOgrn">ОГРН / ОГРНИП</label><input id="businessVerificationOgrn" inputmode="numeric" maxlength="15" placeholder="Необязательно">
-      <label for="businessVerificationPhone">Контактный телефон</label><input id="businessVerificationPhone" inputmode="tel" maxlength="30" placeholder="+7 ...">
-      <label for="businessVerificationComment">Комментарий</label><textarea id="businessVerificationComment" maxlength="1000" rows="3" placeholder="Дополнительная информация"></textarea>
-      <p class="muted profile-edit-hint">После проверки администратором профиль получит отметку «Проверенный бизнес» и лимит не менее 50 активных объявлений.</p>
-      <div class="dialog-actions"><button type="button" class="outline" onclick="closeBusinessVerificationDialog()">Закрыть</button><button id="submitBusinessVerificationBtn" type="submit" class="primary">Отправить на проверку</button></div>
-    </form>
-  </dialog>
-
   <dialog id="paymentHistoryDialog" class="profile-edit-dialog payment-history-dialog">
     <div class="dialog-heading"><div><small>Монетизация</small><h3>Платежи и продвижение</h3></div><button type="button" class="dialog-close" onclick="closePaymentHistoryDialog()" aria-label="Закрыть">×</button></div>
     <div id="paymentHistoryList" class="payment-history-list"><p class="muted">Загрузка…</p></div>
@@ -944,10 +933,10 @@
       <input id="profileEditUsername" maxlength="33" placeholder="username без @" autocomplete="off" />
       <p class="muted profile-edit-hint">По кнопке «Написать» покупатель сразу перейдёт в этот Telegram-чат.</p>
 
-      <label class="business-profile-toggle" for="profileEditIsBusiness">
-        <input id="profileEditIsBusiness" type="checkbox" onchange="syncBusinessProfileFields()" />
-        <span><b>🏪 Профессиональный продавец</b><small>Добавьте публичную витрину магазина или компании</small></span>
-      </label>
+      <div id="professionalProfileNotice" class="business-profile-toggle">
+        <span aria-hidden="true">🏪</span>
+        <span><b>Профессиональный продавец</b><small>Профиль магазина доступен при активной платной подписке с неограниченным числом объявлений.</small></span>
+      </div>
 
       <div id="businessProfileFields" class="business-profile-fields" hidden>
         <label for="profileEditBusinessName">Название магазина / компании</label>
@@ -962,9 +951,7 @@
         <label for="profileEditBusinessHours">График работы</label>
         <input id="profileEditBusinessHours" maxlength="180" placeholder="Пн–Сб, 09:00–19:00" />
 
-        <label for="profileEditBusinessWebsite">Сайт</label>
-        <input id="profileEditBusinessWebsite" maxlength="180" inputmode="url" placeholder="example.ru" />
-        <p class="muted profile-edit-hint">Профессиональный продавец получает до 10 объявлений бесплатно. Подтверждённый или платный бизнес — до 50 объявлений.</p>
+        <p class="muted profile-edit-hint">Поля магазина отображаются публично, пока подписка «Профессиональный продавец» активна.</p>
       </div>
 
       <div class="dialog-actions">
@@ -989,7 +976,7 @@
     </div>
     <div class="dialog-actions">
       <button type="button" class="outline" onclick="closeListingLimitDialog()">Понятно</button>
-      <button type="button" class="primary" onclick="contactSupportForListingLimit()">Написать в поддержку</button>
+      <button type="button" class="primary" onclick="buyProfessionalSubscription()">Подключить подписку</button>
     </div>
   </dialog>
 
@@ -1066,6 +1053,6 @@
   </div>
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">←</div>
 
-  <script src="script.js?v=1.19.1"></script>
+  <script src="script.js?v=1.19.2"></script>
 </body>
 </html>

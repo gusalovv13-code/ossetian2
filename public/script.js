@@ -102,7 +102,7 @@ function normalizeSellerTrust(value = {}) {
     pendingReports: Math.max(0, Number(value.pendingReports) || 0),
     phoneVerified: Boolean(value.phoneVerified),
     telegramVerified: Boolean(value.telegramVerified),
-    businessVerified: Boolean(value.businessVerified),
+    professionalSeller: Boolean(value.professionalSeller),
     profileComplete: Boolean(value.profileComplete),
     memberSince: Number(value.memberSince) || null,
     accountAgeDays: Math.max(0, Number(value.accountAgeDays) || 0),
@@ -123,7 +123,7 @@ function getSellerTrustMarkup(value, { compact = false } = {}) {
   const badges = [
     trust.telegramVerified ? "✓ Telegram подтверждён" : "",
     trust.phoneVerified ? "✓ Телефон подтверждён" : "",
-    trust.businessVerified ? "✓ Проверенный бизнес" : "",
+    trust.professionalSeller ? "🏪 Проф. продавец" : "",
     trust.soldListings > 0 ? `✓ Продано: ${trust.soldListings}` : "",
     trust.accountAgeDays >= 30 ? "✓ Профиль не новый" : "",
     trust.pendingReports > 0 ? `⚠ На проверке жалоб: ${trust.pendingReports}` : ""
@@ -242,6 +242,17 @@ const PRODUCT_TAXONOMY = Object.freeze({
       "Tecno": ["Camon 30", "Pova 6", "Pova 6 Pro", "Spark 20", "Spark 20 Pro"],
       "Vivo": ["V29", "V30", "V30 Pro", "Y36", "Y100"],
       "Xiaomi": ["Xiaomi 13T", "Xiaomi 13T Pro", "Xiaomi 14", "Xiaomi 14 Ultra", "Redmi 13", "Redmi Note 13", "Redmi Note 13 Pro", "Redmi Note 13 Pro+", "POCO F6", "POCO X6 Pro"]
+    }
+  },
+  "Недвижимость": {
+    types: ["Квартира", "Дом", "Участок"],
+    brandsByType: {
+      "Квартира": ["Продажа"],
+      "Дом": ["Продажа"],
+      "Участок": ["Продажа"]
+    },
+    modelsByBrand: {
+      "Продажа": ["Собственник", "Агентство"]
     }
   },
   "Вакансии": {
@@ -394,11 +405,12 @@ const state = {
     used: 0,
     limit: 3,
     remaining: 3,
+    unlimited: false,
     tier: "standard",
-    professionalLimit: 10,
-    businessLimit: 50,
-    businessPriceRub: 299,
-    maxLimit: 100
+    professionalSubscriptionActive: false,
+    professionalSubscriptionUntil: null,
+    professionalSubscriptionPriceRub: 499,
+    professionalSubscriptionDays: 30
   },
   config: {
     version: "",
@@ -408,10 +420,11 @@ const state = {
     featureHighlightPriceRub: 199,
     featureHighlightDays: 7,
     defaultListingLimit: 3,
-    professionalListingLimit: 10,
-    businessListingLimit: 50,
-    businessListingPriceRub: 299,
-    maxListingLimit: 100,
+    professionalListingLimit: null,
+    professionalSubscriptionPriceRub: 499,
+    professionalSubscriptionDays: 30,
+    paidListingEnabled: { automobile: false, vacancy: false, apartment: false, house: false, land: false },
+    paidListingPrices: { automobile: 199, vacancy: 99, apartment: 299, house: 299, land: 199 },
     aiListingAssistantEnabled: true,
     aiModerationEnabled: true,
     aiProviderConfigured: false,
@@ -521,10 +534,11 @@ async function loadConfig() {
     state.config.featureHighlightPriceRub = Number(data.featureHighlightPriceRub) || 0;
     state.config.featureHighlightDays = Number(data.featureHighlightDays) || 7;
     state.config.defaultListingLimit = Number(data.defaultListingLimit) || 3;
-    state.config.professionalListingLimit = Number(data.professionalListingLimit) || 10;
-    state.config.businessListingLimit = Number(data.businessListingLimit) || 50;
-    state.config.businessListingPriceRub = Number(data.businessListingPriceRub) || 299;
-    state.config.maxListingLimit = Number(data.maxListingLimit) || 100;
+    state.config.professionalListingLimit = null;
+    state.config.professionalSubscriptionPriceRub = Number(data.professionalSubscriptionPriceRub) || 499;
+    state.config.professionalSubscriptionDays = Number(data.professionalSubscriptionDays) || 30;
+    state.config.paidListingEnabled = { ...state.config.paidListingEnabled, ...(data.paidListingEnabled || {}) };
+    state.config.paidListingPrices = { ...state.config.paidListingPrices, ...(data.paidListingPrices || {}) };
     state.config.aiListingAssistantEnabled = data.aiListingAssistantEnabled !== false;
     state.config.aiModerationEnabled = data.aiModerationEnabled !== false;
     state.config.aiProviderConfigured = Boolean(data.aiProviderConfigured);
@@ -678,6 +692,33 @@ function isVacancyCategory(category = "") {
   return String(category || "").trim() === "Вакансии";
 }
 
+function isRealEstateCategory(category = "") {
+  return String(category || "").trim() === "Недвижимость";
+}
+
+function getPaidListingFeeInfo(category = "", itemType = "") {
+  const enabled = state.config.paidListingEnabled || {};
+  const prices = state.config.paidListingPrices || {};
+  const cleanCategory = String(category || "").trim();
+  const cleanType = String(itemType || "").trim().toLowerCase();
+  if (cleanCategory === "Вакансии" && enabled.vacancy) return { key: "vacancy", priceRub: Number(prices.vacancy) || 0 };
+  if (cleanCategory === "Авто" && cleanType !== "автозапчасть" && enabled.automobile) return { key: "automobile", priceRub: Number(prices.automobile) || 0 };
+  if (cleanCategory === "Недвижимость") {
+    if (cleanType.includes("квартир") && enabled.apartment) return { key: "apartment", priceRub: Number(prices.apartment) || 0 };
+    if ((cleanType.includes("дом") || cleanType.includes("коттедж")) && enabled.house) return { key: "house", priceRub: Number(prices.house) || 0 };
+    if (cleanType.includes("участ") && enabled.land) return { key: "land", priceRub: Number(prices.land) || 0 };
+  }
+  return null;
+}
+
+function updateAdPublicationFeeHint(category = "", itemType = "") {
+  const hint = document.getElementById("adPublicationFeeHint");
+  if (!hint) return;
+  const fee = getPaidListingFeeInfo(category, itemType);
+  hint.hidden = !fee;
+  hint.textContent = fee ? `💳 Публикация в этой категории платная: ${fee.priceRub.toLocaleString("ru-RU")} ₽. Оплата потребуется после сохранения объявления.` : "";
+}
+
 function getYearOptionsForCategory(category = "") {
   return isVacancyCategory(category)
     ? ["Полная занятость", "Частичная занятость", "Проектная работа", "Стажировка", "Временная работа"]
@@ -695,6 +736,18 @@ function getStructuredFieldLabels(category = "") {
       brandPlaceholder: "Выберите график",
       modelPlaceholder: "Выберите опыт",
       yearPlaceholder: "Выберите занятость"
+    };
+  }
+  if (isRealEstateCategory(category)) {
+    return {
+      itemType: "Тип недвижимости",
+      brand: "Тип сделки",
+      model: "Продавец",
+      year: "Год постройки",
+      itemPlaceholder: "Выберите объект",
+      brandPlaceholder: "Выберите тип сделки",
+      modelPlaceholder: "Выберите продавца",
+      yearPlaceholder: "Выберите год"
     };
   }
   return {
@@ -716,8 +769,9 @@ function setTextContent(id, value) {
 
 function updateCategorySpecificUI(category = document.getElementById("adCategory")?.value || "") {
   const vacancy = isVacancyCategory(category);
+  const realEstate = isRealEstateCategory(category);
   const labels = getStructuredFieldLabels(category);
-  setTextContent("adTitleLabel", vacancy ? "Название вакансии" : "Название товара");
+  setTextContent("adTitleLabel", vacancy ? "Название вакансии" : realEstate ? "Название объекта" : "Название товара");
   setTextContent("adPriceLabel", vacancy ? "Зарплата в месяц" : "Цена");
   setTextContent("adItemTypeLabel", labels.itemType);
   setTextContent("adBrandLabel", labels.brand);
@@ -728,9 +782,9 @@ function updateCategorySpecificUI(category = document.getElementById("adCategory
   const title = document.getElementById("adTitle");
   const price = document.getElementById("adPrice");
   const description = document.getElementById("adDesc");
-  if (title) title.placeholder = vacancy ? "Например, водитель-экспедитор" : "Введите название";
+  if (title) title.placeholder = vacancy ? "Например, водитель-экспедитор" : realEstate ? "Например, 2-комнатная квартира" : "Введите название";
   if (price) price.placeholder = vacancy ? "Укажите зарплату" : "Укажите цену";
-  if (description) description.placeholder = vacancy ? "Опишите обязанности, требования и условия работы" : "Подробно опишите товар или услугу";
+  if (description) description.placeholder = vacancy ? "Опишите обязанности, требования и условия работы" : realEstate ? "Опишите объект, площадь, состояние и документы" : "Подробно опишите товар или услугу";
   const conditionField = document.getElementById("adConditionField");
   if (conditionField) conditionField.hidden = vacancy;
   document.querySelectorAll("#adNegotiable, #adDelivery").forEach(input => {
@@ -859,7 +913,7 @@ function refreshAdStructuredFields(values = {}) {
   updateCategorySpecificUI(category);
   const labels = getStructuredFieldLabels(category);
   if (root) root.hidden = !enabled;
-  if (!enabled) return;
+  if (!enabled) { updateAdPublicationFeeHint(category, ""); return; }
   setTextContent("adItemTypeLabel", labels.itemType);
   setTextContent("adBrandLabel", labels.brand);
   setTextContent("adModelLabel", labels.model);
@@ -874,6 +928,7 @@ function refreshAdStructuredFields(values = {}) {
     placeholder: labels.itemPlaceholder, selected: currentType
   });
   const selectedType = document.getElementById("adItemType")?.value || currentType;
+  updateAdPublicationFeeHint(category, selectedType);
   setSelectOptions(document.getElementById("adBrand"), getBrandOptions(category, selectedType), {
     placeholder: selectedType ? labels.brandPlaceholder : (isVacancyCategory(category) ? "Сначала выберите сферу" : "Сначала выберите тип"),
     selected: currentBrand,
@@ -1270,17 +1325,27 @@ async function loadFavorites({ force = false } = {}) {
 }
 
 function setListingQuota(quota = {}) {
+  const unlimited = quota.unlimited === true || quota.professionalSubscriptionActive === true;
+  const nextLimit = unlimited ? null : Math.max(1, Number(quota.limit ?? state.listingQuota.limit ?? 3) || 3);
   state.listingQuota = {
     ...state.listingQuota,
     ...quota,
+    unlimited,
     used: Math.max(0, Number(quota.used ?? state.listingQuota.used) || 0),
-    limit: Math.max(1, Number(quota.limit ?? state.listingQuota.limit) || 3)
+    limit: nextLimit
   };
-  state.listingQuota.remaining = Math.max(
-    0,
-    Number(state.listingQuota.limit) - Number(state.listingQuota.used)
-  );
+  state.listingQuota.remaining = unlimited
+    ? null
+    : Math.max(0, Number(nextLimit) - Number(state.listingQuota.used));
+  if (state.telegramUser) {
+    state.telegramUser.isBusiness = unlimited;
+    state.telegramUser.professionalSubscriptionActive = unlimited;
+    if (quota.professionalSubscriptionUntil !== undefined) {
+      state.telegramUser.professionalSubscriptionUntil = quota.professionalSubscriptionUntil;
+    }
+  }
   renderProfileCounters();
+  renderProfessionalSubscriptionStatus();
   return state.listingQuota;
 }
 
@@ -1302,38 +1367,73 @@ function showListingLimitDialog(quota = state.listingQuota) {
   const dialog = document.getElementById("listingLimitDialog");
   const summary = document.getElementById("listingLimitSummary");
   const offer = document.getElementById("listingLimitOffer");
-  const price = Number(normalized.businessPriceRub ?? state.config.businessListingPriceRub) || 299;
-  const professionalLimit = Number(normalized.professionalLimit ?? state.config.professionalListingLimit) || 10;
-  const businessLimit = Number(normalized.businessLimit ?? state.config.businessListingLimit) || 50;
-  const tier = normalized.tier || "standard";
+  const price = Number(normalized.professionalSubscriptionPriceRub ?? state.config.professionalSubscriptionPriceRub) || 499;
+  const days = Number(normalized.professionalSubscriptionDays ?? state.config.professionalSubscriptionDays) || 30;
 
   if (summary) {
-    summary.textContent = `Использовано ${normalized.used} из ${normalized.limit}. Чтобы добавить новое объявление, удалите одно из существующих или отметьте его проданным.`;
+    summary.textContent = `Использовано ${normalized.used} из ${normalized.limit || 3}. Чтобы добавить новое объявление, удалите одно из существующих, отметьте его проданным или подключите профессиональную подписку.`;
   }
   if (offer) {
-    if (tier === "standard") {
-      offer.textContent = `Включите бесплатный профиль «Профессиональный продавец» и получите до ${professionalLimit} объявлений. Для подтверждённого бизнес-аккаунта доступно до ${businessLimit}.`;
-    } else if (tier === "professional") {
-      offer.textContent = `Профессиональному продавцу доступно до ${professionalLimit} объявлений бесплатно. Для подтверждённого или платного бизнес-аккаунта доступно до ${businessLimit} объявлений за ${price.toLocaleString("ru-RU")} ₽.`;
-    } else {
-      offer.textContent = `Нужен больший индивидуальный лимит? Напишите в поддержку — администратор может настроить до ${Number(normalized.maxLimit ?? state.config.maxListingLimit) || 100} объявлений.`;
-    }
+    offer.textContent = `Подписка «Профессиональный продавец» стоит ${price.toLocaleString("ru-RU")} ₽ на ${days} дней и даёт неограниченное количество объявлений. После окончания подписки лимит снова составит 3 объявления.`;
   }
 
   if (!dialog) {
-    alert(`${summary?.textContent || "Достигнут лимит объявлений"}\n\n${offer?.textContent || "Обратитесь в поддержку."}`);
+    alert(`${summary?.textContent || "Достигнут лимит объявлений"}\n\n${offer?.textContent || "Подключите профессиональную подписку."}`);
     return;
   }
   if (typeof dialog.showModal === "function") dialog.showModal();
   else dialog.setAttribute("open", "");
 }
 
-function contactSupportForListingLimit() {
-  const quota = state.listingQuota || {};
-  const businessLimit = Number(quota.businessLimit ?? state.config.businessListingLimit) || 50;
-  const price = Number(quota.businessPriceRub ?? state.config.businessListingPriceRub) || 299;
-  closeListingLimitDialog();
-  openSupportMessage(`Здравствуйте! Хочу подключить тариф для магазина: до ${businessLimit} объявлений за ${price} ₽.`);
+async function buyProfessionalSubscription() {
+  if (!state.telegramUser?.id) {
+    alert("Откройте приложение через Telegram");
+    return;
+  }
+  const price = Number(state.config.professionalSubscriptionPriceRub) || 499;
+  const days = Number(state.config.professionalSubscriptionDays) || 30;
+  const active = Boolean(state.listingQuota.professionalSubscriptionActive || state.telegramUser?.professionalSubscriptionActive);
+  const action = active ? "Продлить" : "Подключить";
+  if (!window.confirm(`${action} подписку «Профессиональный продавец» за ${price.toLocaleString("ru-RU")} ₽ на ${days} дней?\n\nПодписка даёт неограниченное количество объявлений.`)) return;
+  try {
+    const data = await apiRequest("/api/payments/professional-subscription", { method: "POST", body: "{}" });
+    if (data.confirmationUrl) {
+      window.location.href = data.confirmationUrl;
+      return;
+    }
+    alert("Платёж создан. Откройте историю платежей для проверки статуса.");
+  } catch (error) {
+    alert(error.message || "Не удалось создать платёж подписки");
+  }
+}
+
+function renderProfessionalSubscriptionStatus() {
+  const status = document.getElementById("professionalSubscriptionStatus");
+  const active = Boolean(state.listingQuota.professionalSubscriptionActive || state.telegramUser?.professionalSubscriptionActive);
+  const untilRaw = state.listingQuota.professionalSubscriptionUntil || state.telegramUser?.professionalSubscriptionUntil;
+  if (status) {
+    if (active && untilRaw) {
+      const until = new Date(untilRaw);
+      status.textContent = Number.isFinite(until.getTime()) ? `до ${until.toLocaleDateString("ru-RU")}` : "Активна";
+    } else {
+      status.textContent = "Подключить";
+    }
+  }
+}
+
+function maybePromptExpiredProfessionalSubscription() {
+  const untilRaw = state.telegramUser?.professionalSubscriptionUntil || state.listingQuota?.professionalSubscriptionUntil;
+  if (!untilRaw || state.listingQuota.professionalSubscriptionActive) return;
+  const until = new Date(untilRaw).getTime();
+  if (!Number.isFinite(until) || until >= Date.now()) return;
+  const marker = `professional-subscription-expired:${String(untilRaw)}`;
+  if (sessionStorage.getItem(marker)) return;
+  sessionStorage.setItem(marker, "1");
+  window.setTimeout(() => {
+    if (window.confirm("Срок подписки «Профессиональный продавец» истёк. Сейчас действует обычный лимит — 3 объявления. Продлить подписку?")) {
+      buyProfessionalSubscription();
+    }
+  }, 500);
 }
 
 async function openCreatePage() {
@@ -1344,7 +1444,7 @@ async function openCreatePage() {
 
   try {
     const quota = await refreshListingQuota();
-    if (Number(quota.used) >= Number(quota.limit)) {
+    if (!quota.unlimited && Number(quota.used) >= Number(quota.limit)) {
       showListingLimitDialog(quota);
       return;
     }
@@ -2329,7 +2429,7 @@ function getProductCard(product, options = {}) {
     ? '<span class="vacancy-card-badge">💼 Вакансия</span>'
     : "";
   const businessBadge = product.ownerIsBusiness
-    ? `<span class="business-card-badge">🏪 ${product.ownerBusinessVerified ? "Проверенный бизнес" : "Проф. продавец"}</span>`
+    ? `<span class="business-card-badge">🏪 Проф. продавец</span>`
     : "";
   const status = product.status || "active";
   const isSoldHistory = options.ownerActions && status === "sold";
@@ -3290,7 +3390,7 @@ function renderProductDetails(product) {
       product.district ? `Район: ${product.district}` : "",
       product.priceDropped ? `Скидка${product.priceDropPercent ? ` −${Number(product.priceDropPercent)}%` : ""}` : "",
       product.isFeatured ? "Платное выделение" : "",
-      product.ownerIsBusiness ? (product.ownerBusinessVerified ? "✓ Проверенный бизнес" : "🏪 Профессиональный продавец") : "",
+      product.ownerIsBusiness ? "🏪 Профессиональный продавец" : "",
       product.expiresAt ? `Активно до ${formatProductDate(product.expiresAt)}` : ""
     ].filter(Boolean);
 
@@ -3324,7 +3424,7 @@ function renderProductDetails(product) {
       <span class="seller-profile-link-icon" aria-hidden="true">${product.ownerIsBusiness ? "🏪" : "👤"}</span>
       <span class="seller-profile-link-copy">
         <b>${escapeHTML(sellerName)}</b>
-        <small>${product.ownerIsBusiness ? `${product.ownerBusinessVerified ? "✓ Проверенный бизнес" : "Профессиональный продавец"} · ` : ""}${sellerUsername ? `@${escapeHTML(sellerUsername)} · ` : ""}<u>Открыть профиль</u></small>
+        <small>${product.ownerIsBusiness ? `Профессиональный продавец · ` : ""}${sellerUsername ? `@${escapeHTML(sellerUsername)} · ` : ""}<u>Открыть профиль</u></small>
       </span>
       <span class="seller-profile-link-arrow" aria-hidden="true">›</span>
     `;
@@ -4403,6 +4503,30 @@ async function publishAd(status = "active") {
       } else {
         state.favoriteProducts.splice(favoriteIndex, 1);
         state.favorites = state.favorites.filter(id => id !== savedProduct.id);
+      }
+    }
+
+    if (data.paymentRequired?.type === "listing_fee") {
+      clearCreateForm();
+      state.myProductsOwnerId = String(state.telegramUser.id);
+      state.myProductsLoaded = true;
+      state.myProductsLoadedAt = Date.now();
+      try {
+        const checkout = await apiRequest("/api/payments/listing", {
+          method: "POST",
+          body: JSON.stringify({ productId: data.paymentRequired.productId || savedProduct.id })
+        });
+        if (checkout.confirmationUrl) {
+          window.location.href = checkout.confirmationUrl;
+          return;
+        }
+        alert(`Для публикации требуется оплата ${Number(data.paymentRequired.priceRub || 0).toLocaleString("ru-RU")} ₽. Платёж создан.`);
+        showPage("myAds");
+        return;
+      } catch (paymentError) {
+        showPage("myAds");
+        alert(`Объявление сохранено как черновик, но оплату создать не удалось: ${paymentError.message}`);
+        return;
       }
     }
 
@@ -5528,14 +5652,14 @@ async function initTelegramUser() {
       city: user.city || "",
       phone: user.phone || "",
       photoUrl: user.photoUrl || user.avatar || "",
-      listingLimit: Number(user.listingLimit) || 3,
+      listingLimit: user.listingLimit == null ? null : (Number(user.listingLimit) || 3),
       isBusiness: Boolean(user.isBusiness),
+      professionalSubscriptionActive: Boolean(user.professionalSubscriptionActive || user.isBusiness),
+      professionalSubscriptionUntil: user.professionalSubscriptionUntil || null,
       businessName: user.businessName || "",
       businessCategory: user.businessCategory || "",
       businessAddress: user.businessAddress || "",
-      businessHours: user.businessHours || "",
-      businessWebsite: user.businessWebsite || "",
-      businessVerified: Boolean(user.businessVerified)
+      businessHours: user.businessHours || ""
     };
     state.myProductsOwnerId = String(user.id || "");
     state.myProductsLoadedAt = 0;
@@ -5663,7 +5787,7 @@ function renderOwnProfileDetails() {
   if (businessBadge) {
     businessBadge.hidden = !user.isBusiness;
     businessBadge.textContent = user.isBusiness
-      ? `${user.businessVerified ? "✓" : "🏪"} ${user.businessName || "Профессиональный продавец"}${user.businessVerified ? " · проверен" : ""}`
+      ? `🏪 ${user.businessName || "Профессиональный продавец"}`
       : "";
   }
 
@@ -5695,24 +5819,22 @@ function openProfileEditor() {
   document.getElementById("profileEditCity").value = state.telegramUser.city || "";
   document.getElementById("profileEditPhone").value = state.telegramUser.phone || "";
   document.getElementById("profileEditUsername").value = state.telegramUser.contactUsername || state.telegramUser.username || "";
-  document.getElementById("profileEditIsBusiness").checked = Boolean(state.telegramUser.isBusiness);
   document.getElementById("profileEditBusinessName").value = state.telegramUser.businessName || "";
   document.getElementById("profileEditBusinessCategory").value = state.telegramUser.businessCategory || "";
   document.getElementById("profileEditBusinessAddress").value = state.telegramUser.businessAddress || "";
   document.getElementById("profileEditBusinessHours").value = state.telegramUser.businessHours || "";
-  document.getElementById("profileEditBusinessWebsite").value = state.telegramUser.businessWebsite || "";
   syncBusinessProfileFields();
   if (typeof dialog.showModal === "function") dialog.showModal();
   else dialog.setAttribute("open", "");
 }
 
 function syncBusinessProfileFields() {
-  const checkbox = document.getElementById("profileEditIsBusiness");
   const fields = document.getElementById("businessProfileFields");
   if (!fields) return;
-  fields.hidden = !checkbox?.checked;
+  const active = Boolean(state.listingQuota.professionalSubscriptionActive || state.telegramUser?.professionalSubscriptionActive);
+  fields.hidden = !active;
   const businessName = document.getElementById("profileEditBusinessName");
-  if (businessName) businessName.required = Boolean(checkbox?.checked);
+  if (businessName) businessName.required = active;
 }
 
 function closeProfileEditor() {
@@ -5732,12 +5854,10 @@ async function saveProfile(event) {
     city: document.getElementById("profileEditCity")?.value.trim() || "",
     phone: document.getElementById("profileEditPhone")?.value.trim() || "",
     contactUsername: document.getElementById("profileEditUsername")?.value.trim().replace(/^@/, "") || "",
-    isBusiness: Boolean(document.getElementById("profileEditIsBusiness")?.checked),
     businessName: document.getElementById("profileEditBusinessName")?.value.trim() || "",
     businessCategory: document.getElementById("profileEditBusinessCategory")?.value.trim() || "",
     businessAddress: document.getElementById("profileEditBusinessAddress")?.value.trim() || "",
-    businessHours: document.getElementById("profileEditBusinessHours")?.value.trim() || "",
-    businessWebsite: document.getElementById("profileEditBusinessWebsite")?.value.trim() || ""
+    businessHours: document.getElementById("profileEditBusinessHours")?.value.trim() || ""
   };
 
   if (button) {
@@ -5845,45 +5965,6 @@ async function submitCoreLegalAcceptances(event) {
   } catch(error){ alert(error.message || "Не удалось сохранить согласия"); }
 }
 
-async function openBusinessVerificationDialog() {
-  const dialog = document.getElementById("businessVerificationDialog");
-  const status = document.getElementById("businessVerificationStatus");
-  if (!dialog) return;
-  if (status) status.textContent = "Загружаем статус…";
-  if (dialog.showModal) dialog.showModal(); else dialog.setAttribute("open", "");
-  try {
-    const data = await apiRequest("/api/me/business-verification", { cache: "no-store" });
-    const latest = data.requests?.[0];
-    if (status) status.textContent = latest
-      ? `Последняя заявка: ${latest.status === "approved" ? "✅ подтверждена" : latest.status === "rejected" ? "❌ отклонена" : "⏳ на проверке"}${latest.admin_note ? ` · ${latest.admin_note}` : ""}`
-      : "Заявок пока нет.";
-  } catch (error) { if (status) status.textContent = error.message; }
-}
-
-function closeBusinessVerificationDialog() {
-  const dialog = document.getElementById("businessVerificationDialog");
-  if (dialog?.close) dialog.close(); else dialog?.removeAttribute("open");
-}
-
-async function submitBusinessVerification(event) {
-  event.preventDefault();
-  const button = document.getElementById("submitBusinessVerificationBtn");
-  if (button) button.disabled = true;
-  try {
-    await apiRequest("/api/me/business-verification", { method: "POST", body: JSON.stringify({
-      legalName: document.getElementById("businessVerificationLegalName")?.value.trim() || "",
-      inn: document.getElementById("businessVerificationInn")?.value.trim() || "",
-      ogrn: document.getElementById("businessVerificationOgrn")?.value.trim() || "",
-      contactPhone: document.getElementById("businessVerificationPhone")?.value.trim() || "",
-      comment: document.getElementById("businessVerificationComment")?.value.trim() || ""
-    }) });
-    alert("✅ Заявка на верификацию отправлена.");
-    const status = document.getElementById("businessVerificationStatus");
-    if (status) status.textContent = "Последняя заявка: ⏳ на проверке";
-  } catch (error) { alert(error.message || "Не удалось отправить заявку"); }
-  finally { if (button) button.disabled = false; }
-}
-
 async function openPaymentHistoryDialog() {
   const dialog = document.getElementById("paymentHistoryDialog");
   const list = document.getElementById("paymentHistoryList");
@@ -5910,8 +5991,19 @@ async function handlePaymentReturn() {
   try {
     if (orderId) {
       const data = await apiRequest(`/api/payments/${encodeURIComponent(orderId)}`, { cache: "no-store" });
-      if (data.payment?.status === "succeeded") alert("✅ Оплата прошла. Продвижение объявления активировано.");
-      else if (data.payment?.status === "canceled") alert("Платёж отменён.");
+      const payment = data.payment || {};
+      if (payment.status === "succeeded") {
+        if (payment.purpose === "professional_subscription") {
+          await refreshListingQuota().catch(() => {});
+          alert("✅ Подписка «Профессиональный продавец» активирована. Теперь количество объявлений не ограничено.");
+        } else if (payment.purpose === "listing_fee") {
+          state.myProductsLoadedAt = 0;
+          await loadMyProducts({ force: true }).catch(() => {});
+          alert("✅ Оплата прошла. Объявление опубликовано.");
+        } else {
+          alert("✅ Оплата прошла. Продвижение объявления активировано.");
+        }
+      } else if (payment.status === "canceled") alert("Платёж отменён.");
       else alert("Платёж обрабатывается. Статус можно проверить в истории платежей.");
     }
   } catch (error) { console.error("Payment return error:", error); }
@@ -5941,6 +6033,7 @@ async function initApp() {
     loadFavoriteIds()
   ]);
   await handlePaymentReturn();
+  maybePromptExpiredProfessionalSubscription();
 
   renderCurrentPage();
   updateBottomNav();
@@ -6088,7 +6181,7 @@ async function openSellerProfile(userId) {
     if (sellerBusinessBadge) {
       sellerBusinessBadge.hidden = !user.isBusiness;
       sellerBusinessBadge.textContent = user.isBusiness
-        ? `${user.businessVerified ? "✓ Проверенный бизнес" : "🏪 Профессиональный продавец"}`
+        ? `🏪 Профессиональный продавец`
         : "";
     }
 
@@ -6097,7 +6190,6 @@ async function openSellerProfile(userId) {
       if (user.businessCategory) businessRows.push(`<span><small>Сфера</small><b>${escapeHTML(user.businessCategory)}</b></span>`);
       if (user.businessAddress) businessRows.push(`<span><small>Адрес</small><b>📍 ${escapeHTML(user.businessAddress)}</b></span>`);
       if (user.businessHours) businessRows.push(`<span><small>График</small><b>🕒 ${escapeHTML(user.businessHours)}</b></span>`);
-      if (user.businessWebsite) businessRows.push(`<span><small>Сайт</small><b>🌐 ${escapeHTML(user.businessWebsite)}</b></span>`);
       sellerBusinessBlock.hidden = !user.isBusiness || businessRows.length === 0;
       sellerBusinessBlock.innerHTML = businessRows.join("");
     }
@@ -6433,8 +6525,6 @@ function renderAdminStats(stats) {
     <button type="button" class="admin-stat-card admin-backup-card" onclick="createAdminBackup(this)"><span>💾</span><div><b>Backup</b><small>Резервная копия БД</small></div><em>Создать вручную</em></button>
   `;
 
-  const verificationTab = document.querySelector('[data-admin-tab="businessVerifications"]');
-  if (verificationTab) { const count=Number(stats.pendingBusinessVerifications)||0; verificationTab.dataset.count=String(count); verificationTab.classList.toggle("has-count", count>0); }
 
   const featureTab = document.querySelector('[data-admin-tab="featureRequests"]');
   if (featureTab) {
@@ -6696,22 +6786,17 @@ function renderAdminUsers(users = []) {
               <div class="admin-record-title-row">
                 <b>${escapeHTML(displayName)}</b>
                 ${user.banned ? '<span class="admin-badge danger">Заблокирован</span>' : ''}
-                ${user.is_business ? `<span class="admin-badge">${user.business_verified ? "✓ Бизнес 50" : "🏪 Проф. 10"}</span>` : ''}
+                ${user.is_business ? `<span class="admin-badge">🏪 Проф. подписка</span>` : ''}
               </div>
               <p>${escapeHTML(fullName || "Имя не указано")}</p>
               <div class="admin-record-meta">
                 <span>ID: ${escapeHTML(user.telegram_id)}</span>
                 <span>📦 ${Number(user.products_count) || 0}</span>
-                <span>Места: ${Number(user.listing_slots_used) || 0}/${Number(user.effective_listing_limit) || Number(user.listing_limit) || 3}</span>
+                <span>Места: ${Number(user.listing_slots_used) || 0}/${user.is_business ? "∞" : 3}</span>
                 <span>${escapeHTML(formatAdminDate(user.last_seen))}</span>
               </div>
             </div>
             <div class="admin-user-actions">
-              <label class="admin-limit-control">
-                <span>Лимит</span>
-                <input id="listingLimit-${escapeHTML(user.telegram_id)}" type="number" min="1" max="100" value="${Number(user.listing_limit) || 3}">
-                <button class="admin-action-button" type="button" onclick="updateAdminListingLimit('${escapeHTML(user.telegram_id)}', this)">Сохранить</button>
-              </label>
               <button
                 class="admin-action-button ${user.banned ? "restore" : "danger"}"
                 type="button"
@@ -6865,28 +6950,67 @@ async function moderateAdminReport(id, decision, button) {
 
 
 
-function renderAdminBusinessVerifications(requests = []) {
+function renderAdminMonetization(data = {}) {
   const root = document.getElementById("adminContent");
   if (!root) return;
-  root.innerHTML = `<div class="admin-section-heading"><div><b>Верификация бизнеса</b><small>${requests.length} заявок на проверке</small></div></div><div class="admin-list">${requests.length ? requests.map(item => `
-    <article class="admin-record"><div class="admin-record-main"><div class="admin-record-title-row"><b>${escapeHTML(item.legal_name)}</b><span class="admin-badge warning">На проверке</span></div>
-    <p>ИНН: <b>${escapeHTML(item.inn)}</b>${item.ogrn ? ` · ОГРН: ${escapeHTML(item.ogrn)}` : ""}</p>
-    <small>${escapeHTML(item.business_name || item.business_category || "")}${item.contact_phone ? ` · ${escapeHTML(item.contact_phone)}` : ""}</small>
-    ${item.comment ? `<p>${escapeHTML(item.comment)}</p>` : ""}<input id="verificationNote-${escapeHTML(item.id)}" maxlength="1000" placeholder="Комментарий администратора">
-    <div class="admin-report-actions"><button class="admin-action-button restore" type="button" onclick="reviewBusinessVerification('${escapeHTML(item.id)}','approve',this)">✅ Подтвердить</button><button class="admin-action-button danger" type="button" onclick="reviewBusinessVerification('${escapeHTML(item.id)}','reject',this)">Отклонить</button></div></div></article>`).join("") : '<div class="admin-state"><span>✅</span><b>Очередь пуста</b><small>Новых заявок на верификацию нет.</small></div>'}</div>`;
+  const enabled = data.paidListingEnabled || {};
+  const prices = data.paidListingPrices || {};
+  const subscription = data.professionalSubscription || {};
+  const rows = [
+    ["automobile", "🚗 Продажа автомобиля", prices.automobile],
+    ["vacancy", "💼 Публикация вакансии", prices.vacancy],
+    ["apartment", "🏢 Продажа квартиры", prices.apartment],
+    ["house", "🏠 Продажа дома", prices.house],
+    ["land", "🌳 Продажа участка", prices.land]
+  ];
+  root.innerHTML = `
+    <section class="admin-config-card">
+      <div class="admin-section-heading"><div><b>Платные публикации</b><small>Можно включать категории постепенно, когда аудитория уже набрана.</small></div></div>
+      <div class="moderation-switches monetization-switches">
+        ${rows.map(([key, label, price]) => `<label><input id="monetization-${key}" type="checkbox" ${enabled[key] ? "checked" : ""}> <span>${label}<small>${Number(price || 0).toLocaleString("ru-RU")} ₽ за публикацию</small></span></label>`).join("")}
+      </div>
+      <p class="muted">Когда переключатель выключен, публикация в этой категории бесплатна. Уже опубликованные объявления не блокируются после включения оплаты.</p>
+      <div class="admin-report-actions"><button class="admin-action-button restore" type="button" onclick="saveAdminMonetization(this)">Сохранить настройки</button></div>
+    </section>
+    <section class="admin-config-card">
+      <div class="admin-section-heading"><div><b>🏪 Профессиональный продавец</b><small>Эта подписка всегда платная и не отключается переключателем.</small></div></div>
+      <p><b>${Number(subscription.priceRub || state.config.professionalSubscriptionPriceRub || 0).toLocaleString("ru-RU")} ₽</b> на ${Number(subscription.days || state.config.professionalSubscriptionDays || 30)} дней · <b>неограниченное количество объявлений</b>.</p>
+      <p class="muted">После окончания подписки пользователь возвращается к стандартному лимиту — 3 объявления. Существующие объявления не удаляются, но новые нельзя добавить, пока количество не станет ниже лимита или подписка не будет продлена.</p>
+    </section>
+  `;
 }
 
-async function loadAdminBusinessVerifications() {
+async function loadAdminMonetization() {
   const requestVersion = ++adminState.requestVersion;
-  setAdminActiveTab("businessVerifications"); setAdminLoading("Загружаем заявки на верификацию…");
-  try { const [stats,data]=await Promise.all([apiRequest("/api/admin/stats"),apiRequest("/api/admin/business-verifications?status=pending")]); if(requestVersion!==adminState.requestVersion)return; renderAdminStats(stats); renderAdminBusinessVerifications(data.requests||[]); }
-  catch(error){ if(requestVersion!==adminState.requestVersion)return; setAdminError(error); }
+  setAdminActiveTab("monetization");
+  setAdminLoading("Загружаем настройки монетизации…");
+  try {
+    const [stats, data] = await Promise.all([apiRequest("/api/admin/stats"), apiRequest("/api/admin/monetization")]);
+    if (requestVersion !== adminState.requestVersion) return;
+    renderAdminStats(stats);
+    renderAdminMonetization(data);
+  } catch (error) {
+    if (requestVersion !== adminState.requestVersion) return;
+    setAdminError(error);
+  }
 }
 
-async function reviewBusinessVerification(id, decision, button) {
-  const adminNote=document.getElementById(`verificationNote-${id}`)?.value.trim()||""; if(button)button.disabled=true;
-  try { await apiRequest(`/api/admin/business-verifications/${encodeURIComponent(id)}`,{method:"PATCH",body:JSON.stringify({decision,adminNote})}); await loadAdminBusinessVerifications(); }
-  catch(error){alert(error.message); if(button)button.disabled=false;}
+async function saveAdminMonetization(button) {
+  if (button) { button.disabled = true; button.textContent = "Сохраняем…"; }
+  try {
+    const payload = {};
+    for (const key of ["automobile", "vacancy", "apartment", "house", "land"]) {
+      payload[key] = document.getElementById(`monetization-${key}`)?.checked === true;
+    }
+    await apiRequest("/api/admin/monetization", { method: "PATCH", body: JSON.stringify(payload) });
+    state.config.paidListingEnabled = { ...state.config.paidListingEnabled, ...payload };
+    alert("✅ Настройки платных публикаций сохранены");
+    await loadAdminMonetization();
+  } catch (error) {
+    alert(error.message || "Не удалось сохранить настройки");
+  } finally {
+    if (button) { button.disabled = false; button.textContent = "Сохранить настройки"; }
+  }
 }
 
 async function createAdminBackup(button) {
@@ -7588,37 +7712,6 @@ async function toggleAdminUserBan(id, button) {
   }
 }
 
-async function updateAdminListingLimit(id, button) {
-  if (!id || button?.disabled) return;
-  const input = document.getElementById(`listingLimit-${id}`);
-  const limit = Number.parseInt(String(input?.value || ""), 10);
-
-  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
-    alert("Укажите лимит от 1 до 100 объявлений");
-    return;
-  }
-
-  if (button) {
-    button.disabled = true;
-    button.textContent = "Сохраняем…";
-  }
-
-  try {
-    await apiRequest(`/api/admin/users/${encodeURIComponent(id)}/listing-limit`, {
-      method: "PATCH",
-      body: JSON.stringify({ limit })
-    });
-    showToast(`Лимит изменён: ${limit}`);
-    await loadAdminUsers();
-  } catch (error) {
-    console.error("Update listing limit error:", error);
-    alert(error.message || "Не удалось изменить лимит");
-    if (button) {
-      button.disabled = false;
-      button.textContent = "Сохранить";
-    }
-  }
-}
 
 function searchAdmin() {
   window.clearTimeout(adminState.searchTimer);
@@ -7736,6 +7829,7 @@ function reloadCurrentAdminTab() {
   const loaders = {
     products: loadAdminPanel,
     featureRequests: loadAdminFeatureRequests,
+    monetization: loadAdminMonetization,
     reports: loadAdminReports,
     moderation: loadAdminModeration,
     ads: loadAdminAds,
