@@ -14,7 +14,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.17.0";
+const APP_VERSION = "1.18.0";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -93,10 +93,22 @@ const DELETED_PRODUCT_RETENTION_DAYS = Math.max(1, Math.min(3650, Number(process
 const FEATURE_HIGHLIGHT_PRICE_RUB = Math.max(0, Number(process.env.FEATURE_HIGHLIGHT_PRICE_RUB) || 199);
 const FEATURE_HIGHLIGHT_DAYS = Math.max(1, Math.min(90, Number(process.env.FEATURE_HIGHLIGHT_DAYS) || 7));
 const DEFAULT_LISTING_LIMIT = 3;
+const PROFESSIONAL_LISTING_LIMIT = 10;
 const BUSINESS_LISTING_LIMIT = 50;
 const MAX_LISTING_LIMIT = 100;
 const BUSINESS_LISTING_PRICE_RUB = Math.max(0, Number(process.env.BUSINESS_LISTING_PRICE_RUB) || 299);
 const FEATURE_COLOR = "green";
+const OPENAI_API_KEY = String(process.env.OPENAI_API_KEY || "").trim();
+const OPENAI_MODEL = String(process.env.OPENAI_MODEL || "gpt-5.6").trim();
+const AI_MODERATION_ENABLED = String(process.env.AI_MODERATION_ENABLED || "true").toLowerCase() !== "false";
+const AI_LISTING_ASSISTANT_ENABLED = String(process.env.AI_LISTING_ASSISTANT_ENABLED || "true").toLowerCase() !== "false";
+const AI_TIMEOUT_MS = Math.max(5_000, Math.min(60_000, Number(process.env.AI_TIMEOUT_MS) || 20_000));
+const AI_RATE_LIMIT_MAX = Math.max(2, Math.min(100, Number(process.env.AI_RATE_LIMIT_MAX) || 20));
+const PROMOTION_PLANS = Object.freeze({
+  boost: { id: "boost", label: "Поднять", days: Math.max(1, Number(process.env.PROMO_BOOST_DAYS) || 1), priceRub: Math.max(0, Number(process.env.PROMO_BOOST_PRICE_RUB) || 99), priority: 1 },
+  vip: { id: "vip", label: "VIP", days: Math.max(1, Number(process.env.PROMO_VIP_DAYS) || 7), priceRub: Math.max(0, Number(process.env.PROMO_VIP_PRICE_RUB) || 299), priority: 2 },
+  premium: { id: "premium", label: "Премиум", days: Math.max(1, Number(process.env.PROMO_PREMIUM_DAYS) || 14), priceRub: Math.max(0, Number(process.env.PROMO_PREMIUM_PRICE_RUB) || 599), priority: 3 }
+});
 const preparedShareMessageCache = new Map();
 const searchCapabilities = { pgTrgm: false };
 const RATE_LIMIT_WINDOW_MS = Math.max(10_000, Math.min(10 * 60_000, Number(process.env.RATE_LIMIT_WINDOW_MS) || 60_000));
@@ -210,10 +222,14 @@ const requireTelegramAuth = createTelegramAuthMiddleware({
 
 app.disable("x-powered-by");
 app.use((req, res, next) => {
+  const requestId = String(req.headers["x-request-id"] || randomUUID()).slice(0, 80);
+  req.requestId = requestId;
+  res.setHeader("X-Request-Id", requestId);
   res.setHeader("X-Ossetian-Market-Version", APP_VERSION);
   res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-site");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+  res.setHeader("Permissions-Policy", "camera=(self), microphone=(), geolocation=(), payment=()");
   res.setHeader("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
   res.setHeader(
     "Content-Security-Policy",
@@ -260,11 +276,31 @@ function createMemoryRateLimiter({ prefix, max, windowMs = RATE_LIMIT_WINDOW_MS 
 const apiRateLimiter = createMemoryRateLimiter({ prefix: "api", max: API_RATE_LIMIT_MAX });
 const mutationRateLimiter = createMemoryRateLimiter({ prefix: "mutation", max: MUTATION_RATE_LIMIT_MAX });
 const searchRateLimiter = createMemoryRateLimiter({ prefix: "search", max: SEARCH_RATE_LIMIT_MAX });
+const aiRateLimiter = createMemoryRateLimiter({ prefix: "ai", max: AI_RATE_LIMIT_MAX, windowMs: 60_000 });
 
 app.use(compression({ threshold: 1024 }));
 app.use("/api", apiRateLimiter);
 app.use("/api", (req, res, next) => {
   if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) return mutationRateLimiter(req, res, next);
+  return next();
+});
+app.use("/api", (req, res, next) => {
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) return next();
+  const origin = String(req.headers.origin || "").trim();
+  if (!origin) return next();
+  const allowedOrigins = new Set();
+  try {
+    const host = String(req.headers.host || "").trim();
+    if (host) {
+      allowedOrigins.add(`https://${host}`);
+      allowedOrigins.add(`http://${host}`);
+    }
+    if (PUBLIC_BASE_URL) allowedOrigins.add(new URL(PUBLIC_BASE_URL).origin);
+  } catch {}
+  if (!allowedOrigins.has(origin)) {
+    recordSecurityEvent(req, "origin_rejected", "warning", { origin }).catch(() => {});
+    return res.status(403).json({ ok: false, code: "ORIGIN_REJECTED", error: "Запрос отклонён политикой безопасности" });
+  }
   return next();
 });
 app.use((req, res, next) => {
@@ -356,6 +392,8 @@ function mapProduct(row) {
     featuredUntil: row.featured_until ? new Date(row.featured_until).getTime() : null,
     featuredColor: FEATURE_COLOR,
     featuredPaid: Boolean(row.featured_paid),
+    promotionPlan: row.promotion_plan || "",
+    promotionPriority: Number(row.promotion_priority) || 0,
     featureRequestPending: Number(row.pending_feature_requests) > 0,
     createdAt: row.created_at ? new Date(row.created_at).getTime() : null,
     updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : null
@@ -379,7 +417,7 @@ const PRODUCT_SUMMARY_COLUMNS = `
   p.owner_username,
   COALESCE((SELECT u.is_business FROM users u WHERE u.telegram_id = p.owner_id LIMIT 1), FALSE) AS owner_is_business,
   COALESCE((SELECT u.business_name FROM users u WHERE u.telegram_id = p.owner_id LIMIT 1), '') AS owner_business_name,
-  COALESCE((SELECT u.business_verified OR (u.is_business AND COALESCE(u.listing_limit, ${DEFAULT_LISTING_LIMIT}) > ${DEFAULT_LISTING_LIMIT}) FROM users u WHERE u.telegram_id = p.owner_id LIMIT 1), FALSE) AS owner_business_verified,
+  COALESCE((SELECT u.business_verified OR (u.is_business AND COALESCE(u.listing_limit, ${DEFAULT_LISTING_LIMIT}) >= ${BUSINESS_LISTING_LIMIT}) FROM users u WHERE u.telegram_id = p.owner_id LIMIT 1), FALSE) AS owner_business_verified,
   p.name,
   p.price,
   p.price_amount,
@@ -412,6 +450,8 @@ const PRODUCT_SUMMARY_COLUMNS = `
   p.featured_until,
   p.featured_color,
   p.featured_paid,
+  p.promotion_plan,
+  p.promotion_priority,
   p.created_at,
   p.updated_at
 `;
@@ -423,7 +463,7 @@ const PRODUCT_PUBLIC_DETAIL_COLUMNS = `
   p.owner_username,
   COALESCE((SELECT u.is_business FROM users u WHERE u.telegram_id = p.owner_id LIMIT 1), FALSE) AS owner_is_business,
   COALESCE((SELECT u.business_name FROM users u WHERE u.telegram_id = p.owner_id LIMIT 1), '') AS owner_business_name,
-  COALESCE((SELECT u.business_verified OR (u.is_business AND COALESCE(u.listing_limit, ${DEFAULT_LISTING_LIMIT}) > ${DEFAULT_LISTING_LIMIT}) FROM users u WHERE u.telegram_id = p.owner_id LIMIT 1), FALSE) AS owner_business_verified,
+  COALESCE((SELECT u.business_verified OR (u.is_business AND COALESCE(u.listing_limit, ${DEFAULT_LISTING_LIMIT}) >= ${BUSINESS_LISTING_LIMIT}) FROM users u WHERE u.telegram_id = p.owner_id LIMIT 1), FALSE) AS owner_business_verified,
   p.name,
   p.price,
   p.price_amount,
@@ -456,6 +496,8 @@ const PRODUCT_PUBLIC_DETAIL_COLUMNS = `
   p.featured_until,
   p.featured_color,
   p.featured_paid,
+  p.promotion_plan,
+  p.promotion_priority,
   p.created_at,
   p.updated_at,
   GREATEST(
@@ -553,6 +595,8 @@ function mapProductSummary(row) {
     featuredUntil: row.featured_until ? new Date(row.featured_until).getTime() : null,
     featuredColor: FEATURE_COLOR,
     featuredPaid: Boolean(row.featured_paid),
+    promotionPlan: row.promotion_plan || "",
+    promotionPriority: Number(row.promotion_priority) || 0,
     featureRequestPending: Number(row.pending_feature_requests) > 0,
     isFeatured: Boolean(row.featured_paid && row.featured_until && new Date(row.featured_until).getTime() > Date.now()),
     createdAt: row.created_at ? new Date(row.created_at).getTime() : null,
@@ -665,14 +709,14 @@ function mapPublicUser(row) {
     description: row.profile_description || "",
     city: row.city || "",
     phone: row.phone || "",
-    listingLimit: normalizeListingLimit(row.listing_limit),
+    listingLimit: resolveEffectiveListingLimit(row),
     isBusiness: Boolean(row.is_business),
     businessName: row.business_name || "",
     businessCategory: row.business_category || "",
     businessAddress: row.business_address || "",
     businessHours: row.business_hours || "",
     businessWebsite: row.business_website || "",
-    businessVerified: Boolean(row.business_verified || (row.is_business && normalizeListingLimit(row.listing_limit) > DEFAULT_LISTING_LIMIT)),
+    businessVerified: Boolean(row.is_business && (row.business_verified || normalizeListingLimit(row.listing_limit) >= BUSINESS_LISTING_LIMIT)),
     lastSeen: row.last_seen ? new Date(row.last_seen).getTime() : null,
     createdAt: row.created_at ? new Date(row.created_at).getTime() : null,
     updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : null
@@ -681,6 +725,19 @@ function mapPublicUser(row) {
 
 function normalizeText(value, maxLength) {
   return String(value ?? "").trim().slice(0, maxLength);
+}
+
+async function recordSecurityEvent(req, eventType, severity = "info", details = {}, userId = "") {
+  if (!databaseState.ready) return false;
+  const ipHash = createHash("sha256").update(String(req?.ip || req?.socket?.remoteAddress || "")).digest("hex").slice(0, 32);
+  const userAgentHash = createHash("sha256").update(String(req?.headers?.["user-agent"] || "")).digest("hex").slice(0, 32);
+  const safeDetails = details && typeof details === "object" && !Array.isArray(details) ? details : {};
+  await pool.query(
+    `INSERT INTO security_events (id, user_id, event_type, severity, ip_hash, user_agent_hash, details)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
+    [randomUUID(), normalizeText(userId, 64), normalizeText(eventType, 80), normalizeText(severity, 20), ipHash, userAgentHash, JSON.stringify(safeDetails)]
+  );
+  return true;
 }
 
 const SEARCH_SYNONYMS = new Map([
@@ -839,38 +896,54 @@ function buildSellerTrust(row = {}) {
   const ratingCount = Math.max(0, Number(row.rating_count) || 0);
   const activeListings = Math.max(0, Number(row.active_listings) || 0);
   const soldListings = Math.max(0, Number(row.sold_listings) || 0);
+  const totalViews = Math.max(0, Number(row.total_views) || 0);
+  const favoriteCount = Math.max(0, Number(row.favorite_count) || 0);
+  const pendingReports = Math.max(0, Number(row.pending_reports) || 0);
   const phoneVerified = Boolean(row.phone_verified);
+  const telegramVerified = Boolean(row.telegram_verified);
+  const businessVerified = Boolean(row.business_verified);
+  const profileComplete = Boolean(row.profile_complete);
   const memberSince = row.member_since ? new Date(row.member_since).getTime() : null;
   const accountAgeDays = memberSince ? Math.max(0, Math.floor((Date.now() - memberSince) / 86_400_000)) : 0;
 
+  const score = Math.max(0, Math.min(100,
+    15 +
+    (telegramVerified ? 15 : 0) +
+    (phoneVerified ? 15 : 0) +
+    (profileComplete ? 5 : 0) +
+    (businessVerified ? 10 : 0) +
+    Math.min(10, Math.floor(accountAgeDays / 30) * 2) +
+    Math.min(15, soldListings * 3) +
+    Math.min(10, ratingCount * 2) +
+    (ratingCount ? Math.round((ratingAverage / 5) * 10) : 0) -
+    Math.min(20, pendingReports * 5)
+  ));
+
   let level = "new";
   let label = "Новый продавец";
-  if (ratingAverage >= 4.7 && ratingCount >= 5 && soldListings >= 1) {
+  if (score >= 85 && ratingAverage >= 4.5 && soldListings >= 1) {
     level = "high";
     label = "Высокое доверие";
-  } else if (ratingAverage >= 4.2 && ratingCount >= 3) {
+  } else if (score >= 65) {
     level = "reliable";
     label = "Надёжный продавец";
-  } else if (ratingCount > 0) {
+  } else if (ratingCount > 0 || score >= 45) {
     level = "rated";
-    label = "Есть оценки";
+    label = "Профиль с историей";
   }
-
-  const score = Math.min(100,
-    20 +
-    (phoneVerified ? 20 : 0) +
-    Math.min(10, Math.floor(accountAgeDays / 30) * 2) +
-    Math.min(20, soldListings * 4) +
-    Math.min(15, ratingCount * 3) +
-    (ratingCount ? Math.round((ratingAverage / 5) * 15) : 0)
-  );
 
   return {
     ratingAverage: Number(ratingAverage.toFixed(1)),
     ratingCount,
     activeListings,
     soldListings,
+    totalViews,
+    favoriteCount,
+    pendingReports,
     phoneVerified,
+    telegramVerified,
+    businessVerified,
+    profileComplete,
     memberSince,
     accountAgeDays,
     score,
@@ -886,7 +959,13 @@ async function getSellerTrust(db, sellerId) {
        (SELECT COUNT(*)::int FROM seller_reviews WHERE seller_id = $1) AS rating_count,
        (SELECT COUNT(*)::int FROM products WHERE owner_id = $1 AND COALESCE(status, 'active') = 'active' AND COALESCE(hidden, FALSE) = FALSE) AS active_listings,
        (SELECT COUNT(*)::int FROM products WHERE owner_id = $1 AND COALESCE(status, 'active') = 'sold') AS sold_listings,
+       COALESCE((SELECT SUM(views)::bigint FROM products WHERE owner_id = $1), 0) AS total_views,
+       (SELECT COUNT(*)::int FROM favorites f JOIN products p ON p.id = f.product_id WHERE p.owner_id = $1) AS favorite_count,
+       (SELECT COUNT(*)::int FROM reports r JOIN products p ON p.id = r.product_id WHERE p.owner_id = $1 AND r.status = 'pending') AS pending_reports,
        COALESCE((SELECT phone_normalized <> '' FROM users WHERE telegram_id = $1), FALSE) AS phone_verified,
+       EXISTS(SELECT 1 FROM users WHERE telegram_id = $1) AS telegram_verified,
+       COALESCE((SELECT business_verified FROM users WHERE telegram_id = $1), FALSE) AS business_verified,
+       COALESCE((SELECT (COALESCE(profile_description, '') <> '' AND COALESCE(city, '') <> '') FROM users WHERE telegram_id = $1), FALSE) AS profile_complete,
        COALESCE((SELECT created_at FROM users WHERE telegram_id = $1), (SELECT MIN(created_at) FROM products WHERE owner_id = $1)) AS member_since`,
     [String(sellerId)]
   );
@@ -917,15 +996,41 @@ function normalizeListingLimit(value, fallback = DEFAULT_LISTING_LIMIT) {
   return Math.max(1, Math.min(MAX_LISTING_LIMIT, parsed));
 }
 
+function resolveEffectiveListingLimit(row = {}) {
+  const storedLimit = normalizeListingLimit(row.listing_limit ?? row.listingLimit);
+  const isBusiness = Boolean(row.is_business ?? row.isBusiness);
+  const businessVerified = Boolean(row.business_verified ?? row.businessVerified);
+
+  if (isBusiness && (businessVerified || storedLimit >= BUSINESS_LISTING_LIMIT)) {
+    return Math.max(storedLimit, BUSINESS_LISTING_LIMIT);
+  }
+  if (isBusiness) {
+    return Math.max(storedLimit, PROFESSIONAL_LISTING_LIMIT);
+  }
+  return storedLimit;
+}
+
+function resolveListingTier(row = {}) {
+  const storedLimit = normalizeListingLimit(row.listing_limit ?? row.listingLimit);
+  const isBusiness = Boolean(row.is_business ?? row.isBusiness);
+  const businessVerified = Boolean(row.business_verified ?? row.businessVerified);
+
+  if (isBusiness && (businessVerified || storedLimit >= BUSINESS_LISTING_LIMIT)) return "business";
+  if (isBusiness) return "professional";
+  if (storedLimit > DEFAULT_LISTING_LIMIT) return "custom";
+  return "standard";
+}
+
 async function getListingQuota(db, userId, { lockUser = false } = {}) {
   const userResult = await db.query(
-    `SELECT listing_limit
+    `SELECT listing_limit, is_business, business_verified
      FROM users
      WHERE telegram_id = $1
      ${lockUser ? "FOR UPDATE" : ""}`,
     [String(userId)]
   );
-  const limit = normalizeListingLimit(userResult.rows[0]?.listing_limit);
+  const userRow = userResult.rows[0] || {};
+  const limit = resolveEffectiveListingLimit(userRow);
   const countResult = await db.query(
     `SELECT COUNT(*)::int AS used
      FROM products
@@ -938,6 +1043,8 @@ async function getListingQuota(db, userId, { lockUser = false } = {}) {
     used,
     limit,
     remaining: Math.max(0, limit - used),
+    tier: resolveListingTier(userRow),
+    professionalLimit: PROFESSIONAL_LISTING_LIMIT,
     businessLimit: BUSINESS_LISTING_LIMIT,
     businessPriceRub: BUSINESS_LISTING_PRICE_RUB,
     maxLimit: MAX_LISTING_LIMIT
@@ -1453,6 +1560,185 @@ function buildModerationContent(product) {
   ].filter(Boolean).join(" ");
 }
 
+function extractOpenAIResponseText(payload) {
+  if (!payload || typeof payload !== "object") return "";
+  if (typeof payload.output_text === "string") return payload.output_text.trim();
+  const chunks = [];
+  for (const item of Array.isArray(payload.output) ? payload.output : []) {
+    for (const content of Array.isArray(item?.content) ? item.content : []) {
+      if (typeof content?.text === "string") chunks.push(content.text);
+      if (typeof content?.output_text === "string") chunks.push(content.output_text);
+    }
+  }
+  return chunks.join("\n").trim();
+}
+
+async function callOpenAIStructured({ schemaName, schema, input, maxOutputTokens = 700 }) {
+  if (!OPENAI_API_KEY) return { ok: false, unavailable: true, error: "OPENAI_API_KEY не настроен" };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+  timeout.unref?.();
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+        "User-Agent": `OssetianMarket/${APP_VERSION}`
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        input,
+        max_output_tokens: maxOutputTokens,
+        text: {
+          format: {
+            type: "json_schema",
+            name: schemaName,
+            strict: true,
+            schema
+          }
+        }
+      })
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      const message = payload?.error?.message || `OpenAI HTTP ${response.status}`;
+      return { ok: false, error: message };
+    }
+    const text = extractOpenAIResponseText(payload);
+    if (!text) return { ok: false, error: "AI вернул пустой ответ" };
+    try {
+      return { ok: true, data: JSON.parse(text), responseId: payload?.id || "" };
+    } catch {
+      return { ok: false, error: "Не удалось разобрать структурированный ответ AI" };
+    }
+  } catch (error) {
+    return { ok: false, error: error?.name === "AbortError" ? "AI не ответил вовремя" : String(error?.message || error) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function buildFallbackListingSuggestion(context = {}) {
+  const category = PRODUCT_CATEGORIES.has(context.category) ? context.category : "Дом";
+  const currentName = normalizeText(context.name, 120);
+  const itemType = normalizeText(context.itemType, 80);
+  const brand = normalizeText(context.brand, 80);
+  const model = normalizeText(context.model, 80);
+  const parts = [brand, model, itemType].filter(Boolean);
+  const name = currentName || parts.join(" ") || (category === "Авто" ? "Автомобиль" : category === "Электроника" ? "Товар электроники" : "Товар");
+  const description = normalizeText(context.desc, 3000) || `Продаётся ${name}. Состояние и комплектность уточняйте по фотографиям и у продавца. Возможен осмотр перед покупкой.`;
+  const specifications = {};
+  if (brand) specifications["Марка / бренд"] = brand;
+  if (model) specifications["Модель"] = model;
+  if (itemType) specifications["Тип товара"] = itemType;
+  return { name: name.slice(0, 120), category, description, specifications, confidence: 0.25, source: "fallback" };
+}
+
+async function suggestListingFromImage({ image, context = {} }) {
+  const fallback = buildFallbackListingSuggestion(context);
+  if (!AI_LISTING_ASSISTANT_ENABLED || !OPENAI_API_KEY) return { ...fallback, aiAvailable: false };
+  const imageValue = normalizeText(image, 4_500_000);
+  if (!/^data:image\/(?:jpeg|jpg|png|webp);base64,[a-z0-9+/=\r\n]+$/i.test(imageValue)) {
+    return { ...fallback, aiAvailable: true, error: "Для AI нужен JPEG, PNG или WebP" };
+  }
+  if (Buffer.byteLength(imageValue, "utf8") > 4_500_000) {
+    return { ...fallback, aiAvailable: true, error: "Фото слишком большое для AI-анализа" };
+  }
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      name: { type: "string" },
+      category: { type: "string", enum: Array.from(PRODUCT_CATEGORIES) },
+      description: { type: "string" },
+      specifications: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: { key: { type: "string" }, value: { type: "string" } },
+          required: ["key", "value"]
+        }
+      },
+      confidence: { type: "number" },
+      warning: { type: "string" }
+    },
+    required: ["name", "category", "description", "specifications", "confidence", "warning"]
+  };
+  const prompt = `Ты помощник локального маркетплейса Алания Маркет. По фотографии составь аккуратный черновик объявления на русском языке. Не выдумывай точную модель, характеристики, состояние или комплектность, если они не видны. Не называй цену. Категория должна быть одной из разрешённых. Текущее заполнение пользователя: ${JSON.stringify({ category: context.category || "", name: context.name || "", brand: context.brand || "", model: context.model || "", itemType: context.itemType || "" })}.`;
+  const result = await callOpenAIStructured({
+    schemaName: "listing_photo_assistant",
+    schema,
+    maxOutputTokens: 800,
+    input: [{
+      role: "user",
+      content: [
+        { type: "input_text", text: prompt },
+        { type: "input_image", image_url: imageValue }
+      ]
+    }]
+  });
+  if (!result.ok) return { ...fallback, aiAvailable: true, error: result.error };
+  const data = result.data || {};
+  const specs = {};
+  for (const item of Array.isArray(data.specifications) ? data.specifications.slice(0, 12) : []) {
+    const key = normalizeText(item?.key, 80);
+    const value = normalizeText(item?.value, 160);
+    if (key && value) specs[key] = value;
+  }
+  return {
+    name: normalizeText(data.name, 120) || fallback.name,
+    category: PRODUCT_CATEGORIES.has(data.category) ? data.category : fallback.category,
+    description: normalizeText(data.description, 3000) || fallback.description,
+    specifications: specs,
+    confidence: Math.max(0, Math.min(1, Number(data.confidence) || 0)),
+    warning: normalizeText(data.warning, 300),
+    source: "openai",
+    aiAvailable: true
+  };
+}
+
+async function evaluateAIModeration(product) {
+  if (!AI_MODERATION_ENABLED || !OPENAI_API_KEY) return { available: false, blocked: false, review: false, score: 0, reason: "", matches: [] };
+  const content = buildModerationContent(product).slice(0, 7000);
+  if (!content) return { available: true, blocked: false, review: false, score: 0, reason: "", matches: [] };
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      action: { type: "string", enum: ["allow", "review", "block"] },
+      riskScore: { type: "integer" },
+      reason: { type: "string" },
+      categories: { type: "array", items: { type: "string" } }
+    },
+    required: ["action", "riskScore", "reason", "categories"]
+  };
+  const result = await callOpenAIStructured({
+    schemaName: "marketplace_moderation",
+    schema,
+    maxOutputTokens: 400,
+    input: [{ role: "system", content: "Ты модератор российского маркетплейса. Оцени только риски объявления: мошенничество, запрещённые товары, оружие/наркотики, поддельные документы, опасные услуги, явный спам или обход контактов. Не блокируй обычные легальные товары из-за неоднозначности. block используй только при высокой уверенности, review — когда нужна проверка человеком." }, { role: "user", content }]
+  });
+  if (!result.ok) return { available: true, blocked: false, review: false, score: 0, reason: "", matches: [], error: result.error };
+  const data = result.data || {};
+  const score = Math.max(0, Math.min(100, Number(data.riskScore) || 0));
+  const action = ["allow", "review", "block"].includes(data.action) ? data.action : "allow";
+  const reason = normalizeText(data.reason, 800);
+  const categories = Array.isArray(data.categories) ? data.categories.slice(0, 8).map(item => normalizeText(item, 80)).filter(Boolean) : [];
+  const blocked = action === "block" && score >= 90;
+  const review = !blocked && action === "review" && score >= 60;
+  return {
+    available: true,
+    blocked,
+    review,
+    score,
+    reason,
+    matches: categories.map(label => ({ type: "ai", label: `AI: ${label}`, score }))
+  };
+}
+
 async function evaluateProductModeration(product, database = pool) {
   const settingsResult = await database.query(`
     SELECT enabled, block_links, block_contacts, block_emails
@@ -1509,10 +1795,29 @@ async function evaluateProductModeration(product, database = pool) {
     items.findIndex(item => item.type === match.type && item.label === match.label) === index
   );
 
+  if (uniqueMatches.length > 0) {
+    return {
+      blocked: true,
+      aiReview: false,
+      aiScore: 0,
+      reason: uniqueMatches.map(item => item.label).join("; ").slice(0, 1000),
+      matches: uniqueMatches.slice(0, 20)
+    };
+  }
+
+  const aiModeration = await evaluateAIModeration(product);
+  const aiNeedsHold = Boolean(aiModeration.blocked || aiModeration.review);
+  const aiReason = aiNeedsHold
+    ? `${aiModeration.review ? "AI рекомендует проверку модератором" : "AI выявил высокий риск"}${aiModeration.reason ? `: ${aiModeration.reason}` : ""}`
+    : "";
   return {
-    blocked: uniqueMatches.length > 0,
-    reason: uniqueMatches.map(item => item.label).join("; ").slice(0, 1000),
-    matches: uniqueMatches.slice(0, 20)
+    blocked: aiNeedsHold,
+    aiReview: Boolean(aiModeration.review),
+    aiScore: Number(aiModeration.score) || 0,
+    aiAvailable: Boolean(aiModeration.available),
+    aiError: aiModeration.error || "",
+    reason: aiReason.slice(0, 1000),
+    matches: (aiModeration.matches || []).slice(0, 20)
   };
 }
 
@@ -1754,6 +2059,15 @@ async function initDb(db = pool) {
     SET listing_limit = ${DEFAULT_LISTING_LIMIT}
     WHERE listing_limit IS NULL OR listing_limit < 1 OR listing_limit > ${MAX_LISTING_LIMIT};
   `);
+  // Сохраняем совместимость со старыми платными бизнес-аккаунтами: лимит 50+
+  // считается признаком подтверждённого/подключённого бизнес-тарифа.
+  await db.query(`
+    UPDATE users
+    SET business_verified = TRUE
+    WHERE COALESCE(is_business, FALSE) = TRUE
+      AND COALESCE(listing_limit, ${DEFAULT_LISTING_LIMIT}) >= ${BUSINESS_LISTING_LIMIT}
+      AND COALESCE(business_verified, FALSE) = FALSE;
+  `);
   await db.query(`
     UPDATE users
     SET phone_normalized = CASE
@@ -1941,12 +2255,45 @@ async function initDb(db = pool) {
     ALTER TABLE product_feature_requests
     ADD COLUMN IF NOT EXISTS admin_note TEXT DEFAULT '';
   `);
+  await db.query(`ALTER TABLE product_feature_requests ADD COLUMN IF NOT EXISTS plan TEXT DEFAULT 'vip';`);
   await db.query(`ALTER TABLE product_feature_requests ALTER COLUMN color SET DEFAULT 'green';`);
   await db.query(`UPDATE product_feature_requests SET color = 'green' WHERE COALESCE(color, '') <> 'green';`);
 
   await db.query(`
     CREATE INDEX IF NOT EXISTS idx_product_feature_requests_status_created
     ON product_feature_requests (status, created_at DESC);
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS product_view_events (
+      id TEXT PRIMARY KEY,
+      product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL,
+      client_key TEXT NOT NULL,
+      event_date DATE DEFAULT CURRENT_DATE,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (product_id, client_key, event_date)
+    );
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_product_view_events_owner_created
+    ON product_view_events (owner_id, created_at DESC);
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS security_events (
+      id TEXT PRIMARY KEY,
+      user_id TEXT DEFAULT '',
+      event_type TEXT NOT NULL,
+      severity TEXT DEFAULT 'info',
+      ip_hash TEXT DEFAULT '',
+      user_agent_hash TEXT DEFAULT '',
+      details JSONB DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_security_events_created
+    ON security_events (created_at DESC);
   `);
 
   await db.query(`
@@ -2001,6 +2348,8 @@ async function initDb(db = pool) {
   await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_until TIMESTAMPTZ;`);
   await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_color TEXT DEFAULT 'green';`);
   await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_paid BOOLEAN DEFAULT FALSE;`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS promotion_plan TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS promotion_priority INTEGER DEFAULT 0;`);
   await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS duplicate_fingerprint TEXT DEFAULT '';`);
   await db.query(`ALTER TABLE products ALTER COLUMN featured_color SET DEFAULT 'green';`);
   await db.query(`
@@ -2428,7 +2777,7 @@ app.get("/api/version", (req, res) => {
     ok: true,
     version: APP_VERSION,
     catalogOrderFix: true,
-    build: "smart-search-business-profiles-security"
+    build: "trust-promotions-ai-store-analytics-security"
   });
 });
 
@@ -2466,9 +2815,14 @@ app.get("/api/config", (req, res) => {
     featureHighlightPriceRub: FEATURE_HIGHLIGHT_PRICE_RUB,
     featureHighlightDays: FEATURE_HIGHLIGHT_DAYS,
     defaultListingLimit: DEFAULT_LISTING_LIMIT,
+    professionalListingLimit: PROFESSIONAL_LISTING_LIMIT,
     businessListingLimit: BUSINESS_LISTING_LIMIT,
     businessListingPriceRub: BUSINESS_LISTING_PRICE_RUB,
-    maxListingLimit: MAX_LISTING_LIMIT
+    maxListingLimit: MAX_LISTING_LIMIT,
+    aiListingAssistantEnabled: AI_LISTING_ASSISTANT_ENABLED,
+    aiModerationEnabled: AI_MODERATION_ENABLED,
+    aiProviderConfigured: Boolean(OPENAI_API_KEY),
+    promotionPlans: Object.values(PROMOTION_PLANS)
   });
 });
 
@@ -2798,6 +3152,19 @@ app.get("/api/me/listing-quota", requireTelegramAuth, syncTelegramUser, async (r
   }
 });
 
+app.post("/api/ai/listing-suggestion", requireTelegramAuth, syncTelegramUser, aiRateLimiter, async (req, res) => {
+  try {
+    const image = normalizeText(req.body?.image, 4_500_000);
+    const context = req.body?.context && typeof req.body.context === "object" ? req.body.context : {};
+    const suggestion = await suggestListingFromImage({ image, context });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, suggestion });
+  } catch (error) {
+    console.error("AI listing suggestion error:", error);
+    res.status(500).json({ ok: false, error: "Не удалось подготовить AI-подсказку" });
+  }
+});
+
 app.patch("/api/me/profile", requireTelegramAuth, syncTelegramUser, async (req, res) => {
   try {
     const description = normalizeText(req.body?.description, 600);
@@ -2855,7 +3222,8 @@ app.patch("/api/me/profile", requireTelegramAuth, syncTelegramUser, async (req, 
       [String(req.telegramUser.id), preferredUsername, phone]
     );
 
-    res.json({ ok: true, user: mapPublicUser(result.rows[0]) });
+    const listingQuota = await getListingQuota(pool, req.telegramUser.id);
+    res.json({ ok: true, user: mapPublicUser(result.rows[0]), listingQuota });
   } catch (error) {
     console.error("Update own profile error:", error);
     if (error?.code === "23505" && String(error?.constraint || "").includes("phone_normalized")) {
@@ -3013,6 +3381,39 @@ app.get("/api/users/:id/products", async (req, res) => {
   } catch (error) {
     console.error("Get seller products error:", error);
     res.status(500).json({ ok: false, error: "Не удалось получить товары продавца" });
+  }
+});
+
+app.get("/api/users/:id/store", async (req, res) => {
+  try {
+    const userId = normalizeText(req.params.id, 64);
+    if (!userId) return res.status(400).json({ ok: false, error: "Некорректный ID продавца" });
+    const [userResult, trust, categoryResult, topResult] = await Promise.all([
+      pool.query(
+        `SELECT telegram_id, username, first_name, last_name, avatar, profile_description, city, phone, contact_username,
+                listing_limit, is_business, business_name, business_category, business_address, business_hours, business_website, business_verified,
+                last_seen, created_at, updated_at FROM users WHERE telegram_id = $1 LIMIT 1`, [userId]),
+      getSellerTrust(pool, userId),
+      pool.query(
+        `SELECT category, COUNT(*)::int AS count FROM products
+         WHERE owner_id = $1 AND COALESCE(status, 'active') = 'active' AND COALESCE(hidden, FALSE) = FALSE AND COALESCE(moderation_status, 'approved') = 'approved'
+         GROUP BY category ORDER BY count DESC, category ASC LIMIT 12`, [userId]),
+      pool.query(
+        `SELECT ${PRODUCT_SUMMARY_COLUMNS} FROM products p
+         WHERE p.owner_id = $1 AND COALESCE(p.status, 'active') = 'active' AND COALESCE(p.hidden, FALSE) = FALSE AND COALESCE(p.moderation_status, 'approved') = 'approved'
+         ORDER BY CASE WHEN p.featured_paid = TRUE AND p.featured_until > NOW() THEN GREATEST(COALESCE(p.promotion_priority, 1), 1) ELSE 0 END DESC, p.views DESC, p.created_at DESC LIMIT 12`, [userId])
+    ]);
+    if (!userResult.rows.length) return res.status(404).json({ ok: false, error: "Магазин не найден" });
+    const user = mapPublicUser(userResult.rows[0]);
+    res.setHeader("Cache-Control", "public, max-age=15, stale-while-revalidate=30");
+    res.json({ ok: true, store: {
+      user, trust, isStore: Boolean(user.isBusiness),
+      categories: categoryResult.rows.map(row => ({ name: row.category, count: Number(row.count) || 0 })),
+      featuredProducts: topResult.rows.map(mapProductSummary)
+    }});
+  } catch (error) {
+    console.error("Seller store error:", error);
+    res.status(500).json({ ok: false, error: "Не удалось загрузить магазин продавца" });
   }
 });
 
@@ -3323,15 +3724,17 @@ app.get("/api/products", async (req, res) => {
     }
 
     const whereSql = conditions.join(" AND ");
+    const promotionOrderSql = "((p.featured_paid = TRUE AND p.featured_until > NOW())::int * GREATEST(COALESCE(p.promotion_priority, 1), 1)) DESC";
     const orderBySql = [
+      promotionOrderSql,
       ...(relevanceSql ? [`${relevanceSql} DESC`] : []),
       "p.created_at DESC",
       "p.id DESC"
     ].join(",\n          ");
     const selectedOrderBySql = sort === "price_asc"
-      ? "COALESCE(p.price_amount, 9223372036854775807) ASC, p.created_at DESC"
+      ? `${promotionOrderSql}, COALESCE(p.price_amount, 9223372036854775807) ASC, p.created_at DESC`
       : sort === "price_desc"
-        ? "COALESCE(p.price_amount, 0) DESC, p.created_at DESC"
+        ? `${promotionOrderSql}, COALESCE(p.price_amount, 0) DESC, p.created_at DESC`
         : orderBySql;
 
     const queryValues = [...values, limit + 1, offset];
@@ -3394,6 +3797,66 @@ app.get("/api/my-products", requireTelegramAuth, syncTelegramUser, async (req, r
   } catch (error) {
     console.error("Get my products error:", error);
     res.status(500).json({ ok: false, error: "Не удалось получить мои объявления" });
+  }
+});
+
+app.get("/api/me/analytics", requireTelegramAuth, syncTelegramUser, async (req, res) => {
+  try {
+    const ownerId = String(req.telegramUser.id);
+    const [summaryResult, topProductsResult, dailyViewsResult, trust] = await Promise.all([
+      pool.query(
+        `SELECT
+           COUNT(*) FILTER (WHERE COALESCE(status, 'active') = 'active' AND COALESCE(hidden, FALSE) = FALSE)::int AS active_listings,
+           COUNT(*) FILTER (WHERE COALESCE(status, 'active') = 'sold')::int AS sold_listings,
+           COALESCE(SUM(views), 0)::bigint AS total_views,
+           COUNT(*) FILTER (WHERE featured_paid = TRUE AND featured_until > NOW())::int AS active_promotions,
+           COALESCE((SELECT COUNT(*) FROM favorites f JOIN products fp ON fp.id = f.product_id WHERE fp.owner_id = $1), 0)::int AS favorites
+         FROM products
+         WHERE owner_id = $1 AND COALESCE(status, 'active') <> 'deleted'`,
+        [ownerId]
+      ),
+      pool.query(
+        `SELECT p.id, p.name, p.price, p.views, p.status, p.featured_paid, p.featured_until, p.promotion_plan,
+                (SELECT COUNT(*)::int FROM favorites f WHERE f.product_id = p.id) AS favorite_count
+         FROM products p
+         WHERE p.owner_id = $1 AND COALESCE(p.status, 'active') <> 'deleted'
+         ORDER BY COALESCE(p.views, 0) DESC, p.created_at DESC
+         LIMIT 8`,
+        [ownerId]
+      ),
+      pool.query(
+        `SELECT event_date, COUNT(*)::int AS unique_views
+         FROM product_view_events
+         WHERE owner_id = $1 AND event_date >= CURRENT_DATE - INTERVAL '13 days'
+         GROUP BY event_date
+         ORDER BY event_date ASC`,
+        [ownerId]
+      ),
+      getSellerTrust(pool, ownerId)
+    ]);
+    const summary = summaryResult.rows[0] || {};
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      ok: true,
+      analytics: {
+        activeListings: Number(summary.active_listings) || 0,
+        soldListings: Number(summary.sold_listings) || 0,
+        totalViews: Number(summary.total_views) || 0,
+        favorites: Number(summary.favorites) || 0,
+        activePromotions: Number(summary.active_promotions) || 0,
+        trust,
+        dailyViews: dailyViewsResult.rows.map(row => ({ date: row.event_date, views: Number(row.unique_views) || 0 })),
+        topProducts: topProductsResult.rows.map(row => ({
+          id: row.id, name: row.name || "Объявление", price: row.price || "",
+          views: Number(row.views) || 0, favoriteCount: Number(row.favorite_count) || 0,
+          status: row.status || "active", promotionPlan: row.promotion_plan || "",
+          promoted: Boolean(row.featured_paid && row.featured_until && new Date(row.featured_until).getTime() > Date.now())
+        }))
+      }
+    });
+  } catch (error) {
+    console.error("Seller analytics error:", error);
+    res.status(500).json({ ok: false, error: "Не удалось загрузить аналитику продавца" });
   }
 });
 
@@ -3564,6 +4027,9 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
         `INSERT INTO moderation_events (id, product_id, user_id, source, reason, matches) VALUES ($1, $2, $3, 'publish', $4, $5::jsonb) ON CONFLICT DO NOTHING`,
         [randomUUID(), id, req.telegramUser.id, moderation.reason, JSON.stringify(moderation.matches)]
       );
+      recordSecurityEvent(req, moderation.aiReview ? "ai_moderation_review" : "moderation_block", moderation.aiReview ? "warning" : "high", {
+        productId: id, aiScore: moderation.aiScore || 0, reason: moderation.reason
+      }, req.telegramUser.id).catch(() => {});
     }
 
     const updatedListingQuota = await getListingQuota(client, req.telegramUser.id);
@@ -3572,7 +4038,7 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
       ok: true,
       product: mapProduct(result.rows[0]),
       listingQuota: updatedListingQuota,
-      moderation: { blocked: moderation.blocked, reason: moderation.reason }
+      moderation: { blocked: moderation.blocked, aiReview: Boolean(moderation.aiReview), aiScore: Number(moderation.aiScore) || 0, reason: moderation.reason }
     });
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
@@ -3801,7 +4267,7 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     res.json({
       ok: true,
       product: mapProduct(result.rows[0]),
-      moderation: { blocked: moderation.blocked, reason: moderation.reason },
+      moderation: { blocked: moderation.blocked, aiReview: Boolean(moderation.aiReview), aiScore: Number(moderation.aiScore) || 0, reason: moderation.reason },
       priceChange: {
         changed: priceChanged || discountMetadataChanged,
         dropped: priceDropped,
@@ -3927,7 +4393,7 @@ app.post("/api/products/:id/view", async (req, res) => {
           AND COALESCE(status, 'active') = 'active'
           AND COALESCE(hidden, FALSE) = FALSE
           AND COALESCE(moderation_status, 'approved') = 'approved'
-        RETURNING id, views;
+        RETURNING id, views, owner_id;
       `,
       [productId]
     );
@@ -3938,6 +4404,18 @@ app.post("/api/products/:id/view", async (req, res) => {
         error: "Товар не найден"
       });
     }
+
+    const fallbackClientKey = createHash("sha256")
+      .update(`${req.ip || ""}|${req.headers["user-agent"] || ""}`)
+      .digest("hex")
+      .slice(0, 48);
+    const clientKey = normalizeText(req.body?.clientKey, 120) || fallbackClientKey;
+    await pool.query(
+      `INSERT INTO product_view_events (id, product_id, owner_id, client_key)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (product_id, client_key, event_date) DO NOTHING`,
+      [randomUUID(), result.rows[0].id, result.rows[0].owner_id, clientKey]
+    ).catch(error => console.warn("Product analytics event failed:", error?.message || error));
 
     res.json({
       ok: true,
@@ -4125,7 +4603,9 @@ app.patch("/api/products/:id/status", requireTelegramAuth, syncTelegramUser, asy
 app.post("/api/products/:id/feature-request", requireTelegramAuth, syncTelegramUser, async (req, res) => {
   try {
     const productId = normalizeText(req.params.id, 64);
-    const days = FEATURE_HIGHLIGHT_DAYS;
+    const planId = normalizeText(req.body?.plan, 20).toLowerCase();
+    const plan = PROMOTION_PLANS[planId] || PROMOTION_PLANS.vip;
+    const days = plan.days;
 
     if (!productId) {
       return res.status(400).json({ ok: false, error: "Некорректный ID объявления" });
@@ -4160,25 +4640,26 @@ app.post("/api/products/:id/feature-request", requireTelegramAuth, syncTelegramU
         SET color = $3,
             days = $4,
             price_amount = $5,
+            plan = $6,
             updated_at = NOW()
         WHERE product_id = $1
           AND owner_id = $2
           AND status = 'pending'
         RETURNING *;
       `,
-      [productId, req.telegramUser.id, color, days, FEATURE_HIGHLIGHT_PRICE_RUB]
+      [productId, req.telegramUser.id, color, days, plan.priceRub, plan.id]
     );
 
     if (requestResult.rows.length === 0) {
       requestResult = await pool.query(
         `
           INSERT INTO product_feature_requests (
-            id, product_id, owner_id, color, days, price_amount, status
-          ) VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+            id, product_id, owner_id, color, days, price_amount, plan, status
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
           ON CONFLICT DO NOTHING
           RETURNING *;
         `,
-        [randomUUID(), productId, req.telegramUser.id, color, days, FEATURE_HIGHLIGHT_PRICE_RUB]
+        [randomUUID(), productId, req.telegramUser.id, color, days, plan.priceRub, plan.id]
       );
 
       if (requestResult.rows.length === 0) {
@@ -4199,6 +4680,7 @@ app.post("/api/products/:id/feature-request", requireTelegramAuth, syncTelegramU
         id: requestResult.rows[0].id,
         productId,
         color,
+        plan: requestResult.rows[0].plan || plan.id,
         days,
         priceAmount: Number(requestResult.rows[0].price_amount) || 0,
         status: requestResult.rows[0].status
@@ -4823,6 +5305,7 @@ app.get(
           pfr.product_id,
           pfr.owner_id,
           pfr.color,
+          pfr.plan,
           pfr.days,
           pfr.price_amount,
           pfr.status,
@@ -4872,6 +5355,7 @@ app.get(
         ownerUsername: row.user_username || row.owner_username || "",
         ownerAvatar: row.user_avatar || "",
         color: FEATURE_COLOR,
+        plan: PROMOTION_PLANS[row.plan] ? row.plan : "vip",
         days: Math.max(1, Number(row.days) || FEATURE_HIGHLIGHT_DAYS),
         priceAmount: Number(row.price_amount) || 0,
         status: row.status,
@@ -4951,7 +5435,8 @@ app.patch(
       }
 
       if (decision === "approve") {
-        const days = Math.max(1, Math.min(90, Number(featureRequest.days) || FEATURE_HIGHLIGHT_DAYS));
+        const selectedPlan = PROMOTION_PLANS[featureRequest.plan] || PROMOTION_PLANS.vip;
+        const days = Math.max(1, Math.min(90, Number(featureRequest.days) || selectedPlan.days));
         const color = FEATURE_COLOR;
         const featuredUntil = new Date(Date.now() + days * 86_400_000);
 
@@ -4961,10 +5446,12 @@ app.patch(
             SET featured_paid = TRUE,
                 featured_color = $2,
                 featured_until = $3,
+                promotion_plan = $4,
+                promotion_priority = $5,
                 updated_at = NOW()
             WHERE id = $1;
           `,
-          [featureRequest.product_id, color, featuredUntil]
+          [featureRequest.product_id, color, featuredUntil, selectedPlan.id, selectedPlan.priority]
         );
 
         await client.query(
@@ -5216,9 +5703,14 @@ app.patch(
 
     const result = await pool.query(
       `UPDATE users
-       SET listing_limit = $2, updated_at = NOW()
+       SET listing_limit = $2,
+           business_verified = CASE
+             WHEN COALESCE(is_business, FALSE) = TRUE THEN ($2 >= ${BUSINESS_LISTING_LIMIT})
+             ELSE COALESCE(business_verified, FALSE)
+           END,
+           updated_at = NOW()
        WHERE telegram_id = $1
-       RETURNING telegram_id, username, first_name, last_name, listing_limit`,
+       RETURNING telegram_id, username, first_name, last_name, listing_limit, is_business, business_verified`,
       [userId, requestedLimit]
     );
 
@@ -5902,6 +6394,16 @@ app.get(
         u.created_at,
         u.banned,
         u.listing_limit,
+        u.is_business,
+        u.business_verified,
+        CASE
+          WHEN COALESCE(u.is_business, FALSE) = TRUE
+               AND (COALESCE(u.business_verified, FALSE) = TRUE OR COALESCE(u.listing_limit, ${DEFAULT_LISTING_LIMIT}) >= ${BUSINESS_LISTING_LIMIT})
+            THEN GREATEST(COALESCE(u.listing_limit, ${DEFAULT_LISTING_LIMIT}), ${BUSINESS_LISTING_LIMIT})
+          WHEN COALESCE(u.is_business, FALSE) = TRUE
+            THEN GREATEST(COALESCE(u.listing_limit, ${DEFAULT_LISTING_LIMIT}), ${PROFESSIONAL_LISTING_LIMIT})
+          ELSE COALESCE(u.listing_limit, ${DEFAULT_LISTING_LIMIT})
+        END AS effective_listing_limit,
         COUNT(p.id)::int AS products_count,
         COUNT(p.id) FILTER (
           WHERE COALESCE(p.status, 'active') NOT IN ('deleted', 'sold')

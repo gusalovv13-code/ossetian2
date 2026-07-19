@@ -97,7 +97,13 @@ function normalizeSellerTrust(value = {}) {
     ratingCount: Math.max(0, Number(value.ratingCount) || 0),
     activeListings: Math.max(0, Number(value.activeListings) || 0),
     soldListings: Math.max(0, Number(value.soldListings) || 0),
+    totalViews: Math.max(0, Number(value.totalViews) || 0),
+    favoriteCount: Math.max(0, Number(value.favoriteCount) || 0),
+    pendingReports: Math.max(0, Number(value.pendingReports) || 0),
     phoneVerified: Boolean(value.phoneVerified),
+    telegramVerified: Boolean(value.telegramVerified),
+    businessVerified: Boolean(value.businessVerified),
+    profileComplete: Boolean(value.profileComplete),
     memberSince: Number(value.memberSince) || null,
     accountAgeDays: Math.max(0, Number(value.accountAgeDays) || 0),
     score: Math.max(0, Math.min(100, Number(value.score) || 0)),
@@ -115,9 +121,12 @@ function getSellerTrustMarkup(value, { compact = false } = {}) {
     ? `На маркете с ${new Date(trust.memberSince).toLocaleDateString("ru-RU", { month: "short", year: "numeric" })}`
     : "Новый профиль";
   const badges = [
+    trust.telegramVerified ? "✓ Telegram подтверждён" : "",
     trust.phoneVerified ? "✓ Телефон подтверждён" : "",
+    trust.businessVerified ? "✓ Проверенный бизнес" : "",
     trust.soldListings > 0 ? `✓ Продано: ${trust.soldListings}` : "",
-    trust.accountAgeDays >= 30 ? "✓ Профиль не новый" : ""
+    trust.accountAgeDays >= 30 ? "✓ Профиль не новый" : "",
+    trust.pendingReports > 0 ? `⚠ На проверке жалоб: ${trust.pendingReports}` : ""
   ].filter(Boolean);
 
   return `
@@ -365,6 +374,8 @@ const state = {
   savedSearchesLoadedAt: 0,
   sellerReviews: [],
   sellerTrust: null,
+  sellerAnalytics: null,
+  sellerAnalyticsLoadedAt: 0,
   myProductsLoadedAt: 0,
   myProductsLoading: false,
   favoritesLoadedAt: 0,
@@ -383,6 +394,8 @@ const state = {
     used: 0,
     limit: 3,
     remaining: 3,
+    tier: "standard",
+    professionalLimit: 10,
     businessLimit: 50,
     businessPriceRub: 299,
     maxLimit: 100
@@ -395,9 +408,18 @@ const state = {
     featureHighlightPriceRub: 199,
     featureHighlightDays: 7,
     defaultListingLimit: 3,
+    professionalListingLimit: 10,
     businessListingLimit: 50,
     businessListingPriceRub: 299,
-    maxListingLimit: 100
+    maxListingLimit: 100,
+    aiListingAssistantEnabled: true,
+    aiModerationEnabled: true,
+    aiProviderConfigured: false,
+    promotionPlans: [
+      { id: "boost", label: "Поднять", days: 1, priceRub: 99, priority: 1 },
+      { id: "vip", label: "VIP", days: 7, priceRub: 299, priority: 2 },
+      { id: "premium", label: "Премиум", days: 14, priceRub: 599, priority: 3 }
+    ]
   }
 };
 
@@ -488,9 +510,14 @@ async function loadConfig() {
     state.config.featureHighlightPriceRub = Number(data.featureHighlightPriceRub) || 0;
     state.config.featureHighlightDays = Number(data.featureHighlightDays) || 7;
     state.config.defaultListingLimit = Number(data.defaultListingLimit) || 3;
+    state.config.professionalListingLimit = Number(data.professionalListingLimit) || 10;
     state.config.businessListingLimit = Number(data.businessListingLimit) || 50;
     state.config.businessListingPriceRub = Number(data.businessListingPriceRub) || 299;
     state.config.maxListingLimit = Number(data.maxListingLimit) || 100;
+    state.config.aiListingAssistantEnabled = data.aiListingAssistantEnabled !== false;
+    state.config.aiModerationEnabled = data.aiModerationEnabled !== false;
+    state.config.aiProviderConfigured = Boolean(data.aiProviderConfigured);
+    if (Array.isArray(data.promotionPlans) && data.promotionPlans.length) state.config.promotionPlans = data.promotionPlans;
   } catch (error) {
     console.error("Не удалось загрузить конфигурацию:", error);
   }
@@ -1245,13 +1272,21 @@ function showListingLimitDialog(quota = state.listingQuota) {
   const summary = document.getElementById("listingLimitSummary");
   const offer = document.getElementById("listingLimitOffer");
   const price = Number(normalized.businessPriceRub ?? state.config.businessListingPriceRub) || 299;
+  const professionalLimit = Number(normalized.professionalLimit ?? state.config.professionalListingLimit) || 10;
   const businessLimit = Number(normalized.businessLimit ?? state.config.businessListingLimit) || 50;
+  const tier = normalized.tier || "standard";
 
   if (summary) {
     summary.textContent = `Использовано ${normalized.used} из ${normalized.limit}. Чтобы добавить новое объявление, удалите одно из существующих или отметьте его проданным.`;
   }
   if (offer) {
-    offer.textContent = `Для магазинов и предприятий доступно до ${businessLimit} объявлений за ${price.toLocaleString("ru-RU")} ₽. Напишите в поддержку.`;
+    if (tier === "standard") {
+      offer.textContent = `Включите бесплатный профиль «Профессиональный продавец» и получите до ${professionalLimit} объявлений. Для подтверждённого бизнес-аккаунта доступно до ${businessLimit}.`;
+    } else if (tier === "professional") {
+      offer.textContent = `Профессиональному продавцу доступно до ${professionalLimit} объявлений бесплатно. Для подтверждённого или платного бизнес-аккаунта доступно до ${businessLimit} объявлений за ${price.toLocaleString("ru-RU")} ₽.`;
+    } else {
+      offer.textContent = `Нужен больший индивидуальный лимит? Напишите в поддержку — администратор может настроить до ${Number(normalized.maxLimit ?? state.config.maxListingLimit) || 100} объявлений.`;
+    }
   }
 
   if (!dialog) {
@@ -1485,6 +1520,7 @@ function showPage(page, addToHistory = true, preserveCreateSession = false, tran
     myAds: "Мои объявления",
     favorites: "Избранное",
     profile: "Профиль",
+    sellerAnalytics: "Аналитика продавца",
     sellerProfile: "Профиль продавца",
     settings: "Настройки",
     chats: "Чаты",
@@ -1517,6 +1553,7 @@ function showPage(page, addToHistory = true, preserveCreateSession = false, tran
     if (page === "catalog") loadProducts();
     if (page === "myAds") loadMyProducts();
     if (page === "favorites") loadFavorites();
+    if (page === "sellerAnalytics") loadSellerAnalytics();
     if (page === "admin") loadAdminPanel();
   });
 
@@ -3501,7 +3538,8 @@ async function openProduct(id) {
   }
 
   const viewPromise = apiRequest(`/api/products/${encodeURIComponent(id)}/view`, {
-    method: "POST"
+    method: "POST",
+    body: JSON.stringify({ clientKey: getAdClientKey() })
   }).catch(error => {
     console.error("Не удалось обновить просмотры:", error);
     return null;
@@ -3861,6 +3899,8 @@ function renderCatalogCoverPreview() {
 
 function renderPhotoPreview() {
   const photoPreview = document.getElementById("photoPreview");
+  const aiAssistant = document.getElementById("aiListingAssistant");
+  if (aiAssistant) aiAssistant.hidden = draftAd.images.length === 0 || state.config.aiListingAssistantEnabled === false;
 
   if (!photoPreview) {
     updateCreateButtons();
@@ -3909,6 +3949,61 @@ function renderPhotoPreview() {
 
   renderCatalogCoverPreview();
   updateCreateButtons();
+}
+
+async function runAiListingAssistant() {
+  const image = draftAd.images[0] || "";
+  if (!image) {
+    alert("Сначала добавьте фотографию товара");
+    return;
+  }
+  const button = document.getElementById("aiListingAssistantBtn");
+  const status = document.getElementById("aiListingAssistantStatus");
+  if (button) { button.disabled = true; button.textContent = "✨ Анализируем фото…"; }
+  if (status) { status.hidden = false; status.textContent = "AI готовит черновик. Проверьте результат перед публикацией."; }
+  try {
+    const data = await apiRequest("/api/ai/listing-suggestion", {
+      method: "POST",
+      body: JSON.stringify({
+        image,
+        context: {
+          name: document.getElementById("adTitle")?.value.trim() || "",
+          category: document.getElementById("adCategory")?.value || "",
+          itemType: document.getElementById("adItemType")?.value || "",
+          brand: readSelectWithCustom("adBrand", "adBrandCustom") || "",
+          model: readSelectWithCustom("adModel", "adModelCustom") || "",
+          desc: document.getElementById("adDesc")?.value.trim() || ""
+        }
+      })
+    });
+    const suggestion = data.suggestion || {};
+    const title = document.getElementById("adTitle");
+    const category = document.getElementById("adCategory");
+    const desc = document.getElementById("adDesc");
+    const specs = document.getElementById("adSpecifications");
+    if (title && suggestion.name) title.value = suggestion.name;
+    if (category && suggestion.category) {
+      category.value = suggestion.category;
+      updateCategorySpecificUI(suggestion.category);
+      refreshAdStructuredFields();
+    }
+    if (desc && suggestion.description) desc.value = suggestion.description;
+    if (specs && suggestion.specifications && typeof suggestion.specifications === "object") {
+      const lines = Object.entries(suggestion.specifications).slice(0, 20).map(([key, value]) => `${key}: ${value}`);
+      if (lines.length) specs.value = lines.join("\n");
+    }
+    updateCreateButtons();
+    updatePreviewCard();
+    const sourceText = suggestion.source === "openai" ? "AI проанализировал фото" : "Создан безопасный черновик без внешнего AI";
+    if (status) status.textContent = `${sourceText}. ${suggestion.warning || suggestion.error || "Проверьте название и характеристики."}`;
+    showToast("✨ Черновик объявления заполнен");
+  } catch (error) {
+    console.error("AI listing assistant error:", error);
+    if (status) status.textContent = error.message || "Не удалось проанализировать фото";
+    alert(error.message || "Не удалось использовать AI-помощника");
+  } finally {
+    if (button) { button.disabled = false; button.textContent = "✨ Заполнить с AI"; }
+  }
 }
 
 function setDraftCoverImage(index) {
@@ -4277,7 +4372,8 @@ async function publishAd(status = "active") {
     showPage("myAds");
 
     if (data.moderation?.blocked) {
-      alert(`Объявление сохранено, но автоматически заблокировано. Причина: ${data.moderation.reason || "нарушение правил публикации"}. Исправьте текст или дождитесь решения модератора.`);
+      const moderationPrefix = data.moderation.aiReview ? "AI отправил объявление на проверку модератору" : "Объявление автоматически заблокировано";
+      alert(`${moderationPrefix}. Причина: ${data.moderation.reason || "требуется проверка правил публикации"}. ${data.moderation.aiReview ? "После проверки модератор сможет одобрить публикацию." : "Исправьте текст или дождитесь решения модератора."}`);
     } else if (data.priceChange?.dropped) {
       alert("Скидка сохранена. Старая цена зачёркнута, новая отмечена зелёной меткой ✅");
     } else if (wasEditing) {
@@ -4498,6 +4594,21 @@ function openSupportMessage(message = "") {
   else window.open(url, "_blank", "noopener,noreferrer");
 }
 
+function getPromotionPlan(planId = "vip") {
+  const plans = Array.isArray(state.config.promotionPlans) ? state.config.promotionPlans : [];
+  return plans.find(plan => plan.id === planId) || plans.find(plan => plan.id === "vip") || { id: "vip", label: "VIP", days: 7, priceRub: 299 };
+}
+
+function updateHighlightPlanSummary() {
+  const select = document.getElementById("highlightPlanSelect");
+  const summary = document.getElementById("highlightRequestSummary");
+  const plan = getPromotionPlan(select?.value || "vip");
+  if (!summary) return;
+  const price = Number(plan.priceRub) || 0;
+  const priceText = price > 0 ? `${price.toLocaleString("ru-RU")} ₽` : "по согласованию";
+  summary.innerHTML = `<span>Тариф</span><b>${escapeHTML(plan.label || plan.id)}</b><span>Срок</span><b>${Number(plan.days) || 1} дн.</b><span>Стоимость</span><b>${escapeHTML(priceText)}</b>`;
+}
+
 function requestProductHighlight(productId) {
   const product = state.myProducts.find(item => item.id === productId);
   if (!product || product.featureRequestPending || featureRequestInFlight.has(productId)) return;
@@ -4509,15 +4620,10 @@ function requestProductHighlight(productId) {
   highlightRequestProductId = productId;
   const dialog = document.getElementById("highlightDialog");
   const productName = document.getElementById("highlightProductName");
-  const summary = document.getElementById("highlightRequestSummary");
-  const price = Number(state.config.featureHighlightPriceRub) || 0;
-  const days = Number(state.config.featureHighlightDays) || 7;
-  const priceText = price > 0 ? `${price.toLocaleString("ru-RU")} ₽` : "по согласованию";
-
+  const planSelect = document.getElementById("highlightPlanSelect");
+  if (planSelect) planSelect.value = "vip";
   if (productName) productName.textContent = product.name || "Объявление";
-  if (summary) {
-    summary.innerHTML = `<span>Срок</span><b>${days} дней</b><span>Стоимость</span><b>${escapeHTML(priceText)}</b>`;
-  }
+  updateHighlightPlanSummary();
 
   if (dialog?.showModal) dialog.showModal();
   else dialog?.setAttribute("open", "");
@@ -4542,7 +4648,7 @@ async function submitProductHighlightRequest(event) {
 
   const color = FEATURE_REQUEST_COLOR;
   const submitButton = document.getElementById("submitHighlightRequestBtn");
-  const days = Number(state.config.featureHighlightDays) || 7;
+  const plan = getPromotionPlan(document.getElementById("highlightPlanSelect")?.value || "vip");
 
   featureRequestInFlight.add(productId);
   if (submitButton) {
@@ -4553,7 +4659,7 @@ async function submitProductHighlightRequest(event) {
   try {
     await apiRequest(`/api/products/${encodeURIComponent(productId)}/feature-request`, {
       method: "POST",
-      body: JSON.stringify({ color })
+      body: JSON.stringify({ color, plan: plan.id })
     });
 
     product.featureRequestPending = true;
@@ -4566,7 +4672,7 @@ async function submitProductHighlightRequest(event) {
 
     closeHighlightDialog();
     renderMyAds();
-    alert("Заявка на выделение отправлена. Администратор напишет вам в Telegram для оплаты.");
+    alert(`Заявка «${plan.label}» отправлена. Администратор подтвердит оплату и включит продвижение.`);
   } catch (error) {
     console.error("Feature request error:", error);
     alert(error.message || "Не удалось отправить заявку на выделение");
@@ -5361,7 +5467,15 @@ async function initTelegramUser() {
       description: user.description || "",
       city: user.city || "",
       phone: user.phone || "",
-      photoUrl: user.photoUrl || user.avatar || ""
+      photoUrl: user.photoUrl || user.avatar || "",
+      listingLimit: Number(user.listingLimit) || 3,
+      isBusiness: Boolean(user.isBusiness),
+      businessName: user.businessName || "",
+      businessCategory: user.businessCategory || "",
+      businessAddress: user.businessAddress || "",
+      businessHours: user.businessHours || "",
+      businessWebsite: user.businessWebsite || "",
+      businessVerified: Boolean(user.businessVerified)
     };
     state.myProductsOwnerId = String(user.id || "");
     state.myProductsLoadedAt = 0;
@@ -5577,6 +5691,7 @@ async function saveProfile(event) {
       body: JSON.stringify(payload)
     });
     state.telegramUser = { ...state.telegramUser, ...(data.user || {}) };
+    if (data.listingQuota) setListingQuota(data.listingQuota);
     renderOwnProfileDetails();
     closeProfileEditor();
   } catch (error) {
@@ -5587,6 +5702,71 @@ async function saveProfile(event) {
       button.disabled = false;
       button.textContent = "Сохранить";
     }
+  }
+}
+
+function formatAnalyticsNumber(value) {
+  const number = Math.max(0, Number(value) || 0);
+  return new Intl.NumberFormat("ru-RU", { notation: number >= 10000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(number);
+}
+
+function renderSellerAnalytics() {
+  const analytics = state.sellerAnalytics;
+  const summary = document.getElementById("sellerAnalyticsSummary");
+  const chart = document.getElementById("sellerAnalyticsChart");
+  const products = document.getElementById("sellerAnalyticsProducts");
+  if (!summary || !chart || !products) return;
+  if (!analytics) {
+    summary.innerHTML = '<div class="analytics-card skeleton-card">Загрузка…</div>';
+    chart.innerHTML = '<div class="empty-state compact-empty-state">Данные загружаются…</div>';
+    products.innerHTML = '';
+    return;
+  }
+  const trust = normalizeSellerTrust(analytics.trust || {});
+  const cards = [
+    ["👁", "Просмотры", analytics.totalViews],
+    ["♡", "В избранном", analytics.favorites],
+    ["✓", "Продано", analytics.soldListings],
+    ["🚀", "Продвигается", analytics.activePromotions],
+    ["🛡", "Доверие", `${trust.score}%`]
+  ];
+  summary.innerHTML = cards.map(([icon, label, value]) => `
+    <article class="analytics-card"><span>${icon}</span><small>${escapeHTML(label)}</small><b>${typeof value === "number" ? formatAnalyticsNumber(value) : escapeHTML(String(value))}</b></article>
+  `).join("");
+
+  const rows = Array.isArray(analytics.dailyViews) ? analytics.dailyViews : [];
+  const max = Math.max(1, ...rows.map(item => Number(item.views) || 0));
+  chart.innerHTML = rows.length ? rows.map(item => {
+    const views = Number(item.views) || 0;
+    const height = Math.max(8, Math.round((views / max) * 100));
+    const date = new Date(item.date).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" });
+    return `<div class="analytics-bar-item" title="${escapeHTML(date)}: ${views}"><b style="height:${height}%"></b><span>${views}</span><small>${escapeHTML(date)}</small></div>`;
+  }).join("") : '<div class="empty-state compact-empty-state"><p>История уникальных просмотров начнёт накапливаться после обновления.</p></div>';
+
+  const topProducts = Array.isArray(analytics.topProducts) ? analytics.topProducts : [];
+  products.innerHTML = topProducts.length ? topProducts.map(product => `
+    <button type="button" class="analytics-product-row" onclick="openProduct('${escapeHTML(product.id)}')">
+      <span><b>${escapeHTML(product.name)}</b><small>${escapeHTML(formatPrice(product.price) || product.price || "")}</small></span>
+      <span><b>👁 ${formatAnalyticsNumber(product.views)}</b><small>♡ ${formatAnalyticsNumber(product.favoriteCount)}${product.promoted ? ` · 🚀 ${escapeHTML(product.promotionPlan || "promo")}` : ""}</small></span>
+    </button>
+  `).join("") : '<div class="empty-state compact-empty-state"><p>Создайте объявление, чтобы увидеть статистику.</p></div>';
+}
+
+async function loadSellerAnalytics(force = false) {
+  if (!state.telegramUser?.id) return;
+  if (!force && state.sellerAnalytics && Date.now() - state.sellerAnalyticsLoadedAt < 60_000) {
+    renderSellerAnalytics();
+    return;
+  }
+  try {
+    const data = await apiRequest(`/api/me/analytics?_=${Date.now()}`, { cache: "no-store" });
+    state.sellerAnalytics = data.analytics || null;
+    state.sellerAnalyticsLoadedAt = Date.now();
+    renderSellerAnalytics();
+  } catch (error) {
+    console.error("Seller analytics error:", error);
+    const summary = document.getElementById("sellerAnalyticsSummary");
+    if (summary) summary.innerHTML = `<div class="empty-state"><h3>Не удалось загрузить аналитику</h3><p class="muted">${escapeHTML(error.message || "Попробуйте ещё раз")}</p></div>`;
   }
 }
 
@@ -5659,6 +5839,9 @@ async function openSellerProfile(userId) {
   const sellerDescription = document.getElementById("sellerProfileDescription");
   const sellerBusinessBadge = document.getElementById("sellerBusinessBadge");
   const sellerBusinessBlock = document.getElementById("sellerBusinessBlock");
+  const sellerStorefront = document.getElementById("sellerStorefront");
+  const sellerStorefrontSubtitle = document.getElementById("sellerStorefrontSubtitle");
+  const sellerStoreCategories = document.getElementById("sellerStoreCategories");
   const sellerContacts = document.getElementById("sellerProfileContacts");
   const sellerCount = document.getElementById("sellerProfileCount");
   const sellerSoldCount = document.getElementById("sellerSoldCount");
@@ -5688,6 +5871,9 @@ async function openSellerProfile(userId) {
     sellerBusinessBlock.hidden = true;
     sellerBusinessBlock.innerHTML = "";
   }
+  if (sellerStorefront) sellerStorefront.hidden = true;
+  if (sellerStorefrontSubtitle) sellerStorefrontSubtitle.textContent = "";
+  if (sellerStoreCategories) sellerStoreCategories.innerHTML = "";
   if (sellerContacts) sellerContacts.innerHTML = "";
   sellerCount.textContent = "📦 …";
   if (sellerSoldCount) sellerSoldCount.textContent = "✓ …";
@@ -5712,13 +5898,15 @@ async function openSellerProfile(userId) {
   }
 
   try {
-    const [profileData, productsData, reviewsData] = await Promise.all([
+    const [profileData, productsData, reviewsData, storeData] = await Promise.all([
       apiRequest(`/api/users/${encodeURIComponent(userId)}`),
       apiRequest(`/api/users/${encodeURIComponent(userId)}/products`),
-      apiRequest(`/api/users/${encodeURIComponent(userId)}/reviews`)
+      apiRequest(`/api/users/${encodeURIComponent(userId)}/reviews`),
+      apiRequest(`/api/users/${encodeURIComponent(userId)}/store`).catch(() => ({ store: null }))
     ]);
 
     const user = profileData.user || {};
+    const store = storeData?.store || {};
     const products = Array.isArray(productsData.products) ? productsData.products : [];
     const soldProducts = Array.isArray(productsData.soldProducts) ? productsData.soldProducts : [];
     const reviews = Array.isArray(reviewsData.reviews) ? reviewsData.reviews : [];
@@ -5765,6 +5953,15 @@ async function openSellerProfile(userId) {
       if (user.businessWebsite) businessRows.push(`<span><small>Сайт</small><b>🌐 ${escapeHTML(user.businessWebsite)}</b></span>`);
       sellerBusinessBlock.hidden = !user.isBusiness || businessRows.length === 0;
       sellerBusinessBlock.innerHTML = businessRows.join("");
+    }
+
+    if (sellerStorefront) {
+      const categories = Array.isArray(store.categories) ? store.categories : [];
+      sellerStorefront.hidden = !user.isBusiness;
+      if (sellerStorefrontSubtitle) sellerStorefrontSubtitle.textContent = `${products.length} активных · ${trust.totalViews || 0} просмотров`;
+      if (sellerStoreCategories) sellerStoreCategories.innerHTML = categories.length
+        ? categories.map(item => `<span>${escapeHTML(item.name)} <b>${Number(item.count) || 0}</b></span>`).join("")
+        : '<span>Все товары магазина</span>';
     }
 
     if (sellerContacts) {
@@ -6229,7 +6426,7 @@ function renderAdminFeatureRequests(requests = []) {
             </div>
 
             <div class="admin-feature-request-meta">
-              <span class="admin-feature-color color-${escapeHTML(colorKey)}"><i aria-hidden="true"></i><b>${escapeHTML(getFeatureColorLabel(colorKey))}</b> выделение</span>
+              <span class="admin-feature-color color-${escapeHTML(colorKey)}"><i aria-hidden="true"></i><b>${escapeHTML(getPromotionPlan(request.plan || "vip").label)}</b> · ${escapeHTML(getFeatureColorLabel(colorKey))}</span>
               <span><b>${Number(request.days) || 7} дней</b></span>
               <span><b>${escapeHTML(price)}</b></span>
               <span>Отправлено ${escapeHTML(formatAdminDate(request.createdAt))}</span>
@@ -6265,11 +6462,12 @@ async function openAdminFeatureRequestChat(requestId) {
   const ownerId = String(request.ownerId || "").trim();
   const firstName = String(request.ownerName || "").trim().split(/\s+/)[0] || "Здравствуйте";
   const color = getFeatureColorLabel(request.color).toLowerCase();
-  const days = Math.max(1, Number(request.days) || 7);
+  const plan = getPromotionPlan(request.plan || "vip");
+  const days = Math.max(1, Number(request.days) || Number(plan.days) || 7);
   const price = Number(request.priceAmount) > 0
     ? `${Number(request.priceAmount).toLocaleString("ru-RU")} ₽`
     : "по договорённости";
-  const message = `${firstName}, здравствуйте! Вы отправили заявку на ${color} выделение объявления «${request.productName || request.productId}» на ${days} дней. Стоимость — ${price}. После оплаты напишите сюда, и я включу выделение.`;
+  const message = `${firstName}, здравствуйте! Вы отправили заявку на тариф «${plan.label}» для объявления «${request.productName || request.productId}» на ${days} дней. Стоимость — ${price}. После оплаты напишите сюда, и я включу продвижение (${color} выделение).`;
 
   if (username) {
     const url = `https://t.me/${encodeURIComponent(username)}?text=${encodeURIComponent(message)}`;
@@ -6346,12 +6544,13 @@ function renderAdminUsers(users = []) {
               <div class="admin-record-title-row">
                 <b>${escapeHTML(displayName)}</b>
                 ${user.banned ? '<span class="admin-badge danger">Заблокирован</span>' : ''}
+                ${user.is_business ? `<span class="admin-badge">${user.business_verified ? "✓ Бизнес 50" : "🏪 Проф. 10"}</span>` : ''}
               </div>
               <p>${escapeHTML(fullName || "Имя не указано")}</p>
               <div class="admin-record-meta">
                 <span>ID: ${escapeHTML(user.telegram_id)}</span>
                 <span>📦 ${Number(user.products_count) || 0}</span>
-                <span>Места: ${Number(user.listing_slots_used) || 0}/${Number(user.listing_limit) || 3}</span>
+                <span>Места: ${Number(user.listing_slots_used) || 0}/${Number(user.effective_listing_limit) || Number(user.listing_limit) || 3}</span>
                 <span>${escapeHTML(formatAdminDate(user.last_seen))}</span>
               </div>
             </div>
