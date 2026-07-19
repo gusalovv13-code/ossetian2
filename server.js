@@ -16,7 +16,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.19.0";
+const APP_VERSION = "1.19.1";
 const LEGAL_DOCUMENT_VERSION = "1.16.0";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -125,6 +125,18 @@ const AUTO_BACKUP_ENABLED = String(process.env.AUTO_BACKUP_ENABLED || "false").t
 const AUTO_BACKUP_INTERVAL_HOURS = Math.max(1, Math.min(168, Number(process.env.AUTO_BACKUP_INTERVAL_HOURS) || 24));
 const BACKUP_RETENTION_COUNT = Math.max(1, Math.min(90, Number(process.env.BACKUP_RETENTION_COUNT) || 7));
 const BACKUP_DIR = String(process.env.BACKUP_DIR || "./backups").trim();
+const SECURITY_EVENT_RETENTION_DAYS = Math.max(7, Math.min(3650, Number(process.env.SECURITY_EVENT_RETENTION_DAYS) || 90));
+const PAYMENT_PROVIDER_TIMEOUT_MS = Math.max(5_000, Math.min(60_000, Number(process.env.PAYMENT_PROVIDER_TIMEOUT_MS) || 15_000));
+const YOOKASSA_WEBHOOK_IP_CHECK = String(process.env.YOOKASSA_WEBHOOK_IP_CHECK || "false").toLowerCase() === "true";
+const ADMIN_SECOND_FACTOR_MAX_FAILURES = Math.max(3, Math.min(20, Number(process.env.ADMIN_SECOND_FACTOR_MAX_FAILURES) || 5));
+const ADMIN_SECOND_FACTOR_LOCK_MINUTES = Math.max(1, Math.min(1440, Number(process.env.ADMIN_SECOND_FACTOR_LOCK_MINUTES) || 15));
+const SLOW_REQUEST_MS = Math.max(100, Math.min(60_000, Number(process.env.SLOW_REQUEST_MS) || 2000));
+const PRODUCT_IMAGE_MAX_WIDTH = Math.max(800, Math.min(3000, Number(process.env.PRODUCT_IMAGE_MAX_WIDTH) || 1600));
+const PRODUCT_IMAGE_WEBP_QUALITY = Math.max(50, Math.min(95, Number(process.env.PRODUCT_IMAGE_WEBP_QUALITY) || 82));
+const PRODUCT_THUMBNAIL_WIDTH = Math.max(240, Math.min(1000, Number(process.env.PRODUCT_THUMBNAIL_WIDTH) || 640));
+const ALERT_TELEGRAM_CHAT_ID = String(process.env.ALERT_TELEGRAM_CHAT_ID || "").trim();
+const ERROR_ALERT_THRESHOLD = Math.max(2, Math.min(100, Number(process.env.ERROR_ALERT_THRESHOLD) || 10));
+const ERROR_ALERT_WINDOW_MS = Math.max(60_000, Math.min(60 * 60_000, Number(process.env.ERROR_ALERT_WINDOW_MS) || 5 * 60_000));
 const PROMOTION_PLANS = Object.freeze({
   boost: { id: "boost", label: "Поднять", days: Math.max(1, Number(process.env.PROMO_BOOST_DAYS) || 1), priceRub: Math.max(0, Number(process.env.PROMO_BOOST_PRICE_RUB) || 99), priority: 1 },
   vip: { id: "vip", label: "VIP", days: Math.max(1, Number(process.env.PROMO_VIP_DAYS) || 7), priceRub: Math.max(0, Number(process.env.PROMO_VIP_PRICE_RUB) || 299), priority: 2 },
@@ -210,6 +222,16 @@ const databaseState = {
 let databaseInitializationPromise = null;
 let lifecycleTimer = null;
 let backupTimer = null;
+const runtimeMetrics = {
+  startedAt: Date.now(),
+  requests: 0,
+  responses5xx: 0,
+  slowRequests: 0,
+  totalDurationMs: 0,
+  maxDurationMs: 0,
+  errorTimestamps: [],
+  lastErrorAlertAt: 0
+};
 
 if (IS_RENDER && IS_RENDER_POSTGRES && !DATABASE_SSL_CONFIGURED) {
   console.warn("DATABASE_SSL=false is ignored on Render; TLS has been forced on.");
@@ -260,6 +282,34 @@ app.use((req, res, next) => {
   if (IS_RENDER || PUBLIC_BASE_URL.startsWith("https://")) {
     res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   }
+  const startedAt = Date.now();
+  runtimeMetrics.requests += 1;
+  res.once("finish", () => {
+    const durationMs = Date.now() - startedAt;
+    runtimeMetrics.totalDurationMs += durationMs;
+    runtimeMetrics.maxDurationMs = Math.max(runtimeMetrics.maxDurationMs, durationMs);
+    if (res.statusCode >= 500) {
+      runtimeMetrics.responses5xx += 1;
+      const now = Date.now();
+      runtimeMetrics.errorTimestamps.push(now);
+      runtimeMetrics.errorTimestamps = runtimeMetrics.errorTimestamps.filter(timestamp => timestamp >= now - ERROR_ALERT_WINDOW_MS);
+      if (
+        ALERT_TELEGRAM_CHAT_ID &&
+        runtimeMetrics.errorTimestamps.length >= ERROR_ALERT_THRESHOLD &&
+        now - runtimeMetrics.lastErrorAlertAt >= ERROR_ALERT_WINDOW_MS
+      ) {
+        runtimeMetrics.lastErrorAlertAt = now;
+        callTelegramBotApi("sendMessage", {
+          chat_id: ALERT_TELEGRAM_CHAT_ID,
+          text: `⚠️ Алания Маркет: ${runtimeMetrics.errorTimestamps.length} ответов 5xx за последние ${Math.round(ERROR_ALERT_WINDOW_MS / 60000)} мин. Последний: ${req.method} ${req.path}, requestId=${req.requestId}`
+        }).catch(error => console.warn("Monitoring alert failed:", error?.message || error));
+      }
+    }
+    if (durationMs >= SLOW_REQUEST_MS) {
+      runtimeMetrics.slowRequests += 1;
+      console.warn(`[slow-request] ${req.method} ${req.path} ${res.statusCode} ${durationMs}ms requestId=${req.requestId}`);
+    }
+  });
   next();
 });
 
@@ -301,10 +351,16 @@ const searchRateLimiter = createMemoryRateLimiter({ prefix: "search", max: SEARC
 const aiRateLimiter = createMemoryRateLimiter({ prefix: "ai", max: AI_RATE_LIMIT_MAX, windowMs: 60_000 });
 const adminRateLimiter = createMemoryRateLimiter({ prefix: "admin", max: ADMIN_RATE_LIMIT_MAX, windowMs: 60_000 });
 const paymentRateLimiter = createMemoryRateLimiter({ prefix: "payment", max: 30, windowMs: 60_000 });
+const webhookRateLimiter = createMemoryRateLimiter({ prefix: "payment-webhook", max: 120, windowMs: 60_000 });
+const adminSecondFactorFailures = new Map();
 
 app.use(compression({ threshold: 1024 }));
 app.use("/api", apiRateLimiter);
 app.use("/api/admin", adminRateLimiter);
+app.use(["/api/admin", "/api/payments", "/api/me"], (req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
 app.use("/api", (req, res, next) => {
   if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) return mutationRateLimiter(req, res, next);
   return next();
@@ -1259,6 +1315,32 @@ function parseStoredDataImage(value) {
   };
 }
 
+async function optimizeStoredProductImage(value, { thumbnail = false } = {}) {
+  const normalized = normalizeProductImage(value);
+  if (!normalized || /^https:\/\//i.test(normalized)) return normalized;
+  const parsed = parseStoredDataImage(normalized);
+  if (!parsed) return "";
+  try {
+    const width = thumbnail ? PRODUCT_THUMBNAIL_WIDTH : PRODUCT_IMAGE_MAX_WIDTH;
+    const quality = thumbnail ? Math.max(50, PRODUCT_IMAGE_WEBP_QUALITY - 10) : PRODUCT_IMAGE_WEBP_QUALITY;
+    const output = await sharp(parsed.buffer, { limitInputPixels: 40_000_000 })
+      .rotate()
+      .resize({ width, withoutEnlargement: true })
+      .webp({ quality, effort: 4 })
+      .toBuffer();
+    if (!output.length || output.length > MAX_STORED_IMAGE_BYTES) return normalized;
+    return `data:image/webp;base64,${output.toString("base64")}`;
+  } catch (error) {
+    console.warn("Product image optimization fallback:", error?.message || error);
+    return normalized;
+  }
+}
+
+async function optimizeProductImageList(values = []) {
+  const normalized = values.map(normalizeProductImage).filter(Boolean).slice(0, 5);
+  return Promise.all(normalized.map(value => optimizeStoredProductImage(value)));
+}
+
 function normalizeProductImage(value) {
   const image = String(value ?? "").trim();
   if (!image) return "";
@@ -1572,7 +1654,12 @@ function normalizeAdTargetUrl(value) {
 }
 
 function isYooKassaConfigured() {
-  return PAYMENTS_ENABLED && PAYMENT_PROVIDER === "yookassa" && Boolean(YOOKASSA_SHOP_ID && YOOKASSA_SECRET_KEY && PUBLIC_BASE_URL);
+  let publicUrlOk = false;
+  try {
+    const parsed = new URL(PUBLIC_BASE_URL);
+    publicUrlOk = parsed.protocol === "https:" || (!IS_RENDER && ["localhost", "127.0.0.1"].includes(parsed.hostname));
+  } catch {}
+  return PAYMENTS_ENABLED && PAYMENT_PROVIDER === "yookassa" && Boolean(YOOKASSA_SHOP_ID && YOOKASSA_SECRET_KEY && publicUrlOk);
 }
 
 function yooKassaAuthorizationHeader() {
@@ -1583,6 +1670,7 @@ async function requestYooKassa(endpoint, options = {}) {
   if (!isYooKassaConfigured()) throw new Error("ЮKassa не настроена");
   const response = await fetch(`${YOOKASSA_API_URL}${endpoint}`, {
     ...options,
+    signal: options.signal || AbortSignal.timeout(PAYMENT_PROVIDER_TIMEOUT_MS),
     headers: {
       Authorization: yooKassaAuthorizationHeader(),
       "Content-Type": "application/json",
@@ -1598,6 +1686,74 @@ async function requestYooKassa(endpoint, options = {}) {
     throw error;
   }
   return payload;
+}
+
+const YOOKASSA_WEBHOOK_NETWORKS = Object.freeze([
+  "185.71.76.0/27",
+  "185.71.77.0/27",
+  "77.75.153.0/25",
+  "77.75.156.11/32",
+  "77.75.156.35/32",
+  "77.75.154.128/25",
+  "2a02:5180::/32"
+]);
+
+function normalizeRemoteIp(value) {
+  const raw = String(value || "").trim().split(",")[0].trim();
+  return raw.startsWith("::ffff:") ? raw.slice(7) : raw;
+}
+
+function ipv4ToInt(value) {
+  const parts = String(value).split(".").map(Number);
+  if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) return null;
+  return (((parts[0] * 256 + parts[1]) * 256 + parts[2]) * 256 + parts[3]) >>> 0;
+}
+
+function ipv4InCidr(ip, cidr) {
+  const [network, prefixRaw] = cidr.split("/");
+  const prefix = Number(prefixRaw);
+  const ipInt = ipv4ToInt(ip);
+  const networkInt = ipv4ToInt(network);
+  if (ipInt === null || networkInt === null || !Number.isInteger(prefix) || prefix < 0 || prefix > 32) return false;
+  const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+  return (ipInt & mask) === (networkInt & mask);
+}
+
+function expandIpv6(value) {
+  const input = String(value || "").toLowerCase().split("%")[0];
+  if (!input.includes(":")) return null;
+  const [leftRaw, rightRaw = ""] = input.split("::");
+  const left = leftRaw ? leftRaw.split(":").filter(Boolean) : [];
+  const right = rightRaw ? rightRaw.split(":").filter(Boolean) : [];
+  if (!input.includes("::") && left.length !== 8) return null;
+  const missing = 8 - left.length - right.length;
+  if (missing < 0) return null;
+  const groups = [...left, ...Array(missing).fill("0"), ...right];
+  if (groups.length !== 8 || groups.some(group => !/^[0-9a-f]{1,4}$/.test(group))) return null;
+  return groups.map(group => parseInt(group, 16));
+}
+
+function ipv6InCidr(ip, cidr) {
+  const [network, prefixRaw] = cidr.split("/");
+  const prefix = Number(prefixRaw);
+  const a = expandIpv6(ip);
+  const b = expandIpv6(network);
+  if (!a || !b || !Number.isInteger(prefix) || prefix < 0 || prefix > 128) return false;
+  let bits = prefix;
+  for (let i = 0; i < 8 && bits > 0; i += 1) {
+    const take = Math.min(16, bits);
+    const mask = take === 16 ? 0xffff : (0xffff << (16 - take)) & 0xffff;
+    if ((a[i] & mask) !== (b[i] & mask)) return false;
+    bits -= take;
+  }
+  return true;
+}
+
+function isAllowedYooKassaWebhookIp(value) {
+  const ip = normalizeRemoteIp(value);
+  if (isIP(ip) === 4) return YOOKASSA_WEBHOOK_NETWORKS.some(cidr => cidr.includes(".") && ipv4InCidr(ip, cidr));
+  if (isIP(ip) === 6) return YOOKASSA_WEBHOOK_NETWORKS.some(cidr => cidr.includes(":") && ipv6InCidr(ip, cidr));
+  return false;
 }
 
 function paymentAmountString(value) {
@@ -3093,8 +3249,8 @@ app.get("/api/ready", (req, res) => {
     ok: databaseState.ready,
     server: "online",
     database: databaseState.ready ? "ready" : "unavailable",
-    lastError: databaseState.ready ? "" : databaseState.lastError,
-    version: APP_VERSION
+    version: APP_VERSION,
+    requestId: req.requestId
   });
 });
 
@@ -3643,13 +3799,51 @@ app.post("/api/payments/promotion", requireTelegramAuth, syncTelegramUser, payme
     if (product.status !== "active" || product.hidden || (product.moderation_status || "approved") !== "approved") {
       return res.status(409).json({ ok: false, error: "Продвигать можно только активное и одобренное объявление" });
     }
-    const orderId = randomUUID();
-    const idempotenceKey = randomUUID();
     const amount = Number(plan.priceRub) || 0;
-    await pool.query(`
-      INSERT INTO payment_orders (id,user_id,product_id,purpose,plan,amount,currency,status,provider,idempotence_key,metadata)
-      VALUES ($1,$2,$3,'promotion',$4,$5,'RUB','creating','yookassa',$6,$7::jsonb)
-    `, [orderId, userId, productId, plan.id, amount, idempotenceKey, JSON.stringify({ productName: product.name || "", planLabel: plan.label })]);
+    const orderClient = await pool.connect();
+    let orderId = "";
+    let idempotenceKey = "";
+    try {
+      await orderClient.query("BEGIN");
+      await orderClient.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`promotion:${userId}:${productId}:${plan.id}`]);
+      await orderClient.query(`
+        UPDATE payment_orders SET status='failed', updated_at=NOW()
+        WHERE user_id=$1 AND product_id=$2 AND plan=$3 AND status='creating'
+          AND created_at < NOW() - INTERVAL '15 minutes'
+      `, [userId, productId, plan.id]);
+      const existingResult = await orderClient.query(`
+        SELECT id, status, confirmation_url, amount, currency
+        FROM payment_orders
+        WHERE user_id=$1 AND product_id=$2 AND plan=$3
+          AND purpose='promotion' AND status IN ('creating','pending','waiting_for_capture')
+        ORDER BY created_at DESC LIMIT 1
+      `, [userId, productId, plan.id]);
+      if (existingResult.rows.length) {
+        await orderClient.query("COMMIT");
+        const existing = existingResult.rows[0];
+        return res.status(existing.confirmation_url ? 200 : 202).json({
+          ok: true,
+          reused: true,
+          orderId: existing.id,
+          status: existing.status,
+          confirmationUrl: existing.confirmation_url || "",
+          amount: Number(existing.amount) || amount,
+          currency: existing.currency || "RUB"
+        });
+      }
+      orderId = randomUUID();
+      idempotenceKey = randomUUID();
+      await orderClient.query(`
+        INSERT INTO payment_orders (id,user_id,product_id,purpose,plan,amount,currency,status,provider,idempotence_key,metadata)
+        VALUES ($1,$2,$3,'promotion',$4,$5,'RUB','creating','yookassa',$6,$7::jsonb)
+      `, [orderId, userId, productId, plan.id, amount, idempotenceKey, JSON.stringify({ productName: product.name || "", planLabel: plan.label })]);
+      await orderClient.query("COMMIT");
+    } catch (orderError) {
+      await orderClient.query("ROLLBACK").catch(() => {});
+      throw orderError;
+    } finally {
+      orderClient.release();
+    }
 
     try {
       const payment = await requestYooKassa("/payments", {
@@ -3701,21 +3895,34 @@ app.get("/api/payments/:id", requireTelegramAuth, syncTelegramUser, paymentRateL
   }
 });
 
-app.post("/api/payments/yookassa/webhook", paymentRateLimiter, async (req, res) => {
+app.post("/api/payments/yookassa/webhook", webhookRateLimiter, async (req, res) => {
   try {
     if (!isYooKassaConfigured()) return res.status(503).json({ ok: false });
+    if (YOOKASSA_WEBHOOK_IP_CHECK && !isAllowedYooKassaWebhookIp(req.ip || req.socket?.remoteAddress)) {
+      await recordSecurityEvent(req, "payment_webhook_rejected_ip", "high", {}).catch(() => {});
+      return res.status(403).json({ ok: false });
+    }
+    const type = normalizeText(req.body?.type, 40);
     const providerPaymentId = normalizeText(req.body?.object?.id, 100);
     const event = normalizeText(req.body?.event, 80);
-    if (!providerPaymentId || !event.startsWith("payment.")) return res.status(400).json({ ok: false });
-    // Не доверяем телу webhook: повторно получаем платёж у ЮKassa по Basic Auth.
+    const allowedEvents = new Set(["payment.waiting_for_capture", "payment.succeeded", "payment.canceled"]);
+    if (type !== "notification" || !/^[a-zA-Z0-9_-]{8,100}$/.test(providerPaymentId) || !allowedEvents.has(event)) {
+      await recordSecurityEvent(req, "payment_webhook_invalid_payload", "warning", { event }).catch(() => {});
+      return res.status(400).json({ ok: false });
+    }
+    // Тело webhook не является источником истины: актуальный объект повторно получаем у ЮKassa.
     const payment = await requestYooKassa(`/payments/${encodeURIComponent(providerPaymentId)}`, { method: "GET" });
-    const orderId = normalizeText(payment.metadata?.order_id, 64);
-    if (!orderId) return res.status(200).json({ ok: true, ignored: true });
+    const orderResult = await pool.query(`SELECT id FROM payment_orders WHERE provider_payment_id=$1 LIMIT 1`, [providerPaymentId]);
+    const orderId = String(orderResult.rows[0]?.id || "");
+    if (!orderId) {
+      await recordSecurityEvent(req, "payment_webhook_unknown_payment", "warning", { providerPaymentId }).catch(() => {});
+      return res.status(200).json({ ok: true, ignored: true });
+    }
     await finalizePaymentOrder(orderId, payment);
     res.status(200).json({ ok: true });
   } catch (error) {
     console.error("YooKassa webhook error:", error);
-    // 500 заставит провайдера повторить уведомление; обработка заказа идемпотентна.
+    // ЮKassa повторяет доставку при ответе не 200; finalizePaymentOrder идемпотентен.
     res.status(500).json({ ok: false });
   }
 });
@@ -4439,10 +4646,10 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
     }
 
     const sourceImages = Array.isArray(images) ? images : [];
-    const cleanImages = sourceImages.map(normalizeProductImage).filter(Boolean).slice(0, 5);
-    const fallbackImage = normalizeProductImage(image);
+    const cleanImages = await optimizeProductImageList(sourceImages);
+    const fallbackImage = await optimizeStoredProductImage(image);
     if (cleanImages.length === 0 && fallbackImage) cleanImages.push(fallbackImage);
-    const cleanThumbnail = normalizeProductImage(thumbnail) || cleanImages[0] || "";
+    const cleanThumbnail = await optimizeStoredProductImage(thumbnail || cleanImages[0] || "", { thumbnail: true });
 
     await client.query("BEGIN");
     await recordListingLegalAcceptances(client, req.telegramUser.id, { publicPhoneConsent, publicTelegramConsent });
@@ -4622,11 +4829,10 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
       });
     }
 
-    const cleanImages = (Array.isArray(images) ? images : [])
-      .map(normalizeProductImage).filter(Boolean).slice(0, 5);
-    const fallbackImage = normalizeProductImage(image);
+    const cleanImages = await optimizeProductImageList(Array.isArray(images) ? images : []);
+    const fallbackImage = await optimizeStoredProductImage(image);
     if (cleanImages.length === 0 && fallbackImage) cleanImages.push(fallbackImage);
-    const requestedThumbnail = normalizeProductImage(thumbnail);
+    const requestedThumbnail = await optimizeStoredProductImage(thumbnail || cleanImages[0] || "", { thumbnail: true });
 
     await client.query("BEGIN");
     const existingResult = await client.query(
@@ -5752,17 +5958,30 @@ function requireAdmin(req, res, next) {
   }
 
   if (ADMIN_ACCESS_CODE_SHA256) {
+    const now = Date.now();
+    const failure = adminSecondFactorFailures.get(id);
+    if (failure?.lockedUntil > now) {
+      res.setHeader("Retry-After", String(Math.max(1, Math.ceil((failure.lockedUntil - now) / 1000))));
+      return res.status(429).json({ ok: false, code: "ADMIN_SECOND_FACTOR_LOCKED", error: "Слишком много неверных попыток. Повторите позже" });
+    }
     const supplied = String(req.headers["x-admin-access-code"] || "");
     const suppliedHash = createHash("sha256").update(supplied).digest("hex");
     const expected = Buffer.from(ADMIN_ACCESS_CODE_SHA256, "hex");
     const actual = Buffer.from(suppliedHash, "hex");
-    const valid = expected.length === actual.length && expected.length > 0 && timingSafeEqual(expected, actual);
+    const valid = expected.length === actual.length && expected.length === 32 && timingSafeEqual(expected, actual);
     if (!valid) {
-      recordSecurityEvent(req, "admin_second_factor_failed", "high", { telegramId: id }).catch(() => {});
+      const attempts = (failure?.attempts || 0) + 1;
+      const lockedUntil = attempts >= ADMIN_SECOND_FACTOR_MAX_FAILURES
+        ? now + ADMIN_SECOND_FACTOR_LOCK_MINUTES * 60_000
+        : 0;
+      adminSecondFactorFailures.set(id, { attempts: lockedUntil ? 0 : attempts, lockedUntil });
+      recordSecurityEvent(req, "admin_second_factor_failed", "high", { telegramId: id, locked: Boolean(lockedUntil) }).catch(() => {});
       return res.status(401).json({ ok: false, code: "ADMIN_SECOND_FACTOR_REQUIRED", error: "Требуется код дополнительной защиты администратора" });
     }
+    adminSecondFactorFailures.delete(id);
   }
 
+  res.setHeader("Cache-Control", "no-store");
   next();
 }
 
@@ -5864,6 +6083,42 @@ app.get(
 
 
 app.get(
+  "/api/admin/system-health",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    let databaseLatencyMs = null;
+    try {
+      const started = Date.now();
+      await pool.query("SELECT 1");
+      databaseLatencyMs = Date.now() - started;
+    } catch {}
+    const memory = process.memoryUsage();
+    res.json({
+      ok: true,
+      version: APP_VERSION,
+      uptimeSeconds: Math.floor(process.uptime()),
+      database: databaseState.ready ? "ready" : "unavailable",
+      databaseLatencyMs,
+      requests: runtimeMetrics.requests,
+      responses5xx: runtimeMetrics.responses5xx,
+      slowRequests: runtimeMetrics.slowRequests,
+      averageDurationMs: runtimeMetrics.requests ? Number((runtimeMetrics.totalDurationMs / runtimeMetrics.requests).toFixed(1)) : 0,
+      maxDurationMs: runtimeMetrics.maxDurationMs,
+      memoryMb: {
+        rss: Number((memory.rss / 1024 / 1024).toFixed(1)),
+        heapUsed: Number((memory.heapUsed / 1024 / 1024).toFixed(1))
+      },
+      paymentsConfigured: isYooKassaConfigured(),
+      aiConfigured: Boolean(OPENAI_API_KEY),
+      autoBackupEnabled: AUTO_BACKUP_ENABLED,
+      backupRetentionCount: BACKUP_RETENTION_COUNT
+    });
+  })
+);
+
+app.get(
   "/api/admin/business-verifications",
   requireTelegramAuth,
   syncTelegramUser,
@@ -5947,8 +6202,8 @@ app.post(
   requireAdmin,
   adminRoute(async (req, res) => {
     const result = await createDatabaseBackup(pool, { backupDir: BACKUP_DIR, retention: BACKUP_RETENTION_COUNT, appVersion: APP_VERSION });
-    await addAdminLog(req.telegramUser.id, "database_backup_create", result.filename || "backup", `${result.bytes || 0} bytes`);
-    res.json({ ok: true, backup: { filename: result.filename, bytes: result.bytes } });
+    await addAdminLog(req.telegramUser.id, "database_backup_create", result.filename || "backup", `${result.bytes || 0} bytes; sha256=${result.checksum || ""}`);
+    res.json({ ok: true, backup: { filename: result.filename, bytes: result.bytes, checksum: result.checksum, rowCounts: result.rowCounts } });
   })
 );
 
@@ -7249,6 +7504,9 @@ async function runProductLifecycleMaintenance() {
       `,
       [DELETED_PRODUCT_RETENTION_DAYS]
     );
+
+    await pool.query(`DELETE FROM security_events WHERE created_at < NOW() - ($1::int * INTERVAL '1 day')`, [SECURITY_EVENT_RETENTION_DAYS]);
+    await pool.query(`UPDATE payment_orders SET status='failed', updated_at=NOW() WHERE status='creating' AND created_at < NOW() - INTERVAL '15 minutes'`);
 
     if (archived.rowCount || soldCleanup.rowCount || purged.rowCount) {
       console.log(

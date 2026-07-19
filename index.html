@@ -15,8 +15,8 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <link rel="manifest" href="manifest.webmanifest?v=1.17.0" />
-  <link rel="stylesheet" href="style.css?v=1.17.0" />
+  <link rel="manifest" href="manifest.webmanifest?v=1.19.1" />
+  <link rel="stylesheet" href="style.css?v=1.19.1" />
 </head>
 
 <body>
@@ -422,6 +422,15 @@
 
       <div id="photoPreview" class="photo-grid"></div>
 
+      <section id="aiListingAssistant" class="ai-listing-assistant" hidden>
+        <div>
+          <b>✨ Умное заполнение</b>
+          <small>AI попробует определить товар по первому фото и подготовить название, категорию, описание и характеристики. Всё можно изменить перед публикацией.</small>
+        </div>
+        <button id="aiListingAssistantBtn" type="button" class="outline" onclick="runAiListingAssistant()">✨ Заполнить с AI</button>
+        <p id="aiListingAssistantStatus" class="field-hint" hidden></p>
+      </section>
+
       <section id="catalogCoverPreview" class="catalog-cover-preview" hidden aria-live="polite">
         <div class="catalog-cover-frame">
           <img id="catalogCoverPreviewImage" alt="Предпросмотр обложки каталога" />
@@ -516,6 +525,8 @@
         <span>Разрешить сообщения в Telegram</span>
         <input id="adAllowMessages" type="checkbox" checked />
       </div>
+      <label class="legal-consent-row"><input id="adPublicPhoneConsent" type="checkbox" /><span>Согласен на публичное отображение номера телефона в объявлении</span></label>
+      <label class="legal-consent-row"><input id="adPublicTelegramConsent" type="checkbox" /><span>Согласен на публичное отображение Telegram-контакта</span></label>
 
       <section id="listingQuality" class="quality-card" aria-live="polite">
         <div class="quality-header">
@@ -629,6 +640,18 @@
         ♡ Избранное <b>12</b>
       </button>
 
+      <button onclick="showPage('sellerAnalytics')" class="profile-row" type="button">
+        📊 Аналитика продавца
+      </button>
+
+      <button onclick="openBusinessVerificationDialog()" class="profile-row" type="button">
+        ✅ Верификация бизнеса
+      </button>
+
+      <button onclick="openPaymentHistoryDialog()" class="profile-row" type="button">
+        💳 Платежи и продвижение
+      </button>
+
       <button onclick="showPage('chats')" class="profile-row" type="button">
         💬 Чаты
       </button>
@@ -643,6 +666,29 @@
     </section>
 
 
+    <section id="sellerAnalytics" class="page">
+      <section class="analytics-hero">
+        <div>
+          <small>Панель продавца</small>
+          <h2>📊 Аналитика</h2>
+          <p>Просмотры, избранное, продажи, продвижение и уровень доверия.</p>
+        </div>
+        <button type="button" class="outline" onclick="loadSellerAnalytics(true)">Обновить</button>
+      </section>
+      <div id="sellerAnalyticsSummary" class="analytics-grid">
+        <div class="analytics-card skeleton-card">Загрузка…</div>
+      </div>
+      <section class="analytics-section">
+        <div class="related-heading"><h3>Уникальные просмотры за 14 дней</h3><small>с момента обновления</small></div>
+        <div id="sellerAnalyticsChart" class="analytics-chart"></div>
+      </section>
+      <section class="analytics-section">
+        <div class="related-heading"><h3>Лучшие объявления</h3><small>по просмотрам</small></div>
+        <div id="sellerAnalyticsProducts" class="analytics-product-list"></div>
+      </section>
+    </section>
+
+
     <section id="sellerProfile" class="page">
       <div class="seller-profile-card">
         <div id="sellerAvatar" class="seller-avatar">👤</div>
@@ -652,6 +698,10 @@
         <div id="sellerBusinessBadge" class="business-profile-badge" hidden></div>
         <p id="sellerProfileDescription" class="seller-profile-description" hidden></p>
         <div id="sellerBusinessBlock" class="seller-business-block" hidden></div>
+        <div id="sellerStorefront" class="seller-storefront" hidden>
+          <div class="seller-storefront-heading"><span>🏪 Витрина магазина</span><small id="sellerStorefrontSubtitle"></small></div>
+          <div id="sellerStoreCategories" class="seller-store-categories"></div>
+        </div>
         <div id="sellerProfileContacts" class="seller-contact-list"></div>
         <button id="sellerMessageButton" class="primary seller-message-button" type="button">💬 Написать продавцу</button>
 
@@ -774,6 +824,7 @@
     <div class="admin-tabs" role="tablist" aria-label="Разделы админ-панели">
       <button data-admin-tab="products" class="active" onclick="loadAdminPanel()" type="button">📦 Объявления</button>
       <button data-admin-tab="featureRequests" onclick="loadAdminFeatureRequests()" type="button">★ Выделение</button>
+      <button data-admin-tab="businessVerifications" onclick="loadAdminBusinessVerifications()" type="button">✅ Верификация</button>
       <button data-admin-tab="reports" onclick="loadAdminReports()" type="button">⚑ Жалобы</button>
       <button data-admin-tab="moderation" onclick="loadAdminModeration()" type="button">🛡 Автомодерация</button>
       <button data-admin-tab="ads" onclick="loadAdminAds()" type="button">📣 Реклама</button>
@@ -819,6 +870,15 @@
         <span><b>Спокойное выделение</b><small>Единый тёмно-зелёный стиль, как в каталоге</small></span>
       </div>
 
+      <label class="promotion-plan-field" for="highlightPlanSelect">
+        <span>Тариф продвижения</span>
+        <select id="highlightPlanSelect" onchange="updateHighlightPlanSummary()">
+          <option value="boost">🚀 Поднять — 1 день</option>
+          <option value="vip" selected>👑 VIP — 7 дней</option>
+          <option value="premium">💎 Премиум — 14 дней</option>
+        </select>
+      </label>
+
       <div id="highlightRequestSummary" class="highlight-request-summary"></div>
 
       <div class="dialog-actions">
@@ -826,6 +886,35 @@
         <button id="submitHighlightRequestBtn" type="submit" class="primary">Отправить заявку</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="legalOnboardingDialog" class="profile-edit-dialog">
+    <form onsubmit="submitCoreLegalAcceptances(event)">
+      <div class="dialog-heading"><div><small>Документы сервиса</small><h3>Согласия</h3></div></div>
+      <label class="legal-consent-row"><input id="coreTermsAccepted" type="checkbox" required><span>Я принимаю <a href="legal/#agreement" target="_blank">Пользовательское соглашение</a></span></label>
+      <label class="legal-consent-row"><input id="corePdConsentAccepted" type="checkbox" required><span>Я отдельно даю согласие на обработку персональных данных</span></label>
+      <div class="dialog-actions"><button type="submit" class="primary">Продолжить</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="businessVerificationDialog" class="profile-edit-dialog business-verification-dialog">
+    <form onsubmit="submitBusinessVerification(event)">
+      <div class="dialog-heading"><div><small>Проверенный бизнес</small><h3>Верификация компании</h3></div><button type="button" class="dialog-close" onclick="closeBusinessVerificationDialog()" aria-label="Закрыть">×</button></div>
+      <p id="businessVerificationStatus" class="muted">Загружаем статус…</p>
+      <label for="businessVerificationLegalName">Юридическое название</label><input id="businessVerificationLegalName" maxlength="180" required placeholder="ООО / ИП ...">
+      <label for="businessVerificationInn">ИНН</label><input id="businessVerificationInn" inputmode="numeric" maxlength="12" required placeholder="10 или 12 цифр">
+      <label for="businessVerificationOgrn">ОГРН / ОГРНИП</label><input id="businessVerificationOgrn" inputmode="numeric" maxlength="15" placeholder="Необязательно">
+      <label for="businessVerificationPhone">Контактный телефон</label><input id="businessVerificationPhone" inputmode="tel" maxlength="30" placeholder="+7 ...">
+      <label for="businessVerificationComment">Комментарий</label><textarea id="businessVerificationComment" maxlength="1000" rows="3" placeholder="Дополнительная информация"></textarea>
+      <p class="muted profile-edit-hint">После проверки администратором профиль получит отметку «Проверенный бизнес» и лимит не менее 50 активных объявлений.</p>
+      <div class="dialog-actions"><button type="button" class="outline" onclick="closeBusinessVerificationDialog()">Закрыть</button><button id="submitBusinessVerificationBtn" type="submit" class="primary">Отправить на проверку</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="paymentHistoryDialog" class="profile-edit-dialog payment-history-dialog">
+    <div class="dialog-heading"><div><small>Монетизация</small><h3>Платежи и продвижение</h3></div><button type="button" class="dialog-close" onclick="closePaymentHistoryDialog()" aria-label="Закрыть">×</button></div>
+    <div id="paymentHistoryList" class="payment-history-list"><p class="muted">Загрузка…</p></div>
+    <div class="dialog-actions"><button type="button" class="primary" onclick="closePaymentHistoryDialog()">Готово</button></div>
   </dialog>
 
   <dialog id="profileEditDialog" class="profile-edit-dialog">
@@ -875,7 +964,7 @@
 
         <label for="profileEditBusinessWebsite">Сайт</label>
         <input id="profileEditBusinessWebsite" maxlength="180" inputmode="url" placeholder="example.ru" />
-        <p class="muted profile-edit-hint">Бизнес-профиль доступен бесплатно. Повышенный лимит объявлений подключается отдельно через поддержку.</p>
+        <p class="muted profile-edit-hint">Профессиональный продавец получает до 10 объявлений бесплатно. Подтверждённый или платный бизнес — до 50 объявлений.</p>
       </div>
 
       <div class="dialog-actions">
@@ -977,6 +1066,6 @@
   </div>
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">←</div>
 
-  <script src="script.js?v=1.17.0"></script>
+  <script src="script.js?v=1.19.1"></script>
 </body>
 </html>
