@@ -8081,3 +8081,117 @@ body.dark-mode .seller-store-categories span { background: #2a2f34; border-color
   white-space: nowrap;
   font-size: 9px;
 }
+
+/* ===== v1.18.3: uniform compact catalog cards ===== */
+/*
+ * Keep every tile in the two-column catalog the same size while preserving
+ * enough room for business/discount/vacancy badges. Content stays top-aligned
+ * so one-line titles no longer create a large gap before the price.
+ */
+#productList.product-list,
+#favorites .product-list {
+  grid-auto-rows: 250px;
+  align-items: stretch;
+}
+
+#productList.product-list > .product-card,
+#productList > .product-card.is-featured:not(.owner-product-card),
+#favorites .product-list > .product-card {
+  box-sizing: border-box;
+  height: 250px;
+  min-height: 250px;
+  max-height: 250px;
+  overflow: hidden;
+}
+
+#productList.product-list > .advertising-feed {
+  box-sizing: border-box;
+  height: 250px;
+  min-height: 250px;
+  max-height: 250px;
+}
+
+#productList > .product-card:not(.owner-product-card) > img,
+#productList > .product-card.is-featured:not(.owner-product-card) > img,
+#favorites .product-list > .product-card > img {
+  height: 104px;
+  margin-bottom: 6px;
+}
+
+#productList > .product-card:not(.owner-product-card) > div,
+#favorites .product-list > .product-card > div {
+  display: block;
+  overflow: hidden;
+}
+
+/* Compact badges so multiple labels fit without increasing card height. */
+#productList .business-card-badge,
+#productList .price-drop-card-badge,
+#productList .vacancy-card-badge,
+#favorites .business-card-badge,
+#favorites .price-drop-card-badge,
+#favorites .vacancy-card-badge {
+  min-height: 0;
+  margin: 0 0 2px;
+  padding: 2px 6px;
+  font-size: 8.5px;
+  line-height: 1.1;
+}
+
+/* Remove the old reserved two-line title height: price follows title directly. */
+#productList > .product-card:not(.owner-product-card) h4,
+#productList > .product-card.is-featured:not(.owner-product-card) h4,
+#favorites .product-list > .product-card h4 {
+  min-height: 0;
+  margin: 1px 0 3px;
+  line-height: 1.15;
+  -webkit-line-clamp: 2;
+}
+
+#productList .salary-caption,
+#favorites .salary-caption {
+  margin: 0 0 1px;
+  line-height: 1.05;
+}
+
+#productList .card-price-row,
+#favorites .card-price-row {
+  margin: 0 0 3px !important;
+  line-height: 1.1;
+}
+
+#productList > .product-card:not(.owner-product-card) p,
+#favorites .product-list > .product-card p {
+  margin: 0;
+  line-height: 1.15;
+}
+
+/* Vacancy cards no longer need a special shorter photo because all cards share
+ * one compact geometry. */
+#productList > .product-card.is-vacancy-card:not(.owner-product-card) > img {
+  height: 104px;
+  margin-bottom: 6px;
+}
+
+@media (max-width: 360px) {
+  #productList.product-list,
+  #favorites .product-list {
+    grid-auto-rows: 242px;
+  }
+
+  #productList.product-list > .product-card,
+  #productList > .product-card.is-featured:not(.owner-product-card),
+  #productList.product-list > .advertising-feed,
+  #favorites .product-list > .product-card {
+    height: 242px;
+    min-height: 242px;
+    max-height: 242px;
+  }
+
+  #productList > .product-card:not(.owner-product-card) > img,
+  #productList > .product-card.is-featured:not(.owner-product-card) > img,
+  #productList > .product-card.is-vacancy-card:not(.owner-product-card) > img,
+  #favorites .product-list > .product-card > img {
+    height: 98px;
+  }
+}
