@@ -7975,3 +7975,89 @@ body.dark-mode .analytics-product-row small,
 body.dark-mode .seller-storefront-heading small { color: #aeb5c2; }
 body.dark-mode .analytics-product-row { background: #2b2f36; color: #f4f5f7; }
 body.dark-mode .seller-store-categories span { background: #2a2f34; border-color: #3b4740; }
+
+/* ===== v1.18.1: adaptive catalog card height for badges/business/vacancies ===== */
+/*
+ * v1.14.1 fixed catalog cards to 226px. New business, discount and vacancy
+ * badges can legitimately need more vertical space, so rows now keep 226px as
+ * a compact minimum and grow only when their content requires it.
+ */
+#productList.product-list {
+  grid-auto-rows: minmax(226px, auto);
+}
+
+#productList.product-list > .product-card,
+#productList.product-list > .advertising-feed,
+#productList > .product-card.is-featured:not(.owner-product-card) {
+  height: auto;
+  min-height: 226px;
+}
+
+/* Favorites use the same card markup and must not clip new seller badges. */
+#favorites .product-list {
+  grid-auto-rows: minmax(226px, auto);
+  align-items: stretch;
+}
+
+#favorites .product-list > .product-card {
+  height: auto;
+  min-height: 226px;
+}
+
+/* Keep compact badges on one line inside narrow two-column cards. */
+#productList .business-card-badge,
+#productList .price-drop-card-badge,
+#productList .vacancy-card-badge,
+#favorites .business-card-badge,
+#favorites .price-drop-card-badge,
+#favorites .vacancy-card-badge {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+/* Location/time stays in the flow and therefore remains visible at the bottom. */
+#productList > .product-card:not(.owner-product-card) > div,
+#favorites .product-list > .product-card > div {
+  overflow: visible;
+}
+
+/* Very narrow Telegram WebViews: save a little vertical space without hiding data. */
+@media (max-width: 360px) {
+  #productList .business-card-badge,
+  #productList .price-drop-card-badge,
+  #productList .vacancy-card-badge,
+  #favorites .business-card-badge,
+  #favorites .price-drop-card-badge,
+  #favorites .vacancy-card-badge {
+    margin-bottom: 3px;
+    padding: 3px 6px;
+    font-size: 9px;
+    line-height: 1.1;
+  }
+}
+
+/* Related carousel can also receive the professional-seller badge. */
+.related-products > .product-card,
+.related-products > .product-card.is-featured:not(.owner-product-card) {
+  height: auto;
+  min-height: 205px;
+  max-height: none;
+}
+
+.related-products > .product-card > div,
+.related-products > .product-card.is-featured:not(.owner-product-card) > div {
+  overflow: visible;
+}
+
+.related-products .business-card-badge {
+  max-width: 100%;
+  margin-bottom: 3px;
+  padding: 3px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 9px;
+}
