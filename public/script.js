@@ -6792,11 +6792,16 @@ function renderAdminUsers(users = []) {
               <div class="admin-record-meta">
                 <span>ID: ${escapeHTML(user.telegram_id)}</span>
                 <span>📦 ${Number(user.products_count) || 0}</span>
-                <span>Места: ${Number(user.listing_slots_used) || 0}/${user.is_business ? "∞" : 3}</span>
+                <span>Места: ${Number(user.listing_slots_used) || 0}/${user.is_business ? "∞" : (Number(user.effective_listing_limit ?? user.listing_limit) || 3)}</span>
                 <span>${escapeHTML(formatAdminDate(user.last_seen))}</span>
               </div>
             </div>
             <div class="admin-user-actions">
+              <div class="admin-limit-control">
+                <span>${user.is_business ? "Подписка активна: сейчас безлимит. Ручной лимит применится после её окончания." : "Индивидуальный лимит объявлений"}</span>
+                <input id="listingLimit-${escapeHTML(user.telegram_id)}" type="number" min="1" max="100000" inputmode="numeric" value="${Number(user.listing_limit) || 3}" aria-label="Лимит объявлений для ${escapeHTML(displayName)}">
+                <button class="admin-action-button" type="button" onclick="updateAdminListingLimit('${escapeHTML(user.telegram_id)}', this)">Сохранить</button>
+              </div>
               <button
                 class="admin-action-button ${user.banned ? "restore" : "danger"}"
                 type="button"
@@ -7713,6 +7718,38 @@ async function toggleAdminUserBan(id, button) {
 }
 
 
+async function updateAdminListingLimit(id, button) {
+  if (!id || button?.disabled) return;
+  const input = document.getElementById(`listingLimit-${id}`);
+  const limit = Number.parseInt(String(input?.value || ""), 10);
+
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100000) {
+    alert("Укажите лимит от 1 до 100000 объявлений");
+    return;
+  }
+
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Сохраняем…";
+  }
+
+  try {
+    await apiRequest(`/api/admin/users/${encodeURIComponent(id)}/listing-limit`, {
+      method: "PATCH",
+      body: JSON.stringify({ limit })
+    });
+    showToast(`Лимит изменён: ${limit}`);
+    await loadAdminUsers();
+  } catch (error) {
+    console.error("Update listing limit error:", error);
+    alert(error.message || "Не удалось изменить лимит");
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Сохранить";
+    }
+  }
+}
+
 function searchAdmin() {
   window.clearTimeout(adminState.searchTimer);
   adminState.searchTimer = window.setTimeout(runAdminSearch, 300);
@@ -7797,13 +7834,20 @@ async function runAdminSearch() {
               <span>📦 ${Number(user.products_count) || 0}</span>
             </div>
           </div>
-          <button
-            class="admin-action-button ${user.banned ? "restore" : "danger"}"
-            type="button"
-            onclick="toggleAdminUserBan('${escapeHTML(user.telegram_id)}', this)"
-          >
-            ${user.banned ? "Разблокировать" : "Заблокировать"}
-          </button>
+          <div class="admin-user-actions">
+            <div class="admin-limit-control">
+              <span>${user.is_business ? "Подписка активна: сейчас безлимит" : "Индивидуальный лимит"}</span>
+              <input id="listingLimit-${escapeHTML(user.telegram_id)}" type="number" min="1" max="100000" inputmode="numeric" value="${Number(user.listing_limit) || 3}" aria-label="Лимит объявлений для ${escapeHTML(displayName)}">
+              <button class="admin-action-button" type="button" onclick="updateAdminListingLimit('${escapeHTML(user.telegram_id)}', this)">Сохранить</button>
+            </div>
+            <button
+              class="admin-action-button ${user.banned ? "restore" : "danger"}"
+              type="button"
+              onclick="toggleAdminUserBan('${escapeHTML(user.telegram_id)}', this)"
+            >
+              ${user.banned ? "Разблокировать" : "Заблокировать"}
+            </button>
+          </div>
         </article>
       `;
     }).join("");

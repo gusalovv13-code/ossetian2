@@ -7979,7 +7979,7 @@ body.dark-mode .business-profile-toggle {
   padding: 12px;
   display: flex;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
   text-align: left;
   color: inherit;
 }
@@ -8275,3 +8275,42 @@ body { overflow-x: hidden; }
 }
 .legal-consent-row { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; line-height: 1.35; }
 .legal-consent-row input[type="checkbox"] { width: 20px !important; height: 20px !important; min-width: 20px; flex: 0 0 20px; margin-top: 1px; }
+
+/* ===== v1.19.3: profile subscription row + admin custom listing limits ===== */
+.professional-subscription-row {
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+}
+
+.professional-subscription-row .profile-row-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  line-height: 1.2;
+  font-size: clamp(12px, 3.7vw, 14px);
+  white-space: nowrap;
+}
+
+.professional-subscription-row #professionalSubscriptionStatus {
+  flex: 0 0 auto;
+  margin-left: auto;
+  text-align: right;
+  white-space: nowrap;
+  font-size: clamp(11px, 3.4vw, 14px);
+}
+
+@media (max-width: 360px) {
+  .professional-subscription-row {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+  .professional-subscription-row .profile-row-label {
+    font-size: 14px;
+  }
+  .professional-subscription-row #professionalSubscriptionStatus {
+    font-size: 13px;
+  }
+}

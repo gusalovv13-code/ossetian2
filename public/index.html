@@ -15,8 +15,8 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <link rel="manifest" href="manifest.webmanifest?v=1.19.2" />
-  <link rel="stylesheet" href="style.css?v=1.19.2" />
+  <link rel="manifest" href="manifest.webmanifest?v=1.19.3" />
+  <link rel="stylesheet" href="style.css?v=1.19.3" />
 </head>
 
 <body>
@@ -647,8 +647,9 @@
         📊 Аналитика продавца
       </button>
 
-      <button id="professionalSubscriptionRow" onclick="buyProfessionalSubscription()" class="profile-row" type="button">
-        🏪 Профессиональный продавец <b id="professionalSubscriptionStatus">Подключить</b>
+      <button id="professionalSubscriptionRow" onclick="buyProfessionalSubscription()" class="profile-row professional-subscription-row" type="button">
+        <span class="profile-row-label"><span aria-hidden="true">🏪</span><span>Профессиональный продавец</span></span>
+        <b id="professionalSubscriptionStatus">Подключить</b>
       </button>
 
       <button onclick="openPaymentHistoryDialog()" class="profile-row" type="button">
@@ -1053,6 +1054,6 @@
   </div>
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">←</div>
 
-  <script src="script.js?v=1.19.2"></script>
+  <script src="script.js?v=1.19.3"></script>
 </body>
 </html>

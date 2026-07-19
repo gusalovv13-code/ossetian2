@@ -16,7 +16,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.19.2";
+const APP_VERSION = "1.19.3";
 const LEGAL_DOCUMENT_VERSION = "1.16.0";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -97,6 +97,7 @@ const DELETED_PRODUCT_RETENTION_DAYS = Math.max(1, Math.min(3650, Number(process
 const FEATURE_HIGHLIGHT_PRICE_RUB = Math.max(0, Number(process.env.FEATURE_HIGHLIGHT_PRICE_RUB) || 199);
 const FEATURE_HIGHLIGHT_DAYS = Math.max(1, Math.min(90, Number(process.env.FEATURE_HIGHLIGHT_DAYS) || 7));
 const DEFAULT_LISTING_LIMIT = 3;
+const MAX_LISTING_LIMIT = 100000;
 const PROFESSIONAL_SUBSCRIPTION_PRICE_RUB = Math.max(0, Number(process.env.PROFESSIONAL_SUBSCRIPTION_PRICE_RUB) || 499);
 const PROFESSIONAL_SUBSCRIPTION_DAYS = Math.max(1, Math.min(365, Number(process.env.PROFESSIONAL_SUBSCRIPTION_DAYS) || 30));
 const PAID_LISTING_PRICES = Object.freeze({
@@ -796,7 +797,7 @@ function mapPublicUser(row) {
     description: row.profile_description || "",
     city: row.city || "",
     phone: row.phone || "",
-    listingLimit: isProfessionalSubscriptionActive(row) ? null : DEFAULT_LISTING_LIMIT,
+    listingLimit: isProfessionalSubscriptionActive(row) ? null : Math.max(1, Math.min(MAX_LISTING_LIMIT, Number(row.listing_limit) || DEFAULT_LISTING_LIMIT)),
     isBusiness: isProfessionalSubscriptionActive(row),
     businessName: row.business_name || "",
     businessCategory: row.business_category || "",
@@ -1154,7 +1155,7 @@ async function hasSuccessfulListingPayment(database, userId, productId, feeType 
 
 async function getListingQuota(db, userId, { lockUser = false } = {}) {
   const userResult = await db.query(
-    `SELECT professional_subscription_started_at, professional_subscription_until
+    `SELECT listing_limit, professional_subscription_started_at, professional_subscription_until
      FROM users
      WHERE telegram_id = $1
      ${lockUser ? "FOR UPDATE" : ""}`,
@@ -1162,7 +1163,8 @@ async function getListingQuota(db, userId, { lockUser = false } = {}) {
   );
   const userRow = userResult.rows[0] || {};
   const unlimited = isProfessionalSubscriptionActive(userRow);
-  const limit = unlimited ? null : DEFAULT_LISTING_LIMIT;
+  const customLimit = Math.max(1, Math.min(MAX_LISTING_LIMIT, Number(userRow.listing_limit) || DEFAULT_LISTING_LIMIT));
+  const limit = unlimited ? null : customLimit;
   const countResult = await db.query(
     `SELECT COUNT(*)::int AS used
      FROM products
@@ -1178,7 +1180,7 @@ async function getListingQuota(db, userId, { lockUser = false } = {}) {
     used,
     limit,
     unlimited,
-    remaining: unlimited ? null : Math.max(0, DEFAULT_LISTING_LIMIT - used),
+    remaining: unlimited ? null : Math.max(0, customLimit - used),
     tier: unlimited ? "professional" : "standard",
     professionalSubscriptionActive: unlimited,
     professionalSubscriptionUntil: subscriptionUntil,
@@ -1955,7 +1957,6 @@ async function activateProfessionalSubscription(client, order, providerPayment =
     UPDATE users
     SET is_business = TRUE,
         business_verified = FALSE,
-        listing_limit = ${DEFAULT_LISTING_LIMIT},
         professional_subscription_started_at = COALESCE(professional_subscription_started_at, NOW()),
         professional_subscription_until = $2,
         updated_at = NOW()
@@ -2605,13 +2606,17 @@ async function initDb(db = pool) {
   await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_verified BOOLEAN DEFAULT FALSE;`);
   await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS professional_subscription_started_at TIMESTAMPTZ;`);
   await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS professional_subscription_until TIMESTAMPTZ;`);
-  // v1.19.2: профессиональный статус выдаётся только активной платной подпиской.
-  // Старые бесплатные/ручные бизнес-флаги больше не дают профессиональный статус.
+  // v1.19.3: профессиональный статус по-прежнему выдаётся только активной платной подпиской.
+  // Индивидуальный лимит администратора хранится отдельно и не сбрасывается при запуске или оплате подписки.
   await db.query(`
     UPDATE users
     SET is_business = CASE WHEN professional_subscription_until > NOW() THEN TRUE ELSE FALSE END,
         business_verified = FALSE,
-        listing_limit = ${DEFAULT_LISTING_LIMIT}
+        listing_limit = CASE
+          WHEN listing_limit IS NULL OR listing_limit < 1 THEN ${DEFAULT_LISTING_LIMIT}
+          WHEN listing_limit > ${MAX_LISTING_LIMIT} THEN ${MAX_LISTING_LIMIT}
+          ELSE listing_limit
+        END
   `);
   await db.query(`
     UPDATE users
@@ -6834,12 +6839,51 @@ app.post(
   })
 );
 
-app.all(
+app.patch(
   "/api/admin/users/:id/listing-limit",
   requireTelegramAuth,
   syncTelegramUser,
   requireAdmin,
-  (req, res) => res.status(410).json({ ok: false, code: "CUSTOM_LISTING_LIMIT_REMOVED", error: "Индивидуальные лимиты больше не используются: стандарт — 3 объявления, активная профессиональная подписка — без ограничений" })
+  adminRoute(async (req, res) => {
+    const userId = normalizeText(req.params.id, 64);
+    const requestedLimit = Number.parseInt(String(req.body?.limit ?? ""), 10);
+
+    if (!userId || !Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > MAX_LISTING_LIMIT) {
+      return res.status(400).json({
+        ok: false,
+        error: `Лимит должен быть от 1 до ${MAX_LISTING_LIMIT}`
+      });
+    }
+
+    const result = await pool.query(
+      `UPDATE users
+       SET listing_limit = $2,
+           updated_at = NOW()
+       WHERE telegram_id = $1
+       RETURNING telegram_id, username, first_name, last_name, listing_limit, professional_subscription_until`,
+      [userId, requestedLimit]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ ok: false, error: "Пользователь не найден" });
+    }
+
+    await addAdminLog(
+      req.telegramUser.id,
+      "set_listing_limit",
+      userId,
+      `Индивидуальный лимит объявлений: ${requestedLimit}`
+    );
+
+    const user = result.rows[0];
+    res.json({
+      ok: true,
+      user: {
+        ...user,
+        effective_listing_limit: isProfessionalSubscriptionActive(user) ? null : requestedLimit
+      }
+    });
+  })
 );
 
 app.get(
@@ -7415,6 +7459,8 @@ app.get(
             u.created_at,
             u.banned,
             u.listing_limit,
+            (u.professional_subscription_until > NOW()) AS is_business,
+            CASE WHEN u.professional_subscription_until > NOW() THEN NULL ELSE COALESCE(u.listing_limit, ${DEFAULT_LISTING_LIMIT}) END AS effective_listing_limit,
             COUNT(p.id)::int AS products_count,
             COUNT(p.id) FILTER (
               WHERE COALESCE(p.status, 'active') NOT IN ('deleted', 'sold')
@@ -7549,7 +7595,7 @@ app.get(
         (u.professional_subscription_until > NOW()) AS is_business,
         FALSE AS business_verified,
         u.professional_subscription_until,
-        CASE WHEN u.professional_subscription_until > NOW() THEN NULL ELSE ${DEFAULT_LISTING_LIMIT} END AS effective_listing_limit,
+        CASE WHEN u.professional_subscription_until > NOW() THEN NULL ELSE COALESCE(u.listing_limit, ${DEFAULT_LISTING_LIMIT}) END AS effective_listing_limit,
         COUNT(p.id)::int AS products_count,
         COUNT(p.id) FILTER (
           WHERE COALESCE(p.status, 'active') NOT IN ('deleted', 'sold')
