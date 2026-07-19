@@ -15,8 +15,8 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <link rel="manifest" href="manifest.webmanifest?v=1.14.6" />
-  <link rel="stylesheet" href="style.css?v=1.14.6" />
+  <link rel="manifest" href="manifest.webmanifest?v=1.17.0" />
+  <link rel="stylesheet" href="style.css?v=1.17.0" />
 </head>
 
 <body>
@@ -178,7 +178,10 @@
     </div>
   </form>
   <div class="catalog-search-tools">
-    <div id="searchStatus" class="search-status" aria-live="polite"></div>
+    <div>
+      <div id="searchStatus" class="search-status" aria-live="polite"></div>
+      <small class="smart-search-hint">Умный поиск понимает синонимы, транслит и небольшие опечатки</small>
+    </div>
     <button id="saveSearchButton" class="save-search-button" type="button" hidden>☆ Сохранить поиск</button>
   </div>
 
@@ -612,6 +615,7 @@
         <div class="avatar">?</div>
         <h3 id="profileName">Пользователь</h3>
         <p id="profileUsername">Telegram</p>
+        <div id="profileBusinessBadge" class="business-profile-badge" hidden></div>
         <p id="profileDescription" class="profile-description muted">Добавьте описание профиля</p>
         <div id="profileContacts" class="profile-contact-list"></div>
         <button id="editProfileButton" class="outline profile-edit-button" type="button">✏️ Редактировать профиль</button>
@@ -645,7 +649,9 @@
 
         <h2 id="sellerProfileName">Продавец</h2>
         <p id="sellerProfileUsername"></p>
+        <div id="sellerBusinessBadge" class="business-profile-badge" hidden></div>
         <p id="sellerProfileDescription" class="seller-profile-description" hidden></p>
+        <div id="sellerBusinessBlock" class="seller-business-block" hidden></div>
         <div id="sellerProfileContacts" class="seller-contact-list"></div>
         <button id="sellerMessageButton" class="primary seller-message-button" type="button">💬 Написать продавцу</button>
 
@@ -849,6 +855,29 @@
       <input id="profileEditUsername" maxlength="33" placeholder="username без @" autocomplete="off" />
       <p class="muted profile-edit-hint">По кнопке «Написать» покупатель сразу перейдёт в этот Telegram-чат.</p>
 
+      <label class="business-profile-toggle" for="profileEditIsBusiness">
+        <input id="profileEditIsBusiness" type="checkbox" onchange="syncBusinessProfileFields()" />
+        <span><b>🏪 Профессиональный продавец</b><small>Добавьте публичную витрину магазина или компании</small></span>
+      </label>
+
+      <div id="businessProfileFields" class="business-profile-fields" hidden>
+        <label for="profileEditBusinessName">Название магазина / компании</label>
+        <input id="profileEditBusinessName" maxlength="120" placeholder="Например, Алания Авто" />
+
+        <label for="profileEditBusinessCategory">Сфера деятельности</label>
+        <input id="profileEditBusinessCategory" maxlength="120" placeholder="Автозапчасти, электроника, услуги..." />
+
+        <label for="profileEditBusinessAddress">Адрес</label>
+        <input id="profileEditBusinessAddress" maxlength="180" placeholder="Владикавказ, ул. ..." />
+
+        <label for="profileEditBusinessHours">График работы</label>
+        <input id="profileEditBusinessHours" maxlength="180" placeholder="Пн–Сб, 09:00–19:00" />
+
+        <label for="profileEditBusinessWebsite">Сайт</label>
+        <input id="profileEditBusinessWebsite" maxlength="180" inputmode="url" placeholder="example.ru" />
+        <p class="muted profile-edit-hint">Бизнес-профиль доступен бесплатно. Повышенный лимит объявлений подключается отдельно через поддержку.</p>
+      </div>
+
       <div class="dialog-actions">
         <button type="button" class="outline" onclick="closeProfileEditor()">Отмена</button>
         <button id="saveProfileButton" type="submit" class="primary">Сохранить</button>
@@ -948,6 +977,6 @@
   </div>
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">←</div>
 
-  <script src="script.js?v=1.14.6"></script>
+  <script src="script.js?v=1.17.0"></script>
 </body>
 </html>

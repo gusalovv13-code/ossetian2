@@ -14,7 +14,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.14.6";
+const APP_VERSION = "1.17.0";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -98,6 +98,16 @@ const MAX_LISTING_LIMIT = 100;
 const BUSINESS_LISTING_PRICE_RUB = Math.max(0, Number(process.env.BUSINESS_LISTING_PRICE_RUB) || 299);
 const FEATURE_COLOR = "green";
 const preparedShareMessageCache = new Map();
+const searchCapabilities = { pgTrgm: false };
+const RATE_LIMIT_WINDOW_MS = Math.max(10_000, Math.min(10 * 60_000, Number(process.env.RATE_LIMIT_WINDOW_MS) || 60_000));
+const API_RATE_LIMIT_MAX = Math.max(30, Math.min(5000, Number(process.env.API_RATE_LIMIT_MAX) || 300));
+const MUTATION_RATE_LIMIT_MAX = Math.max(10, Math.min(1000, Number(process.env.MUTATION_RATE_LIMIT_MAX) || 80));
+const SEARCH_RATE_LIMIT_MAX = Math.max(20, Math.min(1000, Number(process.env.SEARCH_RATE_LIMIT_MAX) || 150));
+const TRUST_PROXY = process.env.TRUST_PROXY == null
+  ? IS_RENDER
+  : String(process.env.TRUST_PROXY).toLowerCase() !== "false";
+
+if (TRUST_PROXY) app.set("trust proxy", 1);
 
 if (!BOT_TOKEN) {
   console.error("Ошибка: BOT_TOKEN не найден в переменных окружения");
@@ -201,10 +211,70 @@ const requireTelegramAuth = createTelegramAuthMiddleware({
 app.disable("x-powered-by");
 app.use((req, res, next) => {
   res.setHeader("X-Ossetian-Market-Version", APP_VERSION);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'self'; script-src 'self' 'unsafe-inline' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' https://api.telegram.org https://telegram.org; font-src 'self' data:; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org; base-uri 'self'; form-action 'self'"
+  );
+  if (IS_RENDER || PUBLIC_BASE_URL.startsWith("https://")) {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
   next();
 });
+
+function createMemoryRateLimiter({ prefix, max, windowMs = RATE_LIMIT_WINDOW_MS }) {
+  const buckets = new Map();
+  const cleanup = setInterval(() => {
+    const now = Date.now();
+    for (const [key, bucket] of buckets) {
+      if (bucket.resetAt <= now) buckets.delete(key);
+    }
+  }, Math.max(30_000, windowMs));
+  cleanup.unref?.();
+
+  return (req, res, next) => {
+    const now = Date.now();
+    const identity = String(req.ip || req.socket?.remoteAddress || "unknown");
+    const key = `${prefix}:${identity}`;
+    let bucket = buckets.get(key);
+    if (!bucket || bucket.resetAt <= now) {
+      bucket = { count: 0, resetAt: now + windowMs };
+      buckets.set(key, bucket);
+    }
+    bucket.count += 1;
+    const remaining = Math.max(0, max - bucket.count);
+    res.setHeader("RateLimit-Limit", String(max));
+    res.setHeader("RateLimit-Remaining", String(remaining));
+    res.setHeader("RateLimit-Reset", String(Math.ceil(bucket.resetAt / 1000)));
+    if (bucket.count > max) {
+      res.setHeader("Retry-After", String(Math.max(1, Math.ceil((bucket.resetAt - now) / 1000))));
+      return res.status(429).json({ ok: false, code: "RATE_LIMITED", error: "Слишком много запросов. Попробуйте немного позже." });
+    }
+    return next();
+  };
+}
+
+const apiRateLimiter = createMemoryRateLimiter({ prefix: "api", max: API_RATE_LIMIT_MAX });
+const mutationRateLimiter = createMemoryRateLimiter({ prefix: "mutation", max: MUTATION_RATE_LIMIT_MAX });
+const searchRateLimiter = createMemoryRateLimiter({ prefix: "search", max: SEARCH_RATE_LIMIT_MAX });
+
 app.use(compression({ threshold: 1024 }));
-app.use(express.json({ limit: "30mb" }));
+app.use("/api", apiRateLimiter);
+app.use("/api", (req, res, next) => {
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) return mutationRateLimiter(req, res, next);
+  return next();
+});
+app.use((req, res, next) => {
+  const contentLength = Number(req.headers["content-length"] || 0);
+  if (contentLength > 32 * 1024 * 1024) {
+    return res.status(413).json({ ok: false, code: "PAYLOAD_TOO_LARGE", error: "Размер запроса превышает допустимый лимит" });
+  }
+  return next();
+});
+app.use(express.json({ limit: "30mb", strict: true }));
 app.use(express.static(publicDir, {
   etag: true,
   lastModified: true,
@@ -246,6 +316,9 @@ function mapProduct(row) {
     ownerId: row.owner_id,
     ownerName: row.owner_name,
     ownerUsername: row.owner_username,
+    ownerIsBusiness: Boolean(row.owner_is_business),
+    ownerBusinessName: row.owner_business_name || "",
+    ownerBusinessVerified: Boolean(row.owner_business_verified),
     name: row.name,
     price: row.price,
     priceAmount: Number(row.price_amount) || parsePriceAmount(row.price),
@@ -304,6 +377,9 @@ const PRODUCT_SUMMARY_COLUMNS = `
   p.owner_id,
   p.owner_name,
   p.owner_username,
+  COALESCE((SELECT u.is_business FROM users u WHERE u.telegram_id = p.owner_id LIMIT 1), FALSE) AS owner_is_business,
+  COALESCE((SELECT u.business_name FROM users u WHERE u.telegram_id = p.owner_id LIMIT 1), '') AS owner_business_name,
+  COALESCE((SELECT u.business_verified OR (u.is_business AND COALESCE(u.listing_limit, ${DEFAULT_LISTING_LIMIT}) > ${DEFAULT_LISTING_LIMIT}) FROM users u WHERE u.telegram_id = p.owner_id LIMIT 1), FALSE) AS owner_business_verified,
   p.name,
   p.price,
   p.price_amount,
@@ -345,6 +421,9 @@ const PRODUCT_PUBLIC_DETAIL_COLUMNS = `
   p.owner_id,
   p.owner_name,
   p.owner_username,
+  COALESCE((SELECT u.is_business FROM users u WHERE u.telegram_id = p.owner_id LIMIT 1), FALSE) AS owner_is_business,
+  COALESCE((SELECT u.business_name FROM users u WHERE u.telegram_id = p.owner_id LIMIT 1), '') AS owner_business_name,
+  COALESCE((SELECT u.business_verified OR (u.is_business AND COALESCE(u.listing_limit, ${DEFAULT_LISTING_LIMIT}) > ${DEFAULT_LISTING_LIMIT}) FROM users u WHERE u.telegram_id = p.owner_id LIMIT 1), FALSE) AS owner_business_verified,
   p.name,
   p.price,
   p.price_amount,
@@ -439,6 +518,9 @@ function mapProductSummary(row) {
     ownerId: row.owner_id,
     ownerName: row.owner_name,
     ownerUsername: row.owner_username,
+    ownerIsBusiness: Boolean(row.owner_is_business),
+    ownerBusinessName: row.owner_business_name || "",
+    ownerBusinessVerified: Boolean(row.owner_business_verified),
     name: row.name,
     price: row.price,
     priceAmount: currentAmount,
@@ -584,6 +666,13 @@ function mapPublicUser(row) {
     city: row.city || "",
     phone: row.phone || "",
     listingLimit: normalizeListingLimit(row.listing_limit),
+    isBusiness: Boolean(row.is_business),
+    businessName: row.business_name || "",
+    businessCategory: row.business_category || "",
+    businessAddress: row.business_address || "",
+    businessHours: row.business_hours || "",
+    businessWebsite: row.business_website || "",
+    businessVerified: Boolean(row.business_verified || (row.is_business && normalizeListingLimit(row.listing_limit) > DEFAULT_LISTING_LIMIT)),
     lastSeen: row.last_seen ? new Date(row.last_seen).getTime() : null,
     createdAt: row.created_at ? new Date(row.created_at).getTime() : null,
     updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : null
@@ -592,6 +681,70 @@ function mapPublicUser(row) {
 
 function normalizeText(value, maxLength) {
   return String(value ?? "").trim().slice(0, maxLength);
+}
+
+const SEARCH_SYNONYMS = new Map([
+  ["айфон", ["iphone", "apple"]],
+  ["iphone", ["айфон", "apple"]],
+  ["телефон", ["смартфон", "mobile", "phone"]],
+  ["смартфон", ["телефон", "mobile", "phone"]],
+  ["ноут", ["ноутбук", "laptop"]],
+  ["ноутбук", ["ноут", "laptop"]],
+  ["машина", ["авто", "автомобиль"]],
+  ["автомобиль", ["авто", "машина"]],
+  ["работа", ["вакансия", "вакансии"]],
+  ["вакансия", ["работа"]],
+  ["самсунг", ["samsung"]],
+  ["samsung", ["самсунг"]],
+  ["сяоми", ["xiaomi"]],
+  ["xiaomi", ["сяоми"]],
+  ["бмв", ["bmw"]],
+  ["bmw", ["бмв"]],
+  ["мерседес", ["mercedes", "benz"]],
+  ["mercedes", ["мерседес", "benz"]],
+  ["владикавказ", ["дзауджикау", "дзæуджыхъæу", "ordzhonikidze"]],
+  ["дзауджикау", ["владикавказ", "дзæуджыхъæу"]],
+  ["дзæуджыхъæу", ["владикавказ", "дзауджикау"]]
+]);
+
+const CYRILLIC_TO_LATIN = new Map(Object.entries({
+  а:"a", б:"b", в:"v", г:"g", д:"d", е:"e", ё:"e", ж:"zh", з:"z", и:"i", й:"y", к:"k", л:"l", м:"m", н:"n", о:"o", п:"p", р:"r", с:"s", т:"t", у:"u", ф:"f", х:"kh", ц:"ts", ч:"ch", ш:"sh", щ:"sch", ы:"y", э:"e", ю:"yu", я:"ya"
+}));
+
+function normalizeSearchText(value) {
+  return normalizeText(value, 100)
+    .normalize("NFKC")
+    .toLocaleLowerCase("ru")
+    .replace(/ё/g, "е")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function transliterateCyrillicToLatin(value) {
+  return [...normalizeSearchText(value)].map(char => CYRILLIC_TO_LATIN.get(char) || char).join("");
+}
+
+function transliterateLatinToCyrillic(value) {
+  let result = normalizeSearchText(value);
+  const pairs = [
+    ["shch", "щ"], ["sch", "щ"], ["yo", "е"], ["zh", "ж"], ["kh", "х"], ["ts", "ц"],
+    ["ch", "ч"], ["sh", "ш"], ["yu", "ю"], ["ya", "я"], ["ye", "е"],
+    ["a", "а"], ["b", "б"], ["v", "в"], ["g", "г"], ["d", "д"], ["e", "е"], ["z", "з"],
+    ["i", "и"], ["y", "й"], ["k", "к"], ["l", "л"], ["m", "м"], ["n", "н"], ["o", "о"],
+    ["p", "п"], ["r", "р"], ["s", "с"], ["t", "т"], ["u", "у"], ["f", "ф"], ["h", "х"]
+  ];
+  for (const [latin, cyrillic] of pairs) result = result.replaceAll(latin, cyrillic);
+  return result;
+}
+
+function expandSearchTerm(term) {
+  const normalized = normalizeSearchText(term);
+  const variants = new Set([normalized]);
+  for (const synonym of SEARCH_SYNONYMS.get(normalized) || []) variants.add(normalizeSearchText(synonym));
+  if (/[а-яё]/i.test(normalized)) variants.add(transliterateCyrillicToLatin(normalized));
+  if (/[a-z]/i.test(normalized)) variants.add(transliterateLatinToCyrillic(normalized));
+  return [...variants].filter(Boolean).slice(0, 6);
 }
 
 function normalizeFingerprintText(value, maxLength = 5000) {
@@ -1143,7 +1296,7 @@ async function readRemoteImageBuffer(source) {
     for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
       response = await fetch(currentUrl, {
         signal: controller.signal,
-        headers: { "User-Agent": "OssetianMarket/1.13.7" },
+        headers: { "User-Agent": `OssetianMarket/${APP_VERSION}` },
         redirect: "manual"
       });
 
@@ -1589,6 +1742,13 @@ async function initDb(db = pool) {
   await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
   await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_normalized TEXT DEFAULT '';`);
   await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS listing_limit INTEGER DEFAULT ${DEFAULT_LISTING_LIMIT};`);
+  await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_business BOOLEAN DEFAULT FALSE;`);
+  await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_name TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_category TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_address TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_hours TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_website TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_verified BOOLEAN DEFAULT FALSE;`);
   await db.query(`
     UPDATE users
     SET listing_limit = ${DEFAULT_LISTING_LIMIT}
@@ -1628,6 +1788,16 @@ async function initDb(db = pool) {
     ON users (phone_normalized)
     WHERE phone_normalized <> '';
   `);
+
+  try {
+    await db.query(`CREATE EXTENSION IF NOT EXISTS pg_trgm;`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_products_name_trgm ON products USING gin (LOWER(name) gin_trgm_ops);`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_products_description_trgm ON products USING gin (LOWER(description) gin_trgm_ops);`);
+    searchCapabilities.pgTrgm = true;
+  } catch (error) {
+    searchCapabilities.pgTrgm = false;
+    console.warn("pg_trgm is unavailable; typo-tolerant search will use exact/synonym/transliteration fallback:", error?.message || error);
+  }
 
   await db.query(`
     ALTER TABLE products
@@ -2258,7 +2428,7 @@ app.get("/api/version", (req, res) => {
     ok: true,
     version: APP_VERSION,
     catalogOrderFix: true,
-    build: "trust-saved-searches-duplicate-protection"
+    build: "smart-search-business-profiles-security"
   });
 });
 
@@ -2593,7 +2763,9 @@ app.get("/api/me", requireTelegramAuth, syncTelegramUser, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT telegram_id, username, first_name, last_name, avatar, profile_description,
-              city, phone, contact_username, listing_limit, last_seen, created_at, updated_at
+              city, phone, contact_username, listing_limit, is_business, business_name, business_category,
+              business_address, business_hours, business_website, business_verified,
+              last_seen, created_at, updated_at
        FROM users WHERE telegram_id = $1 LIMIT 1`,
       [String(req.telegramUser.id)]
     );
@@ -2633,6 +2805,19 @@ app.patch("/api/me/profile", requireTelegramAuth, syncTelegramUser, async (req, 
     const phone = normalizeText(req.body?.phone, 30);
     const phoneKey = normalizePhoneKey(phone);
     const contactUsername = normalizeText(req.body?.contactUsername, 40).replace(/^@/, "");
+    const isBusiness = Boolean(req.body?.isBusiness);
+    const businessName = normalizeText(req.body?.businessName, 120);
+    const businessCategory = normalizeText(req.body?.businessCategory, 120);
+    const businessAddress = normalizeText(req.body?.businessAddress, 180);
+    const businessHours = normalizeText(req.body?.businessHours, 180);
+    const businessWebsite = normalizeText(req.body?.businessWebsite, 180);
+
+    if (isBusiness && businessName.length < 2) {
+      return res.status(400).json({ ok: false, code: "BUSINESS_NAME_REQUIRED", error: "Для бизнес-профиля укажите название магазина или компании" });
+    }
+    if (businessWebsite && !/^(https?:\/\/)?[a-z0-9а-яё][a-z0-9а-яё.-]+(?:\/[^\s]*)?$/iu.test(businessWebsite)) {
+      return res.status(400).json({ ok: false, code: "INVALID_BUSINESS_WEBSITE", error: "Проверьте адрес сайта" });
+    }
 
     if (contactUsername && !/^[A-Za-z0-9_]{5,32}$/.test(contactUsername)) {
       return res.status(400).json({
@@ -2651,11 +2836,16 @@ app.patch("/api/me/profile", requireTelegramAuth, syncTelegramUser, async (req, 
     const result = await pool.query(
       `UPDATE users
        SET profile_description = $2, city = $3, phone = $4, phone_normalized = $5,
-           contact_username = $6, updated_at = NOW()
+           contact_username = $6, is_business = $7, business_name = $8,
+           business_category = $9, business_address = $10, business_hours = $11,
+           business_website = $12, updated_at = NOW()
        WHERE telegram_id = $1
        RETURNING telegram_id, username, first_name, last_name, avatar, profile_description,
-                 city, phone, contact_username, listing_limit, last_seen, created_at, updated_at`,
-      [String(req.telegramUser.id), description, city, phone, phoneKey, contactUsername]
+                 city, phone, contact_username, listing_limit, is_business, business_name, business_category,
+                 business_address, business_hours, business_website, business_verified,
+                 last_seen, created_at, updated_at`,
+      [String(req.telegramUser.id), description, city, phone, phoneKey, contactUsername,
+       isBusiness, businessName, businessCategory, businessAddress, businessHours, businessWebsite]
     );
 
     const preferredUsername = contactUsername || result.rows[0]?.username || req.telegramUser.username || "";
@@ -2735,7 +2925,9 @@ app.get("/api/users/:id", async (req, res) => {
     const [userResult, trust] = await Promise.all([
       pool.query(
         `SELECT telegram_id, username, first_name, last_name, avatar, profile_description,
-                city, phone, contact_username, last_seen, created_at, updated_at
+                city, phone, contact_username, listing_limit, is_business, business_name, business_category,
+                business_address, business_hours, business_website, business_verified,
+                last_seen, created_at, updated_at
          FROM users
          WHERE telegram_id = $1
          LIMIT 1`,
@@ -2989,6 +3181,13 @@ app.get("/api/products/:id/media/:index", async (req, res) => {
   }
 });
 
+app.use((req, res, next) => {
+  if (req.method === "GET" && req.path === "/api/products") {
+    return searchRateLimiter(req, res, next);
+  }
+  return next();
+});
+
 app.get("/api/products", async (req, res) => {
   try {
     const page = normalizePositiveInteger(req.query.page, 1, 100000);
@@ -3022,51 +3221,63 @@ app.get("/api/products", async (req, res) => {
     const values = [PUBLIC_PRODUCT_STATUS];
 
     const rawSearchTerms = search
-      ? [...new Set(search.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean))].slice(0, 6)
+      ? [...new Set(normalizeSearchText(search).split(/[^\p{L}\p{N}]+/u).filter(Boolean))].slice(0, 6)
       : [];
     const vacancyRequested = !category && rawSearchTerms.some(term =>
       term.startsWith("ваканс") || ["работа", "работы", "работу", "работе"].includes(term)
     );
     const vacancyStopWords = new Set(["ищу", "найти", "нужна", "нужен", "нужны", "покажи", "показать", "все", "актуальные"]);
-    const searchTerms = vacancyRequested
+    const logicalSearchTerms = vacancyRequested
       ? rawSearchTerms.filter(term =>
           !(term.startsWith("ваканс") || ["работа", "работы", "работу", "работе"].includes(term) || vacancyStopWords.has(term))
         )
       : rawSearchTerms;
+    const searchTermGroups = logicalSearchTerms.map(expandSearchTerm).filter(group => group.length > 0);
+    const expandedSearchTerms = [...new Set(searchTermGroups.flat())].slice(0, 24);
+    const relevanceParts = [];
 
     if (vacancyRequested) {
       values.push("Вакансии");
       conditions.push(`p.category = $${values.length}`);
     }
 
-    for (const term of searchTerms) {
-      values.push(`%${term}%`);
-      const parameter = `$${values.length}`;
-      conditions.push(`(
-        LOWER(COALESCE(p.name, '')) LIKE ${parameter}
-        OR LOWER(COALESCE(p.description, '')) LIKE ${parameter}
-        OR LOWER(COALESCE(p.category, '')) LIKE ${parameter}
-        OR LOWER(COALESCE(p.location, '')) LIKE ${parameter}
-        OR LOWER(COALESCE(p.district, '')) LIKE ${parameter}
-        OR LOWER(COALESCE(p.owner_name, '')) LIKE ${parameter}
-        OR LOWER(COALESCE(p.price, '')) LIKE ${parameter}
-        OR LOWER(COALESCE(p.specifications::text, '')) LIKE ${parameter}
-      )`);
+    for (const variants of searchTermGroups) {
+      const variantConditions = [];
+      for (const variant of variants) {
+        values.push(variant);
+        const exactParameter = `$${values.length}`;
+        values.push(`%${variant}%`);
+        const likeParameter = `$${values.length}`;
+        variantConditions.push(`(
+          LOWER(COALESCE(p.name, '')) LIKE ${likeParameter}
+          OR LOWER(COALESCE(p.description, '')) LIKE ${likeParameter}
+          OR LOWER(COALESCE(p.category, '')) LIKE ${likeParameter}
+          OR LOWER(COALESCE(p.location, '')) LIKE ${likeParameter}
+          OR LOWER(COALESCE(p.district, '')) LIKE ${likeParameter}
+          OR LOWER(COALESCE(p.owner_name, '')) LIKE ${likeParameter}
+          OR EXISTS (
+            SELECT 1 FROM users search_owner
+            WHERE search_owner.telegram_id = p.owner_id
+              AND LOWER(COALESCE(search_owner.business_name, '')) LIKE ${likeParameter}
+          )
+          OR LOWER(COALESCE(p.price, '')) LIKE ${likeParameter}
+          OR LOWER(COALESCE(p.specifications::text, '')) LIKE ${likeParameter}
+          ${searchCapabilities.pgTrgm ? `OR word_similarity(${exactParameter}, LOWER(COALESCE(p.name, ''))) > 0.52` : ""}
+        )`);
+        relevanceParts.push(`CASE
+          WHEN LOWER(COALESCE(p.name, '')) = ${exactParameter} THEN 14
+          WHEN LOWER(COALESCE(p.name, '')) LIKE ${likeParameter} THEN 9
+          WHEN LOWER(COALESCE(p.specifications::text, '')) LIKE ${likeParameter} THEN 5
+          WHEN LOWER(COALESCE(p.category, '')) LIKE ${likeParameter} THEN 3
+          WHEN EXISTS (SELECT 1 FROM users search_owner WHERE search_owner.telegram_id = p.owner_id AND LOWER(COALESCE(search_owner.business_name, '')) LIKE ${likeParameter}) THEN 3
+          WHEN LOWER(COALESCE(p.description, '')) LIKE ${likeParameter} THEN 2
+          ${searchCapabilities.pgTrgm ? `WHEN word_similarity(${exactParameter}, LOWER(COALESCE(p.name, ''))) > 0.52 THEN 2` : ""}
+          ELSE 0 END`);
+      }
+      conditions.push(`(${variantConditions.join(" OR ")})`);
     }
 
-    let relevanceSql = "";
-    if (search) {
-      values.push(search.toLowerCase());
-      const fullSearchParameter = `$${values.length}`;
-      relevanceSql = `CASE
-        WHEN LOWER(COALESCE(p.name, '')) = ${fullSearchParameter} THEN 6
-        WHEN LOWER(COALESCE(p.name, '')) LIKE '%' || ${fullSearchParameter} || '%' THEN 5
-        WHEN LOWER(COALESCE(p.specifications::text, '')) LIKE '%' || ${fullSearchParameter} || '%' THEN 4
-        WHEN LOWER(COALESCE(p.category, '')) LIKE '%' || ${fullSearchParameter} || '%' THEN 2
-        WHEN LOWER(COALESCE(p.description, '')) LIKE '%' || ${fullSearchParameter} || '%' THEN 1
-        ELSE 0
-      END`;
-    }
+    let relevanceSql = relevanceParts.length ? `(${relevanceParts.join(" + ")})` : "";
 
     if (category) {
       values.push(category);
@@ -3144,6 +3355,12 @@ app.get("/api/products", async (req, res) => {
       ok: true,
       products: visibleRows.map(mapProductSummary),
       filters: { search, category, city, district, itemType, brand, model, year, minPrice, maxPrice, sort },
+      searchMeta: {
+        normalized: normalizeSearchText(search),
+        expandedTerms: expandedSearchTerms,
+        typoTolerance: searchCapabilities.pgTrgm,
+        transliteration: true
+      },
       pagination: {
         page,
         limit,

@@ -2260,6 +2260,9 @@ function getProductCard(product, options = {}) {
   const vacancyBadge = isVacancyCard
     ? '<span class="vacancy-card-badge">💼 Вакансия</span>'
     : "";
+  const businessBadge = product.ownerIsBusiness
+    ? `<span class="business-card-badge">🏪 ${product.ownerBusinessVerified ? "Проверенный бизнес" : "Проф. продавец"}</span>`
+    : "";
   const status = product.status || "active";
   const isSoldHistory = options.ownerActions && status === "sold";
   const featuredClass = product.isFeatured ? "is-featured featured-green" : "";
@@ -2324,6 +2327,7 @@ function getProductCard(product, options = {}) {
         ${featuredBadge}
         ${featureRequestBadge}
         ${vacancyBadge}
+        ${businessBadge}
         ${priceDropMarkup}
         <h4>${name}</h4>
         ${isVacancyCategory(product.category) ? '<small class="salary-caption">Зарплата</small>' : ""}
@@ -3208,6 +3212,7 @@ function renderProductDetails(product) {
       product.district ? `Район: ${product.district}` : "",
       product.priceDropped ? `Скидка${product.priceDropPercent ? ` −${Number(product.priceDropPercent)}%` : ""}` : "",
       product.isFeatured ? "Платное выделение" : "",
+      product.ownerIsBusiness ? (product.ownerBusinessVerified ? "✓ Проверенный бизнес" : "🏪 Профессиональный продавец") : "",
       product.expiresAt ? `Активно до ${formatProductDate(product.expiresAt)}` : ""
     ].filter(Boolean);
 
@@ -3228,7 +3233,7 @@ function renderProductDetails(product) {
     `).join("");
   }
 
-  const sellerName = product.ownerName || "Продавец";
+  const sellerName = product.ownerBusinessName || product.ownerName || "Продавец";
   const sellerUsername = product.ownerUsername || "";
   const sellerPhone = product.phone || "";
   const cleanPhone = normalizePhoneForTel(sellerPhone);
@@ -3238,10 +3243,10 @@ function renderProductDetails(product) {
 
   if (productSeller) {
     productSeller.innerHTML = `
-      <span class="seller-profile-link-icon" aria-hidden="true">👤</span>
+      <span class="seller-profile-link-icon" aria-hidden="true">${product.ownerIsBusiness ? "🏪" : "👤"}</span>
       <span class="seller-profile-link-copy">
         <b>${escapeHTML(sellerName)}</b>
-        <small>${sellerUsername ? `@${escapeHTML(sellerUsername)} · ` : ""}<u>Открыть профиль</u></small>
+        <small>${product.ownerIsBusiness ? `${product.ownerBusinessVerified ? "✓ Проверенный бизнес" : "Профессиональный продавец"} · ` : ""}${sellerUsername ? `@${escapeHTML(sellerUsername)} · ` : ""}<u>Открыть профиль</u></small>
       </span>
       <span class="seller-profile-link-arrow" aria-hidden="true">›</span>
     `;
@@ -5476,6 +5481,17 @@ function renderOwnProfileDetails() {
   const user = state.telegramUser || {};
   const description = document.getElementById("profileDescription");
   const contacts = document.getElementById("profileContacts");
+  const businessBadge = document.getElementById("profileBusinessBadge");
+  const profileName = document.getElementById("profileName");
+
+  if (profileName && user.isBusiness && user.businessName) profileName.textContent = user.businessName;
+
+  if (businessBadge) {
+    businessBadge.hidden = !user.isBusiness;
+    businessBadge.textContent = user.isBusiness
+      ? `${user.businessVerified ? "✓" : "🏪"} ${user.businessName || "Профессиональный продавец"}${user.businessVerified ? " · проверен" : ""}`
+      : "";
+  }
 
   if (description) {
     description.textContent = user.description || "Добавьте описание профиля";
@@ -5505,8 +5521,24 @@ function openProfileEditor() {
   document.getElementById("profileEditCity").value = state.telegramUser.city || "";
   document.getElementById("profileEditPhone").value = state.telegramUser.phone || "";
   document.getElementById("profileEditUsername").value = state.telegramUser.contactUsername || state.telegramUser.username || "";
+  document.getElementById("profileEditIsBusiness").checked = Boolean(state.telegramUser.isBusiness);
+  document.getElementById("profileEditBusinessName").value = state.telegramUser.businessName || "";
+  document.getElementById("profileEditBusinessCategory").value = state.telegramUser.businessCategory || "";
+  document.getElementById("profileEditBusinessAddress").value = state.telegramUser.businessAddress || "";
+  document.getElementById("profileEditBusinessHours").value = state.telegramUser.businessHours || "";
+  document.getElementById("profileEditBusinessWebsite").value = state.telegramUser.businessWebsite || "";
+  syncBusinessProfileFields();
   if (typeof dialog.showModal === "function") dialog.showModal();
   else dialog.setAttribute("open", "");
+}
+
+function syncBusinessProfileFields() {
+  const checkbox = document.getElementById("profileEditIsBusiness");
+  const fields = document.getElementById("businessProfileFields");
+  if (!fields) return;
+  fields.hidden = !checkbox?.checked;
+  const businessName = document.getElementById("profileEditBusinessName");
+  if (businessName) businessName.required = Boolean(checkbox?.checked);
 }
 
 function closeProfileEditor() {
@@ -5525,7 +5557,13 @@ async function saveProfile(event) {
     description: document.getElementById("profileEditDescription")?.value.trim() || "",
     city: document.getElementById("profileEditCity")?.value.trim() || "",
     phone: document.getElementById("profileEditPhone")?.value.trim() || "",
-    contactUsername: document.getElementById("profileEditUsername")?.value.trim().replace(/^@/, "") || ""
+    contactUsername: document.getElementById("profileEditUsername")?.value.trim().replace(/^@/, "") || "",
+    isBusiness: Boolean(document.getElementById("profileEditIsBusiness")?.checked),
+    businessName: document.getElementById("profileEditBusinessName")?.value.trim() || "",
+    businessCategory: document.getElementById("profileEditBusinessCategory")?.value.trim() || "",
+    businessAddress: document.getElementById("profileEditBusinessAddress")?.value.trim() || "",
+    businessHours: document.getElementById("profileEditBusinessHours")?.value.trim() || "",
+    businessWebsite: document.getElementById("profileEditBusinessWebsite")?.value.trim() || ""
   };
 
   if (button) {
@@ -5619,6 +5657,8 @@ async function openSellerProfile(userId) {
   const sellerName = document.getElementById("sellerProfileName");
   const sellerUsername = document.getElementById("sellerProfileUsername");
   const sellerDescription = document.getElementById("sellerProfileDescription");
+  const sellerBusinessBadge = document.getElementById("sellerBusinessBadge");
+  const sellerBusinessBlock = document.getElementById("sellerBusinessBlock");
   const sellerContacts = document.getElementById("sellerProfileContacts");
   const sellerCount = document.getElementById("sellerProfileCount");
   const sellerSoldCount = document.getElementById("sellerSoldCount");
@@ -5643,6 +5683,11 @@ async function openSellerProfile(userId) {
   sellerName.textContent = "Продавец";
   sellerUsername.textContent = "";
   if (sellerDescription) sellerDescription.hidden = true;
+  if (sellerBusinessBadge) sellerBusinessBadge.hidden = true;
+  if (sellerBusinessBlock) {
+    sellerBusinessBlock.hidden = true;
+    sellerBusinessBlock.innerHTML = "";
+  }
   if (sellerContacts) sellerContacts.innerHTML = "";
   sellerCount.textContent = "📦 …";
   if (sellerSoldCount) sellerSoldCount.textContent = "✓ …";
@@ -5692,7 +5737,7 @@ async function openSellerProfile(userId) {
     }
 
     const fallbackSeller = products[0] || soldProducts[0] || {};
-    const displayName = user.displayName || `${user.firstName || ""} ${user.lastName || ""}`.trim() || fallbackSeller.ownerName || "Продавец";
+    const displayName = (user.isBusiness && user.businessName) || user.displayName || `${user.firstName || ""} ${user.lastName || ""}`.trim() || fallbackSeller.ownerBusinessName || fallbackSeller.ownerName || "Продавец";
     const username = user.contactUsername || user.username || fallbackSeller.ownerUsername || "";
 
     sellerName.textContent = displayName;
@@ -5703,6 +5748,23 @@ async function openSellerProfile(userId) {
     if (sellerDescription) {
       sellerDescription.hidden = !user.description;
       sellerDescription.textContent = user.description || "";
+    }
+
+    if (sellerBusinessBadge) {
+      sellerBusinessBadge.hidden = !user.isBusiness;
+      sellerBusinessBadge.textContent = user.isBusiness
+        ? `${user.businessVerified ? "✓ Проверенный бизнес" : "🏪 Профессиональный продавец"}`
+        : "";
+    }
+
+    if (sellerBusinessBlock) {
+      const businessRows = [];
+      if (user.businessCategory) businessRows.push(`<span><small>Сфера</small><b>${escapeHTML(user.businessCategory)}</b></span>`);
+      if (user.businessAddress) businessRows.push(`<span><small>Адрес</small><b>📍 ${escapeHTML(user.businessAddress)}</b></span>`);
+      if (user.businessHours) businessRows.push(`<span><small>График</small><b>🕒 ${escapeHTML(user.businessHours)}</b></span>`);
+      if (user.businessWebsite) businessRows.push(`<span><small>Сайт</small><b>🌐 ${escapeHTML(user.businessWebsite)}</b></span>`);
+      sellerBusinessBlock.hidden = !user.isBusiness || businessRows.length === 0;
+      sellerBusinessBlock.innerHTML = businessRows.join("");
     }
 
     if (sellerContacts) {
