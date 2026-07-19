@@ -8131,7 +8131,7 @@ body.dark-mode .seller-store-categories span { background: #2a2f34; border-color
 #productList > .product-card:not(.owner-product-card) > img,
 #productList > .product-card.is-featured:not(.owner-product-card) > img,
 #favorites .product-list > .product-card > img {
-  height: 104px;
+  height: 120px;
   margin-bottom: 6px;
 }
 
@@ -8186,7 +8186,7 @@ body.dark-mode .seller-store-categories span { background: #2a2f34; border-color
 /* Vacancy cards no longer need a special shorter photo because all cards share
  * one compact geometry. */
 #productList > .product-card.is-vacancy-card:not(.owner-product-card) > img {
-  height: 104px;
+  height: 120px;
   margin-bottom: 6px;
 }
 
@@ -8209,7 +8209,7 @@ body.dark-mode .seller-store-categories span { background: #2a2f34; border-color
   #productList > .product-card.is-featured:not(.owner-product-card) > img,
   #productList > .product-card.is-vacancy-card:not(.owner-product-card) > img,
   #favorites .product-list > .product-card > img {
-    height: 98px;
+    height: 112px;
   }
 }
 
@@ -8312,5 +8312,37 @@ body { overflow-x: hidden; }
   }
   .professional-subscription-row #professionalSubscriptionStatus {
     font-size: 13px;
+  }
+}
+
+
+/* ===== v1.19.4: larger catalog photos while keeping uniform card height ===== */
+#productList > .product-card:not(.owner-product-card) > img,
+#productList > .product-card.is-featured:not(.owner-product-card) > img,
+#productList > .product-card.is-vacancy-card:not(.owner-product-card) > img,
+#favorites .product-list > .product-card > img {
+  height: 120px;
+  object-fit: cover;
+  margin-bottom: 5px;
+}
+
+/* Keep text compact so the larger image does not change the uniform 250px tiles. */
+#productList > .product-card:not(.owner-product-card) h4,
+#favorites .product-list > .product-card h4 {
+  margin-top: 0;
+  margin-bottom: 2px;
+}
+
+#productList .card-price-row,
+#favorites .card-price-row {
+  margin-bottom: 2px !important;
+}
+
+@media (max-width: 360px) {
+  #productList > .product-card:not(.owner-product-card) > img,
+  #productList > .product-card.is-featured:not(.owner-product-card) > img,
+  #productList > .product-card.is-vacancy-card:not(.owner-product-card) > img,
+  #favorites .product-list > .product-card > img {
+    height: 112px;
   }
 }
