@@ -3178,8 +3178,28 @@ body.dark-mode .admin-badge.warning {
   border-radius: 18px;
   background: white;
 }
-.moderation-switches { display: grid; gap: 10px; margin-bottom: 14px; }
-.moderation-switches label { display: flex; align-items: center; gap: 9px; font-weight: 650; }
+.moderation-switches { display: grid; gap: 12px; margin-bottom: 14px; }
+.moderation-switches label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  font-weight: 650;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.moderation-switches input[type="checkbox"] {
+  width: 22px !important;
+  min-width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  margin: 0 !important;
+  padding: 0 !important;
+  accent-color: #635bff;
+}
 .moderation-rule-form { display: grid; grid-template-columns: 1.3fr .8fr 1.2fr auto; gap: 8px; margin-bottom: 12px; }
 .moderation-rule-form input,
 .moderation-rule-form select,

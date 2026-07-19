@@ -14,7 +14,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.18.0";
+const APP_VERSION = "1.18.2";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -3724,17 +3724,16 @@ app.get("/api/products", async (req, res) => {
     }
 
     const whereSql = conditions.join(" AND ");
-    const promotionOrderSql = "((p.featured_paid = TRUE AND p.featured_until > NOW())::int * GREATEST(COALESCE(p.promotion_priority, 1), 1)) DESC";
+    // Paid highlighting is visual only: it must not change a listing's position in the public catalog.
     const orderBySql = [
-      promotionOrderSql,
       ...(relevanceSql ? [`${relevanceSql} DESC`] : []),
       "p.created_at DESC",
       "p.id DESC"
     ].join(",\n          ");
     const selectedOrderBySql = sort === "price_asc"
-      ? `${promotionOrderSql}, COALESCE(p.price_amount, 9223372036854775807) ASC, p.created_at DESC`
+      ? "COALESCE(p.price_amount, 9223372036854775807) ASC, p.created_at DESC, p.id DESC"
       : sort === "price_desc"
-        ? `${promotionOrderSql}, COALESCE(p.price_amount, 0) DESC, p.created_at DESC`
+        ? "COALESCE(p.price_amount, 0) DESC, p.created_at DESC, p.id DESC"
         : orderBySql;
 
     const queryValues = [...values, limit + 1, offset];
