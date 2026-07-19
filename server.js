@@ -9,12 +9,15 @@ import sharp from "sharp";
 import { lookup } from "dns/promises";
 import { isIP } from "net";
 import { createTelegramAuthMiddleware } from "./telegram-auth.js";
+import { createDatabaseBackup } from "./backup-service.js";
+import { DEFAULT_MODERATION_RULES, MODERATION_POLICY_VERSION } from "./moderation-policy.js";
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.18.2";
+const APP_VERSION = "1.19.0";
+const LEGAL_DOCUMENT_VERSION = "1.16.0";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SUPPORT_USERNAME = String(process.env.SUPPORT_USERNAME || "")
@@ -99,11 +102,29 @@ const MAX_LISTING_LIMIT = 100;
 const BUSINESS_LISTING_PRICE_RUB = Math.max(0, Number(process.env.BUSINESS_LISTING_PRICE_RUB) || 299);
 const FEATURE_COLOR = "green";
 const OPENAI_API_KEY = String(process.env.OPENAI_API_KEY || "").trim();
-const OPENAI_MODEL = String(process.env.OPENAI_MODEL || "gpt-5.6").trim();
+const OPENAI_MODEL = String(process.env.OPENAI_MODEL || "gpt-5.6-terra").trim();
+const AI_LISTING_MODEL = String(process.env.AI_LISTING_MODEL || OPENAI_MODEL || "gpt-5.6-terra").trim();
+const AI_MODERATION_MODEL = String(process.env.AI_MODERATION_MODEL || "gpt-5.6-luna").trim();
 const AI_MODERATION_ENABLED = String(process.env.AI_MODERATION_ENABLED || "true").toLowerCase() !== "false";
 const AI_LISTING_ASSISTANT_ENABLED = String(process.env.AI_LISTING_ASSISTANT_ENABLED || "true").toLowerCase() !== "false";
 const AI_TIMEOUT_MS = Math.max(5_000, Math.min(60_000, Number(process.env.AI_TIMEOUT_MS) || 20_000));
 const AI_RATE_LIMIT_MAX = Math.max(2, Math.min(100, Number(process.env.AI_RATE_LIMIT_MAX) || 20));
+const AI_DAILY_BUDGET_USD = Math.max(0, Math.min(10000, Number(process.env.AI_DAILY_BUDGET_USD) || 5));
+const AI_LISTING_INPUT_USD_PER_MTOK = Math.max(0, Number(process.env.AI_LISTING_INPUT_USD_PER_MTOK) || 2.5);
+const AI_LISTING_OUTPUT_USD_PER_MTOK = Math.max(0, Number(process.env.AI_LISTING_OUTPUT_USD_PER_MTOK) || 15);
+const AI_MODERATION_INPUT_USD_PER_MTOK = Math.max(0, Number(process.env.AI_MODERATION_INPUT_USD_PER_MTOK) || 1);
+const AI_MODERATION_OUTPUT_USD_PER_MTOK = Math.max(0, Number(process.env.AI_MODERATION_OUTPUT_USD_PER_MTOK) || 6);
+const YOOKASSA_SHOP_ID = String(process.env.YOOKASSA_SHOP_ID || "").trim();
+const YOOKASSA_SECRET_KEY = String(process.env.YOOKASSA_SECRET_KEY || "").trim();
+const YOOKASSA_API_URL = "https://api.yookassa.ru/v3";
+const PAYMENT_PROVIDER = String(process.env.PAYMENT_PROVIDER || "yookassa").trim().toLowerCase();
+const PAYMENTS_ENABLED = String(process.env.PAYMENTS_ENABLED || "true").toLowerCase() !== "false";
+const ADMIN_ACCESS_CODE_SHA256 = String(process.env.ADMIN_ACCESS_CODE_SHA256 || "").trim().toLowerCase();
+const ADMIN_RATE_LIMIT_MAX = Math.max(5, Math.min(500, Number(process.env.ADMIN_RATE_LIMIT_MAX) || 60));
+const AUTO_BACKUP_ENABLED = String(process.env.AUTO_BACKUP_ENABLED || "false").toLowerCase() === "true";
+const AUTO_BACKUP_INTERVAL_HOURS = Math.max(1, Math.min(168, Number(process.env.AUTO_BACKUP_INTERVAL_HOURS) || 24));
+const BACKUP_RETENTION_COUNT = Math.max(1, Math.min(90, Number(process.env.BACKUP_RETENTION_COUNT) || 7));
+const BACKUP_DIR = String(process.env.BACKUP_DIR || "./backups").trim();
 const PROMOTION_PLANS = Object.freeze({
   boost: { id: "boost", label: "Поднять", days: Math.max(1, Number(process.env.PROMO_BOOST_DAYS) || 1), priceRub: Math.max(0, Number(process.env.PROMO_BOOST_PRICE_RUB) || 99), priority: 1 },
   vip: { id: "vip", label: "VIP", days: Math.max(1, Number(process.env.PROMO_VIP_DAYS) || 7), priceRub: Math.max(0, Number(process.env.PROMO_VIP_PRICE_RUB) || 299), priority: 2 },
@@ -188,6 +209,7 @@ const databaseState = {
 };
 let databaseInitializationPromise = null;
 let lifecycleTimer = null;
+let backupTimer = null;
 
 if (IS_RENDER && IS_RENDER_POSTGRES && !DATABASE_SSL_CONFIGURED) {
   console.warn("DATABASE_SSL=false is ignored on Render; TLS has been forced on.");
@@ -277,9 +299,12 @@ const apiRateLimiter = createMemoryRateLimiter({ prefix: "api", max: API_RATE_LI
 const mutationRateLimiter = createMemoryRateLimiter({ prefix: "mutation", max: MUTATION_RATE_LIMIT_MAX });
 const searchRateLimiter = createMemoryRateLimiter({ prefix: "search", max: SEARCH_RATE_LIMIT_MAX });
 const aiRateLimiter = createMemoryRateLimiter({ prefix: "ai", max: AI_RATE_LIMIT_MAX, windowMs: 60_000 });
+const adminRateLimiter = createMemoryRateLimiter({ prefix: "admin", max: ADMIN_RATE_LIMIT_MAX, windowMs: 60_000 });
+const paymentRateLimiter = createMemoryRateLimiter({ prefix: "payment", max: 30, windowMs: 60_000 });
 
 app.use(compression({ threshold: 1024 }));
 app.use("/api", apiRateLimiter);
+app.use("/api/admin", adminRateLimiter);
 app.use("/api", (req, res, next) => {
   if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) return mutationRateLimiter(req, res, next);
   return next();
@@ -1546,6 +1571,111 @@ function normalizeAdTargetUrl(value) {
   return /^https:\/\/[^\s"'<>]+$/i.test(target) ? target : "";
 }
 
+function isYooKassaConfigured() {
+  return PAYMENTS_ENABLED && PAYMENT_PROVIDER === "yookassa" && Boolean(YOOKASSA_SHOP_ID && YOOKASSA_SECRET_KEY && PUBLIC_BASE_URL);
+}
+
+function yooKassaAuthorizationHeader() {
+  return `Basic ${Buffer.from(`${YOOKASSA_SHOP_ID}:${YOOKASSA_SECRET_KEY}`).toString("base64")}`;
+}
+
+async function requestYooKassa(endpoint, options = {}) {
+  if (!isYooKassaConfigured()) throw new Error("ЮKassa не настроена");
+  const response = await fetch(`${YOOKASSA_API_URL}${endpoint}`, {
+    ...options,
+    headers: {
+      Authorization: yooKassaAuthorizationHeader(),
+      "Content-Type": "application/json",
+      "User-Agent": `OssetianMarket/${APP_VERSION}`,
+      ...(options.headers || {})
+    }
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const error = new Error(payload?.description || payload?.code || `YooKassa HTTP ${response.status}`);
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
+  }
+  return payload;
+}
+
+function paymentAmountString(value) {
+  return Math.max(0, Number(value) || 0).toFixed(2);
+}
+
+async function activatePaidPromotion(client, order, providerPayment = null) {
+  const plan = PROMOTION_PLANS[order.plan];
+  if (!plan) throw new Error("Неизвестный тариф продвижения");
+  const productResult = await client.query(
+    `SELECT id, owner_id, status, hidden, moderation_status, featured_until FROM products WHERE id = $1 FOR UPDATE`,
+    [order.product_id]
+  );
+  if (!productResult.rows.length) throw new Error("Объявление для оплаты не найдено");
+  const product = productResult.rows[0];
+  if (String(product.owner_id) !== String(order.user_id)) throw new Error("Владелец платежа не совпадает с владельцем объявления");
+  if (product.status !== "active" || product.hidden || (product.moderation_status || "approved") !== "approved") {
+    throw new Error("Оплаченное объявление сейчас нельзя продвигать");
+  }
+  const currentUntil = product.featured_until ? new Date(product.featured_until).getTime() : 0;
+  const startAt = Math.max(Date.now(), Number.isFinite(currentUntil) ? currentUntil : 0);
+  const featuredUntil = new Date(startAt + plan.days * 86_400_000);
+  await client.query(`
+    UPDATE products
+    SET featured_paid = TRUE, featured_color = $2, featured_until = $3,
+        promotion_plan = $4, promotion_priority = $5, updated_at = NOW()
+    WHERE id = $1
+  `, [order.product_id, FEATURE_COLOR, featuredUntil, plan.id, plan.priority]);
+
+  await client.query(`
+    INSERT INTO product_feature_requests (
+      id, product_id, owner_id, color, plan, days, price_amount, status, approved_by, approved_at,
+      reviewed_by, reviewed_at, admin_note, payment_order_id, request_source
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,'approved','payment',NOW(),'payment',NOW(),$8,$9,'payment')
+  `, [randomUUID(), order.product_id, order.user_id, FEATURE_COLOR, plan.id, plan.days, Number(order.amount) || plan.priceRub,
+      `Автоматически активировано после оплаты ${providerPayment?.id || order.provider_payment_id || order.id}`, order.id]);
+  return { featuredUntil, plan };
+}
+
+async function finalizePaymentOrder(orderId, providerPayment) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query(`SELECT * FROM payment_orders WHERE id = $1 FOR UPDATE`, [orderId]);
+    if (!result.rows.length) { await client.query("ROLLBACK"); return { ok: false, reason: "order_not_found" }; }
+    const order = result.rows[0];
+    if (order.status === "succeeded") { await client.query("COMMIT"); return { ok: true, alreadyProcessed: true, order }; }
+    if (!providerPayment || String(providerPayment.id || "") !== String(order.provider_payment_id || "")) throw new Error("Платёж провайдера не совпадает с заказом");
+    if (String(providerPayment.metadata?.order_id || "") !== String(order.id)) throw new Error("Некорректный metadata.order_id");
+    if (String(providerPayment.metadata?.user_id || "") !== String(order.user_id)) throw new Error("Некорректный metadata.user_id");
+    if (String(providerPayment.metadata?.product_id || "") !== String(order.product_id)) throw new Error("Некорректный metadata.product_id");
+    const providerAmount = Number(providerPayment.amount?.value);
+    if (!Number.isFinite(providerAmount) || Math.abs(providerAmount - Number(order.amount)) > 0.001 || providerPayment.amount?.currency !== order.currency) {
+      throw new Error("Сумма или валюта платежа не совпадает с заказом");
+    }
+    if (providerPayment.status === "succeeded" && providerPayment.paid === true) {
+      const promotion = await activatePaidPromotion(client, order, providerPayment);
+      await client.query(`UPDATE payment_orders SET status='succeeded', paid_at=NOW(), updated_at=NOW(), metadata=$2::jsonb WHERE id=$1`,
+        [order.id, JSON.stringify({ ...(order.metadata || {}), providerStatus: providerPayment.status, featuredUntil: promotion.featuredUntil.toISOString() })]);
+      await client.query("COMMIT");
+      return { ok: true, status: "succeeded", orderId: order.id, featuredUntil: promotion.featuredUntil };
+    }
+    if (providerPayment.status === "canceled") {
+      await client.query(`UPDATE payment_orders SET status='canceled', canceled_at=NOW(), updated_at=NOW() WHERE id=$1`, [order.id]);
+      await client.query("COMMIT");
+      return { ok: true, status: "canceled", orderId: order.id };
+    }
+    await client.query(`UPDATE payment_orders SET status=$2, updated_at=NOW() WHERE id=$1`, [order.id, normalizeText(providerPayment.status, 30) || "pending"]);
+    await client.query("COMMIT");
+    return { ok: true, status: providerPayment.status || "pending", orderId: order.id };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 function buildModerationContent(product) {
   const specifications = product.specifications && typeof product.specifications === "object"
     ? Object.entries(product.specifications).flat().join(" ")
@@ -1573,8 +1703,49 @@ function extractOpenAIResponseText(payload) {
   return chunks.join("\n").trim();
 }
 
-async function callOpenAIStructured({ schemaName, schema, input, maxOutputTokens = 700 }) {
+function getAIUsagePricing(kind) {
+  if (kind === "moderation") {
+    return { input: AI_MODERATION_INPUT_USD_PER_MTOK, output: AI_MODERATION_OUTPUT_USD_PER_MTOK };
+  }
+  return { input: AI_LISTING_INPUT_USD_PER_MTOK, output: AI_LISTING_OUTPUT_USD_PER_MTOK };
+}
+
+async function getAIBudgetStatus(database = pool) {
+  if (AI_DAILY_BUDGET_USD <= 0) return { allowed: true, spentUsd: 0, estimatedCostUsd: 0, budgetUsd: 0, requests: 0 };
+  try {
+    const result = await database.query(`
+      SELECT COALESCE(SUM(estimated_cost_usd), 0)::numeric AS spent, COUNT(*)::int AS requests
+      FROM ai_usage_events
+      WHERE created_at >= CURRENT_DATE;
+    `);
+    const spentUsd = Number(result.rows[0]?.spent) || 0;
+    const requests = Number(result.rows[0]?.requests) || 0;
+    return { allowed: spentUsd < AI_DAILY_BUDGET_USD, spentUsd, estimatedCostUsd: spentUsd, budgetUsd: AI_DAILY_BUDGET_USD, requests };
+  } catch {
+    return { allowed: true, spentUsd: 0, estimatedCostUsd: 0, budgetUsd: AI_DAILY_BUDGET_USD, requests: 0 };
+  }
+}
+
+async function recordAIUsage({ userId = "", kind = "general", model = "", responseId = "", usage = {} }) {
+  const inputTokens = Math.max(0, Number(usage?.input_tokens || usage?.inputTokens) || 0);
+  const outputTokens = Math.max(0, Number(usage?.output_tokens || usage?.outputTokens) || 0);
+  const pricing = getAIUsagePricing(kind);
+  const estimatedCostUsd = (inputTokens / 1_000_000) * pricing.input + (outputTokens / 1_000_000) * pricing.output;
+  try {
+    await pool.query(`
+      INSERT INTO ai_usage_events (id, user_id, kind, model, response_id, input_tokens, output_tokens, estimated_cost_usd)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8);
+    `, [randomUUID(), normalizeText(userId, 64), normalizeText(kind, 40), normalizeText(model, 80), normalizeText(responseId, 120), inputTokens, outputTokens, estimatedCostUsd]);
+  } catch (error) {
+    console.warn("AI usage accounting failed:", error?.message || error);
+  }
+  return estimatedCostUsd;
+}
+
+async function callOpenAIStructured({ schemaName, schema, input, maxOutputTokens = 700, model = OPENAI_MODEL, kind = "general", userId = "" }) {
   if (!OPENAI_API_KEY) return { ok: false, unavailable: true, error: "OPENAI_API_KEY не настроен" };
+  const budget = await getAIBudgetStatus();
+  if (!budget.allowed) return { ok: false, unavailable: true, budgetExceeded: true, error: "Дневной лимит расходов AI исчерпан" };
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
   timeout.unref?.();
@@ -1588,7 +1759,8 @@ async function callOpenAIStructured({ schemaName, schema, input, maxOutputTokens
         "User-Agent": `OssetianMarket/${APP_VERSION}`
       },
       body: JSON.stringify({
-        model: OPENAI_MODEL,
+        model,
+        store: false,
         input,
         max_output_tokens: maxOutputTokens,
         text: {
@@ -1606,6 +1778,7 @@ async function callOpenAIStructured({ schemaName, schema, input, maxOutputTokens
       const message = payload?.error?.message || `OpenAI HTTP ${response.status}`;
       return { ok: false, error: message };
     }
+    recordAIUsage({ userId, kind, model, responseId: payload?.id || "", usage: payload?.usage || {} }).catch(() => {});
     const text = extractOpenAIResponseText(payload);
     if (!text) return { ok: false, error: "AI вернул пустой ответ" };
     try {
@@ -1636,7 +1809,7 @@ function buildFallbackListingSuggestion(context = {}) {
   return { name: name.slice(0, 120), category, description, specifications, confidence: 0.25, source: "fallback" };
 }
 
-async function suggestListingFromImage({ image, context = {} }) {
+async function suggestListingFromImage({ image, context = {}, userId = "" }) {
   const fallback = buildFallbackListingSuggestion(context);
   if (!AI_LISTING_ASSISTANT_ENABLED || !OPENAI_API_KEY) return { ...fallback, aiAvailable: false };
   const imageValue = normalizeText(image, 4_500_000);
@@ -1672,6 +1845,9 @@ async function suggestListingFromImage({ image, context = {} }) {
     schemaName: "listing_photo_assistant",
     schema,
     maxOutputTokens: 800,
+    model: AI_LISTING_MODEL,
+    kind: "listing",
+    userId,
     input: [{
       role: "user",
       content: [
@@ -1700,8 +1876,8 @@ async function suggestListingFromImage({ image, context = {} }) {
   };
 }
 
-async function evaluateAIModeration(product) {
-  if (!AI_MODERATION_ENABLED || !OPENAI_API_KEY) return { available: false, blocked: false, review: false, score: 0, reason: "", matches: [] };
+async function evaluateAIModeration(product, settings = {}) {
+  if (!AI_MODERATION_ENABLED || settings.ai_enabled === false || !OPENAI_API_KEY) return { available: false, blocked: false, review: false, score: 0, reason: "", matches: [] };
   const content = buildModerationContent(product).slice(0, 7000);
   if (!content) return { available: true, blocked: false, review: false, score: 0, reason: "", matches: [] };
   const schema = {
@@ -1719,6 +1895,9 @@ async function evaluateAIModeration(product) {
     schemaName: "marketplace_moderation",
     schema,
     maxOutputTokens: 400,
+    model: AI_MODERATION_MODEL,
+    kind: "moderation",
+    userId: product.ownerId || product.owner_id || "",
     input: [{ role: "system", content: "Ты модератор российского маркетплейса. Оцени только риски объявления: мошенничество, запрещённые товары, оружие/наркотики, поддельные документы, опасные услуги, явный спам или обход контактов. Не блокируй обычные легальные товары из-за неоднозначности. block используй только при высокой уверенности, review — когда нужна проверка человеком." }, { role: "user", content }]
   });
   if (!result.ok) return { available: true, blocked: false, review: false, score: 0, reason: "", matches: [], error: result.error };
@@ -1727,21 +1906,26 @@ async function evaluateAIModeration(product) {
   const action = ["allow", "review", "block"].includes(data.action) ? data.action : "allow";
   const reason = normalizeText(data.reason, 800);
   const categories = Array.isArray(data.categories) ? data.categories.slice(0, 8).map(item => normalizeText(item, 80)).filter(Boolean) : [];
-  const blocked = action === "block" && score >= 90;
-  const review = !blocked && action === "review" && score >= 60;
+  const blockThreshold = Math.max(70, Math.min(100, Number(settings.ai_block_threshold) || 90));
+  const reviewThreshold = Math.max(20, Math.min(blockThreshold - 1, Number(settings.ai_review_threshold) || 60));
+  const blocked = action === "block" && score >= blockThreshold;
+  const review = !blocked && action === "review" && score >= reviewThreshold;
   return {
     available: true,
     blocked,
     review,
     score,
     reason,
+    action,
+    model: AI_MODERATION_MODEL,
+    responseId: result.responseId || "",
     matches: categories.map(label => ({ type: "ai", label: `AI: ${label}`, score }))
   };
 }
 
 async function evaluateProductModeration(product, database = pool) {
   const settingsResult = await database.query(`
-    SELECT enabled, block_links, block_contacts, block_emails
+    SELECT enabled, block_links, block_contacts, block_emails, ai_enabled, ai_review_threshold, ai_block_threshold
     FROM moderation_settings
     WHERE id = TRUE
     LIMIT 1;
@@ -1750,7 +1934,10 @@ async function evaluateProductModeration(product, database = pool) {
     enabled: true,
     block_links: true,
     block_contacts: true,
-    block_emails: true
+    block_emails: true,
+    ai_enabled: true,
+    ai_review_threshold: 60,
+    ai_block_threshold: 90
   };
 
   if (settings.enabled === false) {
@@ -1805,7 +1992,7 @@ async function evaluateProductModeration(product, database = pool) {
     };
   }
 
-  const aiModeration = await evaluateAIModeration(product);
+  const aiModeration = await evaluateAIModeration(product, settings);
   const aiNeedsHold = Boolean(aiModeration.blocked || aiModeration.review);
   const aiReason = aiNeedsHold
     ? `${aiModeration.review ? "AI рекомендует проверку модератором" : "AI выявил высокий риск"}${aiModeration.reason ? `: ${aiModeration.reason}` : ""}`
@@ -1816,6 +2003,9 @@ async function evaluateProductModeration(product, database = pool) {
     aiScore: Number(aiModeration.score) || 0,
     aiAvailable: Boolean(aiModeration.available),
     aiError: aiModeration.error || "",
+    aiDecision: aiModeration.action || "allow",
+    aiModel: aiModeration.model || "",
+    aiResponseId: aiModeration.responseId || "",
     reason: aiReason.slice(0, 1000),
     matches: (aiModeration.matches || []).slice(0, 20)
   };
@@ -2295,6 +2485,109 @@ async function initDb(db = pool) {
     CREATE INDEX IF NOT EXISTS idx_security_events_created
     ON security_events (created_at DESC);
   `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS payment_orders (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      purpose TEXT DEFAULT 'promotion',
+      plan TEXT NOT NULL,
+      amount NUMERIC(12,2) NOT NULL,
+      currency TEXT DEFAULT 'RUB',
+      status TEXT DEFAULT 'created',
+      provider TEXT DEFAULT 'yookassa',
+      provider_payment_id TEXT DEFAULT '',
+      confirmation_url TEXT DEFAULT '',
+      idempotence_key TEXT NOT NULL,
+      metadata JSONB DEFAULT '{}'::jsonb,
+      paid_at TIMESTAMPTZ,
+      canceled_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_orders_provider_id ON payment_orders(provider_payment_id) WHERE provider_payment_id <> '';`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_payment_orders_user_created ON payment_orders(user_id, created_at DESC);`);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS legal_acceptances (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      document_key TEXT NOT NULL,
+      document_version TEXT NOT NULL,
+      metadata JSONB DEFAULT '{}'::jsonb,
+      accepted_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, document_key, document_version)
+    );
+  `);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_legal_acceptances_user ON legal_acceptances(user_id, accepted_at DESC);`);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS business_verification_requests (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      legal_name TEXT NOT NULL,
+      inn TEXT NOT NULL,
+      ogrn TEXT DEFAULT '',
+      contact_phone TEXT DEFAULT '',
+      comment TEXT DEFAULT '',
+      status TEXT DEFAULT 'pending',
+      admin_note TEXT DEFAULT '',
+      reviewed_by TEXT DEFAULT '',
+      reviewed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_business_verification_pending ON business_verification_requests(user_id) WHERE status = 'pending';`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_business_verification_status_created ON business_verification_requests(status, created_at DESC);`);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS product_engagement_events (
+      id TEXT PRIMARY KEY,
+      product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      client_key TEXT NOT NULL,
+      event_date DATE DEFAULT CURRENT_DATE,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(product_id, event_type, client_key, event_date)
+    );
+  `);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_product_engagement_owner_created ON product_engagement_events(owner_id, created_at DESC);`);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS ai_usage_events (
+      id TEXT PRIMARY KEY,
+      user_id TEXT DEFAULT '',
+      kind TEXT NOT NULL,
+      model TEXT NOT NULL,
+      response_id TEXT DEFAULT '',
+      input_tokens INTEGER DEFAULT 0,
+      output_tokens INTEGER DEFAULT 0,
+      estimated_cost_usd NUMERIC(12,6) DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_ai_usage_created ON ai_usage_events(created_at DESC);`);
+
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS ai_risk_score INTEGER DEFAULT 0;`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS ai_decision TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS ai_reason TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS ai_model TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS ai_response_id TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE moderation_events ADD COLUMN IF NOT EXISTS ai_score INTEGER DEFAULT 0;`);
+  await db.query(`ALTER TABLE moderation_events ADD COLUMN IF NOT EXISTS ai_decision TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE moderation_events ADD COLUMN IF NOT EXISTS ai_model TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE moderation_events ADD COLUMN IF NOT EXISTS ai_response_id TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE moderation_settings ADD COLUMN IF NOT EXISTS ai_enabled BOOLEAN DEFAULT TRUE;`);
+  await db.query(`ALTER TABLE moderation_settings ADD COLUMN IF NOT EXISTS ai_review_threshold INTEGER DEFAULT 60;`);
+  await db.query(`ALTER TABLE moderation_settings ADD COLUMN IF NOT EXISTS ai_block_threshold INTEGER DEFAULT 90;`);
+  await db.query(`ALTER TABLE moderation_rules ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'general';`);
+  await db.query(`ALTER TABLE moderation_rules ADD COLUMN IF NOT EXISTS action TEXT DEFAULT 'block';`);
+  await db.query(`ALTER TABLE product_feature_requests ADD COLUMN IF NOT EXISTS payment_order_id TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE product_feature_requests ADD COLUMN IF NOT EXISTS request_source TEXT DEFAULT 'manual';`);
 
   await db.query(`
     ALTER TABLE products
@@ -2822,6 +3115,9 @@ app.get("/api/config", (req, res) => {
     aiListingAssistantEnabled: AI_LISTING_ASSISTANT_ENABLED,
     aiModerationEnabled: AI_MODERATION_ENABLED,
     aiProviderConfigured: Boolean(OPENAI_API_KEY),
+    aiDailyBudgetUsd: AI_DAILY_BUDGET_USD,
+    paymentEnabled: isYooKassaConfigured(),
+    paymentProvider: isYooKassaConfigured() ? "yookassa" : "manual",
     promotionPlans: Object.values(PROMOTION_PLANS)
   });
 });
@@ -3156,7 +3452,7 @@ app.post("/api/ai/listing-suggestion", requireTelegramAuth, syncTelegramUser, ai
   try {
     const image = normalizeText(req.body?.image, 4_500_000);
     const context = req.body?.context && typeof req.body.context === "object" ? req.body.context : {};
-    const suggestion = await suggestListingFromImage({ image, context });
+    const suggestion = await suggestListingFromImage({ image, context, userId: req.telegramUser.id });
     res.setHeader("Cache-Control", "no-store");
     res.json({ ok: true, suggestion });
   } catch (error) {
@@ -3234,6 +3530,193 @@ app.patch("/api/me/profile", requireTelegramAuth, syncTelegramUser, async (req, 
       });
     }
     res.status(500).json({ ok: false, error: "Не удалось сохранить профиль" });
+  }
+});
+
+
+
+async function recordLegalAcceptance(database, userId, documentKey, metadata = {}) {
+  await database.query(`
+    INSERT INTO legal_acceptances (id, user_id, document_key, document_version, metadata)
+    VALUES ($1,$2,$3,$4,$5::jsonb)
+    ON CONFLICT (user_id, document_key, document_version)
+    DO UPDATE SET metadata=EXCLUDED.metadata, accepted_at=NOW()
+  `, [randomUUID(), String(userId), String(documentKey), LEGAL_DOCUMENT_VERSION, JSON.stringify(metadata || {})]);
+}
+
+async function recordCoreLegalAcceptancesFromRequest(database, userId, body = {}) {
+  if (body.coreTermsAccepted === true) await recordLegalAcceptance(database, userId, "user_agreement");
+  if (body.corePdConsentAccepted === true) await recordLegalAcceptance(database, userId, "personal_data_processing");
+}
+
+async function recordListingLegalAcceptances(database, userId, body = {}) {
+  if (body.publicPhoneConsent === true) await recordLegalAcceptance(database, userId, "public_phone", { scope: "listing" });
+  if (body.publicTelegramConsent === true) await recordLegalAcceptance(database, userId, "public_telegram", { scope: "listing" });
+}
+
+app.post("/api/legal/core-acceptances", requireTelegramAuth, syncTelegramUser, async (req, res) => {
+  if (req.body?.coreTermsAccepted !== true || req.body?.corePdConsentAccepted !== true) {
+    return res.status(400).json({ ok: false, error: "Подтвердите пользовательское соглашение и согласие на обработку персональных данных отдельно" });
+  }
+  await recordCoreLegalAcceptancesFromRequest(pool, req.telegramUser.id, req.body);
+  res.json({ ok: true, version: LEGAL_DOCUMENT_VERSION });
+});
+
+app.get("/api/me/business-verification", requireTelegramAuth, syncTelegramUser, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT id, legal_name, inn, ogrn, contact_phone, comment, status, admin_note, reviewed_at, created_at, updated_at
+      FROM business_verification_requests
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+      LIMIT 10
+    `, [String(req.telegramUser.id)]);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, requests: result.rows });
+  } catch (error) {
+    console.error("Business verification history error:", error);
+    res.status(500).json({ ok: false, error: "Не удалось загрузить статус верификации" });
+  }
+});
+
+app.post("/api/me/business-verification", requireTelegramAuth, syncTelegramUser, async (req, res) => {
+  try {
+    const userId = String(req.telegramUser.id);
+    const legalName = normalizeText(req.body?.legalName, 180);
+    const inn = normalizeText(req.body?.inn, 12).replace(/\D/g, "");
+    const ogrn = normalizeText(req.body?.ogrn, 15).replace(/\D/g, "");
+    const contactPhone = normalizeText(req.body?.contactPhone, 30);
+    const comment = normalizeText(req.body?.comment, 1000);
+    if (legalName.length < 2 || ![10, 12].includes(inn.length)) {
+      return res.status(400).json({ ok: false, error: "Укажите юридическое название и корректный ИНН (10 или 12 цифр)" });
+    }
+    if (ogrn && ![13, 15].includes(ogrn.length)) {
+      return res.status(400).json({ ok: false, error: "ОГРН должен содержать 13 цифр, ОГРНИП — 15 цифр" });
+    }
+    const userResult = await pool.query(`SELECT is_business, business_name FROM users WHERE telegram_id=$1`, [userId]);
+    if (!userResult.rows[0]?.is_business) {
+      return res.status(409).json({ ok: false, code: "BUSINESS_PROFILE_REQUIRED", error: "Сначала включите профессиональный профиль продавца" });
+    }
+    const result = await pool.query(`
+      INSERT INTO business_verification_requests (id, user_id, legal_name, inn, ogrn, contact_phone, comment)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      RETURNING *
+    `, [randomUUID(), userId, legalName, inn, ogrn, contactPhone, comment]);
+    await recordSecurityEvent(req, "business_verification_requested", "info", { requestId: result.rows[0].id }, userId);
+    res.status(201).json({ ok: true, request: result.rows[0] });
+  } catch (error) {
+    if (error?.code === "23505") return res.status(409).json({ ok: false, error: "У вас уже есть заявка на проверке" });
+    console.error("Business verification create error:", error);
+    res.status(500).json({ ok: false, error: "Не удалось отправить заявку на верификацию" });
+  }
+});
+
+app.get("/api/payments", requireTelegramAuth, syncTelegramUser, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT id, product_id, purpose, plan, amount, currency, status, provider, provider_payment_id, paid_at, canceled_at, created_at, updated_at
+      FROM payment_orders WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50
+    `, [String(req.telegramUser.id)]);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, payments: result.rows });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Не удалось загрузить историю платежей" });
+  }
+});
+
+app.post("/api/payments/promotion", requireTelegramAuth, syncTelegramUser, paymentRateLimiter, async (req, res) => {
+  const userId = String(req.telegramUser.id);
+  const productId = normalizeText(req.body?.productId, 64);
+  const planId = normalizeText(req.body?.plan, 20).toLowerCase();
+  const plan = PROMOTION_PLANS[planId];
+  if (!isYooKassaConfigured()) {
+    return res.status(503).json({ ok: false, code: "PAYMENTS_NOT_CONFIGURED", error: "Онлайн-оплата пока не настроена. Используйте заявку на продвижение." });
+  }
+  if (!productId || !plan) return res.status(400).json({ ok: false, error: "Выберите объявление и тариф" });
+  try {
+    const productResult = await pool.query(`
+      SELECT id, owner_id, name, status, hidden, moderation_status
+      FROM products WHERE id=$1 AND owner_id=$2 AND COALESCE(status,'active') <> 'deleted'
+    `, [productId, userId]);
+    const product = productResult.rows[0];
+    if (!product) return res.status(404).json({ ok: false, error: "Объявление не найдено" });
+    if (product.status !== "active" || product.hidden || (product.moderation_status || "approved") !== "approved") {
+      return res.status(409).json({ ok: false, error: "Продвигать можно только активное и одобренное объявление" });
+    }
+    const orderId = randomUUID();
+    const idempotenceKey = randomUUID();
+    const amount = Number(plan.priceRub) || 0;
+    await pool.query(`
+      INSERT INTO payment_orders (id,user_id,product_id,purpose,plan,amount,currency,status,provider,idempotence_key,metadata)
+      VALUES ($1,$2,$3,'promotion',$4,$5,'RUB','creating','yookassa',$6,$7::jsonb)
+    `, [orderId, userId, productId, plan.id, amount, idempotenceKey, JSON.stringify({ productName: product.name || "", planLabel: plan.label })]);
+
+    try {
+      const payment = await requestYooKassa("/payments", {
+        method: "POST",
+        headers: { "Idempotence-Key": idempotenceKey },
+        body: JSON.stringify({
+          amount: { value: paymentAmountString(amount), currency: "RUB" },
+          capture: true,
+          confirmation: { type: "redirect", return_url: `${PUBLIC_BASE_URL}/?payment=return&order=${encodeURIComponent(orderId)}` },
+          description: `Продвижение «${plan.label}» — ${normalizeText(product.name, 80)}`,
+          metadata: { order_id: orderId, user_id: userId, product_id: productId, plan: plan.id, app: "ossetian-market" }
+        })
+      });
+      await pool.query(`
+        UPDATE payment_orders SET status=$2, provider_payment_id=$3, confirmation_url=$4, updated_at=NOW() WHERE id=$1
+      `, [orderId, normalizeText(payment.status, 30) || "pending", normalizeText(payment.id, 100), normalizeText(payment.confirmation?.confirmation_url, 1200)]);
+      res.status(201).json({ ok: true, orderId, status: payment.status || "pending", confirmationUrl: payment.confirmation?.confirmation_url || "", amount, currency: "RUB" });
+    } catch (providerError) {
+      await pool.query(`UPDATE payment_orders SET status='failed', updated_at=NOW() WHERE id=$1`, [orderId]);
+      throw providerError;
+    }
+  } catch (error) {
+    console.error("Create promotion payment error:", error);
+    await recordSecurityEvent(req, "payment_create_failed", "warning", { productId, plan: planId, message: error?.message || "" }, userId).catch(() => {});
+    res.status(502).json({ ok: false, code: "PAYMENT_PROVIDER_ERROR", error: "Не удалось создать платёж. Попробуйте позже." });
+  }
+});
+
+app.get("/api/payments/:id", requireTelegramAuth, syncTelegramUser, paymentRateLimiter, async (req, res) => {
+  try {
+    const orderId = normalizeText(req.params.id, 64);
+    let result = await pool.query(`SELECT * FROM payment_orders WHERE id=$1 AND user_id=$2 LIMIT 1`, [orderId, String(req.telegramUser.id)]);
+    if (!result.rows.length) return res.status(404).json({ ok: false, error: "Платёж не найден" });
+    let order = result.rows[0];
+    if (["creating", "pending", "waiting_for_capture"].includes(order.status) && order.provider_payment_id && isYooKassaConfigured()) {
+      try {
+        const payment = await requestYooKassa(`/payments/${encodeURIComponent(order.provider_payment_id)}`, { method: "GET" });
+        await finalizePaymentOrder(order.id, payment);
+        result = await pool.query(`SELECT * FROM payment_orders WHERE id=$1 AND user_id=$2 LIMIT 1`, [orderId, String(req.telegramUser.id)]);
+        order = result.rows[0];
+      } catch (error) {
+        console.warn("Payment status sync failed:", error?.message || error);
+      }
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, payment: { id: order.id, productId: order.product_id, plan: order.plan, amount: Number(order.amount) || 0, currency: order.currency, status: order.status, paidAt: order.paid_at, createdAt: order.created_at } });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: "Не удалось проверить платёж" });
+  }
+});
+
+app.post("/api/payments/yookassa/webhook", paymentRateLimiter, async (req, res) => {
+  try {
+    if (!isYooKassaConfigured()) return res.status(503).json({ ok: false });
+    const providerPaymentId = normalizeText(req.body?.object?.id, 100);
+    const event = normalizeText(req.body?.event, 80);
+    if (!providerPaymentId || !event.startsWith("payment.")) return res.status(400).json({ ok: false });
+    // Не доверяем телу webhook: повторно получаем платёж у ЮKassa по Basic Auth.
+    const payment = await requestYooKassa(`/payments/${encodeURIComponent(providerPaymentId)}`, { method: "GET" });
+    const orderId = normalizeText(payment.metadata?.order_id, 64);
+    if (!orderId) return res.status(200).json({ ok: true, ignored: true });
+    await finalizePaymentOrder(orderId, payment);
+    res.status(200).json({ ok: true });
+  } catch (error) {
+    console.error("YooKassa webhook error:", error);
+    // 500 заставит провайдера повторить уведомление; обработка заказа идемпотентна.
+    res.status(500).json({ ok: false });
   }
 });
 
@@ -3802,7 +4285,7 @@ app.get("/api/my-products", requireTelegramAuth, syncTelegramUser, async (req, r
 app.get("/api/me/analytics", requireTelegramAuth, syncTelegramUser, async (req, res) => {
   try {
     const ownerId = String(req.telegramUser.id);
-    const [summaryResult, topProductsResult, dailyViewsResult, trust] = await Promise.all([
+    const [summaryResult, topProductsResult, dailyViewsResult, engagementResult, previousViewsResult, trust] = await Promise.all([
       pool.query(
         `SELECT
            COUNT(*) FILTER (WHERE COALESCE(status, 'active') = 'active' AND COALESCE(hidden, FALSE) = FALSE)::int AS active_listings,
@@ -3831,9 +4314,33 @@ app.get("/api/me/analytics", requireTelegramAuth, syncTelegramUser, async (req, 
          ORDER BY event_date ASC`,
         [ownerId]
       ),
+      pool.query(
+        `SELECT
+           COUNT(*) FILTER (WHERE event_type='call_click')::int AS call_clicks,
+           COUNT(*) FILTER (WHERE event_type='message_click')::int AS message_clicks,
+           COUNT(*) FILTER (WHERE event_type='share_click')::int AS share_clicks
+         FROM product_engagement_events
+         WHERE owner_id=$1`,
+        [ownerId]
+      ),
+      pool.query(
+        `SELECT
+           COUNT(*) FILTER (WHERE event_date >= CURRENT_DATE - INTERVAL '6 days')::int AS current_views,
+           COUNT(*) FILTER (WHERE event_date BETWEEN CURRENT_DATE - INTERVAL '13 days' AND CURRENT_DATE - INTERVAL '7 days')::int AS previous_views
+         FROM product_view_events WHERE owner_id=$1`,
+        [ownerId]
+      ),
       getSellerTrust(pool, ownerId)
     ]);
     const summary = summaryResult.rows[0] || {};
+    const engagement = engagementResult.rows[0] || {};
+    const periods = previousViewsResult.rows[0] || {};
+    const currentViews = Number(periods.current_views) || 0;
+    const previousViews = Number(periods.previous_views) || 0;
+    const viewsChangePercent = previousViews > 0 ? Math.round(((currentViews - previousViews) / previousViews) * 100) : (currentViews > 0 ? 100 : 0);
+    const contactClicks = (Number(engagement.call_clicks) || 0) + (Number(engagement.message_clicks) || 0);
+    const uniqueViewTotal = dailyViewsResult.rows.reduce((sum, row) => sum + (Number(row.unique_views) || 0), 0);
+    const contactConversionPercent = uniqueViewTotal > 0 ? Math.round((contactClicks / uniqueViewTotal) * 1000) / 10 : 0;
     res.setHeader("Cache-Control", "no-store");
     res.json({
       ok: true,
@@ -3843,6 +4350,11 @@ app.get("/api/me/analytics", requireTelegramAuth, syncTelegramUser, async (req, 
         totalViews: Number(summary.total_views) || 0,
         favorites: Number(summary.favorites) || 0,
         activePromotions: Number(summary.active_promotions) || 0,
+        callClicks: Number(engagement.call_clicks) || 0,
+        messageClicks: Number(engagement.message_clicks) || 0,
+        shareClicks: Number(engagement.share_clicks) || 0,
+        contactConversionPercent,
+        viewsChangePercent,
         trust,
         dailyViews: dailyViewsResult.rows.map(row => ({ date: row.event_date, views: Number(row.unique_views) || 0 })),
         topProducts: topProductsResult.rows.map(row => ({
@@ -3898,7 +4410,7 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
     const {
       name, price, category, desc, image, thumbnail, images, location, phone,
       allowCalls, allowMessages, condition, negotiable, delivery, district,
-      specifications, status
+      specifications, status, publicPhoneConsent, publicTelegramConsent
     } = req.body;
 
     const cleanName = normalizeText(name, 120);
@@ -3919,6 +4431,12 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
     if (!cleanName || !cleanPrice || !cleanCategory || !cleanDescription) {
       return res.status(400).json({ ok: false, error: "Проверьте название, цену, категорию и описание" });
     }
+    if (allowCalls !== false && cleanPhone && publicPhoneConsent !== true) {
+      return res.status(400).json({ ok: false, code: "PUBLIC_PHONE_CONSENT_REQUIRED", error: "Подтвердите согласие на публикацию номера телефона" });
+    }
+    if (allowMessages !== false && publicTelegramConsent !== true) {
+      return res.status(400).json({ ok: false, code: "PUBLIC_TELEGRAM_CONSENT_REQUIRED", error: "Подтвердите согласие на публикацию Telegram-контакта" });
+    }
 
     const sourceImages = Array.isArray(images) ? images : [];
     const cleanImages = sourceImages.map(normalizeProductImage).filter(Boolean).slice(0, 5);
@@ -3927,6 +4445,7 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
     const cleanThumbnail = normalizeProductImage(thumbnail) || cleanImages[0] || "";
 
     await client.query("BEGIN");
+    await recordListingLegalAcceptances(client, req.telegramUser.id, { publicPhoneConsent, publicTelegramConsent });
     const listingQuota = await getListingQuota(client, req.telegramUser.id, { lockUser: true });
     if (listingQuota.used >= listingQuota.limit) {
       await client.query("ROLLBACK");
@@ -3950,7 +4469,8 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
       desc: cleanDescription,
       location: cleanLocation,
       district: cleanDistrict,
-      specifications: cleanSpecifications
+      specifications: cleanSpecifications,
+      ownerId: req.telegramUser.id
     }, client);
     const finalStatus = moderation.blocked ? "draft" : (requestedStatus === "draft" ? "draft" : "active");
     const duplicateFingerprint = buildDuplicateFingerprint({
@@ -4009,6 +4529,13 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
       ]
     );
 
+    await client.query(`
+      UPDATE products
+      SET ai_risk_score = $2, ai_decision = $3, ai_reason = $4, ai_model = $5, ai_response_id = $6
+      WHERE id = $1
+    `, [id, Number(moderation.aiScore) || 0, moderation.aiDecision || "allow", moderation.reason || "", moderation.aiModel || "", moderation.aiResponseId || ""]);
+    Object.assign(result.rows[0], { ai_risk_score: Number(moderation.aiScore) || 0, ai_decision: moderation.aiDecision || "allow", ai_reason: moderation.reason || "", ai_model: moderation.aiModel || "", ai_response_id: moderation.aiResponseId || "" });
+
     if (cleanThumbnail) {
       await client.query(`UPDATE products SET thumbnail = $2 WHERE id = $1`, [id, cleanThumbnail]);
       result.rows[0].thumbnail = cleanThumbnail;
@@ -4023,8 +4550,8 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
 
     if (moderation.blocked) {
       await client.query(
-        `INSERT INTO moderation_events (id, product_id, user_id, source, reason, matches) VALUES ($1, $2, $3, 'publish', $4, $5::jsonb) ON CONFLICT DO NOTHING`,
-        [randomUUID(), id, req.telegramUser.id, moderation.reason, JSON.stringify(moderation.matches)]
+        `INSERT INTO moderation_events (id, product_id, user_id, source, reason, matches, ai_score, ai_decision, ai_model, ai_response_id) VALUES ($1, $2, $3, 'publish', $4, $5::jsonb, $6, $7, $8, $9) ON CONFLICT DO NOTHING`,
+        [randomUUID(), id, req.telegramUser.id, moderation.reason, JSON.stringify(moderation.matches), Number(moderation.aiScore) || 0, moderation.aiDecision || "", moderation.aiModel || "", moderation.aiResponseId || ""]
       );
       recordSecurityEvent(req, moderation.aiReview ? "ai_moderation_review" : "moderation_block", moderation.aiReview ? "warning" : "high", {
         productId: id, aiScore: moderation.aiScore || 0, reason: moderation.reason
@@ -4169,7 +4696,8 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
       desc: cleanDescription,
       location: cleanLocation,
       district: cleanDistrict,
-      specifications: cleanSpecifications
+      specifications: cleanSpecifications,
+      ownerId: req.telegramUser.id
     }, client);
     const finalStatus = moderation.blocked
       ? "draft"
@@ -4236,6 +4764,13 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
       ]
     );
 
+    await client.query(`
+      UPDATE products
+      SET ai_risk_score = $2, ai_decision = $3, ai_reason = $4, ai_model = $5, ai_response_id = $6
+      WHERE id = $1
+    `, [productId, Number(moderation.aiScore) || 0, moderation.aiDecision || "allow", moderation.reason || "", moderation.aiModel || "", moderation.aiResponseId || ""]);
+    Object.assign(result.rows[0], { ai_risk_score: Number(moderation.aiScore) || 0, ai_decision: moderation.aiDecision || "allow", ai_reason: moderation.reason || "", ai_model: moderation.aiModel || "", ai_response_id: moderation.aiResponseId || "" });
+
     if (priceChanged) {
       await client.query(
         `
@@ -4257,8 +4792,8 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
 
     if (moderation.blocked) {
       await client.query(
-        `INSERT INTO moderation_events (id, product_id, user_id, source, reason, matches) VALUES ($1, $2, $3, 'edit', $4, $5::jsonb) ON CONFLICT DO NOTHING`,
-        [randomUUID(), productId, req.telegramUser.id, moderation.reason, JSON.stringify(moderation.matches)]
+        `INSERT INTO moderation_events (id, product_id, user_id, source, reason, matches, ai_score, ai_decision, ai_model, ai_response_id) VALUES ($1, $2, $3, 'edit', $4, $5::jsonb, $6, $7, $8, $9) ON CONFLICT DO NOTHING`,
+        [randomUUID(), productId, req.telegramUser.id, moderation.reason, JSON.stringify(moderation.matches), Number(moderation.aiScore) || 0, moderation.aiDecision || "", moderation.aiModel || "", moderation.aiResponseId || ""]
       );
     }
 
@@ -4427,6 +4962,30 @@ app.post("/api/products/:id/view", async (req, res) => {
       ok: false,
       error: "Не удалось обновить просмотры"
     });
+  }
+});
+
+
+app.post("/api/products/:id/engagement", async (req, res) => {
+  try {
+    const productId = normalizeText(req.params.id, 64);
+    const eventType = normalizeText(req.body?.eventType, 30).toLowerCase();
+    if (!productId || !["call_click", "message_click", "share_click"].includes(eventType)) {
+      return res.status(400).json({ ok: false, error: "Некорректное событие" });
+    }
+    const productResult = await pool.query(`SELECT id, owner_id FROM products WHERE id=$1 AND COALESCE(status,'active')='active' AND COALESCE(hidden,FALSE)=FALSE`, [productId]);
+    if (!productResult.rows.length) return res.status(404).json({ ok: false, error: "Объявление не найдено" });
+    const fallbackClientKey = createHash("sha256").update(`${req.ip || ""}|${req.headers["user-agent"] || ""}`).digest("hex").slice(0, 48);
+    const clientKey = normalizeText(req.body?.clientKey, 120) || fallbackClientKey;
+    await pool.query(`
+      INSERT INTO product_engagement_events (id, product_id, owner_id, event_type, client_key)
+      VALUES ($1,$2,$3,$4,$5)
+      ON CONFLICT (product_id,event_type,client_key,event_date) DO NOTHING
+    `, [randomUUID(), productId, productResult.rows[0].owner_id, eventType, clientKey]);
+    res.status(202).json({ ok: true });
+  } catch (error) {
+    console.warn("Product engagement analytics failed:", error?.message || error);
+    res.status(202).json({ ok: true });
   }
 });
 
@@ -5188,10 +5747,20 @@ function requireAdmin(req, res, next) {
   const id = String(req.telegramUser?.id || "");
 
   if (!ADMIN_IDS.includes(id)) {
-    return res.status(403).json({
-      ok: false,
-      error: "Доступ запрещён"
-    });
+    recordSecurityEvent(req, "admin_access_denied", "high", { telegramId: id }).catch(() => {});
+    return res.status(403).json({ ok: false, error: "Доступ запрещён" });
+  }
+
+  if (ADMIN_ACCESS_CODE_SHA256) {
+    const supplied = String(req.headers["x-admin-access-code"] || "");
+    const suppliedHash = createHash("sha256").update(supplied).digest("hex");
+    const expected = Buffer.from(ADMIN_ACCESS_CODE_SHA256, "hex");
+    const actual = Buffer.from(suppliedHash, "hex");
+    const valid = expected.length === actual.length && expected.length > 0 && timingSafeEqual(expected, actual);
+    if (!valid) {
+      recordSecurityEvent(req, "admin_second_factor_failed", "high", { telegramId: id }).catch(() => {});
+      return res.status(401).json({ ok: false, code: "ADMIN_SECOND_FACTOR_REQUIRED", error: "Требуется код дополнительной защиты администратора" });
+    }
   }
 
   next();
@@ -5230,7 +5799,7 @@ app.get(
   syncTelegramUser,
   requireAdmin,
   adminRoute(async (req, res) => {
-    const [users, products, hidden, banned, pendingReports, pendingModeration, pendingFeatureRequests, activeAds, adRevenue, newUsersToday, newProductsToday] =
+    const [users, products, hidden, banned, pendingReports, pendingModeration, pendingFeatureRequests, pendingBusinessVerifications, activeAds, adRevenue, promotionRevenue, newUsersToday, newProductsToday] =
       await Promise.all([
         pool.query("SELECT COUNT(*)::int AS count FROM users"),
         pool.query(
@@ -5252,6 +5821,9 @@ app.get(
           "SELECT COUNT(*)::int AS count FROM product_feature_requests WHERE status = 'pending'"
         ),
         pool.query(
+          "SELECT COUNT(*)::int AS count FROM business_verification_requests WHERE status = 'pending'"
+        ),
+        pool.query(
           "SELECT COUNT(*)::int AS count FROM advertising_campaigns WHERE status = 'active' AND (ends_at IS NULL OR ends_at >= NOW())"
         ),
         pool.query(`
@@ -5262,6 +5834,7 @@ app.get(
           END), 0)::numeric(14,2) AS amount
           FROM advertising_campaigns
         `),
+        pool.query("SELECT COALESCE(SUM(amount),0)::numeric(14,2) AS amount FROM payment_orders WHERE status='succeeded'"),
         pool.query(
           "SELECT COUNT(*)::int AS count FROM users WHERE created_at >= CURRENT_DATE"
         ),
@@ -5279,11 +5852,103 @@ app.get(
       pendingReports: pendingReports.rows[0].count,
       pendingModeration: pendingModeration.rows[0].count,
       pendingFeatureRequests: pendingFeatureRequests.rows[0].count,
+      pendingBusinessVerifications: pendingBusinessVerifications.rows[0].count,
       activeAds: activeAds.rows[0].count,
       adRevenue: Number(adRevenue.rows[0].amount) || 0,
+      promotionRevenue: Number(promotionRevenue.rows[0].amount) || 0,
       newUsersToday: newUsersToday.rows[0].count,
       newProductsToday: newProductsToday.rows[0].count
     });
+  })
+);
+
+
+app.get(
+  "/api/admin/business-verifications",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const requestedStatus = normalizeText(req.query.status, 20).toLowerCase();
+    const allowed = new Set(["pending", "approved", "rejected"]);
+    const status = allowed.has(requestedStatus) ? requestedStatus : "pending";
+    const result = await pool.query(`
+      SELECT bvr.id, bvr.user_id, bvr.legal_name, bvr.inn, bvr.ogrn, bvr.contact_phone,
+             bvr.comment, bvr.status, bvr.admin_note, bvr.reviewed_by, bvr.reviewed_at,
+             bvr.created_at, bvr.updated_at,
+             u.first_name, u.last_name, u.username, u.business_name, u.business_category,
+             u.business_verified, u.listing_limit
+      FROM business_verification_requests bvr
+      JOIN users u ON u.telegram_id = bvr.user_id
+      WHERE bvr.status = $1
+      ORDER BY bvr.created_at DESC
+      LIMIT 200
+    `, [status]);
+    res.json({ ok: true, requests: result.rows });
+  })
+);
+
+app.patch(
+  "/api/admin/business-verifications/:id",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const requestId = normalizeText(req.params.id, 64);
+    const decision = normalizeText(req.body?.decision, 20).toLowerCase();
+    const adminNote = normalizeText(req.body?.adminNote, 1000);
+    if (!["approve", "reject"].includes(decision)) {
+      return res.status(400).json({ ok: false, error: "Выберите решение по заявке" });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const current = await client.query(`SELECT * FROM business_verification_requests WHERE id=$1 FOR UPDATE`, [requestId]);
+      const verification = current.rows[0];
+      if (!verification) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ ok: false, error: "Заявка не найдена" });
+      }
+      if (verification.status !== "pending") {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ ok: false, error: "Заявка уже обработана" });
+      }
+      const status = decision === "approve" ? "approved" : "rejected";
+      const updated = await client.query(`
+        UPDATE business_verification_requests
+        SET status=$2, admin_note=$3, reviewed_by=$4, reviewed_at=NOW(), updated_at=NOW()
+        WHERE id=$1 RETURNING *
+      `, [requestId, status, adminNote, String(req.telegramUser.id)]);
+      if (decision === "approve") {
+        await client.query(`
+          UPDATE users
+          SET is_business=TRUE, business_verified=TRUE,
+              listing_limit=GREATEST(COALESCE(listing_limit, 3), 50), updated_at=NOW()
+          WHERE telegram_id=$1
+        `, [verification.user_id]);
+      }
+      await addAdminLog(req.telegramUser.id, `business_verification_${status}`, verification.user_id, `${verification.legal_name}; ИНН ${verification.inn}${adminNote ? `; ${adminNote}` : ""}`, client);
+      await client.query("COMMIT");
+      await recordSecurityEvent(req, `business_verification_${status}`, "info", { requestId, userId: verification.user_id }, verification.user_id);
+      res.json({ ok: true, request: updated.rows[0] });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  })
+);
+
+app.post(
+  "/api/admin/backups",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const result = await createDatabaseBackup(pool, { backupDir: BACKUP_DIR, retention: BACKUP_RETENTION_COUNT, appVersion: APP_VERSION });
+    await addAdminLog(req.telegramUser.id, "database_backup_create", result.filename || "backup", `${result.bytes || 0} bytes`);
+    res.json({ ok: true, backup: { filename: result.filename, bytes: result.bytes } });
   })
 );
 
@@ -5863,17 +6528,47 @@ app.patch(
 );
 
 
+
+async function seedDefaultModerationRules(database = pool, adminId = "system") {
+  let inserted = 0;
+  let updated = 0;
+  for (const [id, pattern, matchType, category, action] of DEFAULT_MODERATION_RULES) {
+    const result = await database.query(`
+      INSERT INTO moderation_rules (id, pattern, match_type, category, action, is_active, note, created_by)
+      VALUES ($1,$2,$3,$4,$5,TRUE,$6,$7)
+      ON CONFLICT (id) DO UPDATE SET pattern=EXCLUDED.pattern, match_type=EXCLUDED.match_type,
+        category=EXCLUDED.category, action=EXCLUDED.action, updated_at=NOW()
+      RETURNING (xmax = 0) AS inserted
+    `, [id, pattern, matchType, category, action, `Базовый пакет РФ ${MODERATION_POLICY_VERSION}`, String(adminId)]);
+    if (result.rows[0]?.inserted) inserted += 1; else updated += 1;
+  }
+  return { inserted, updated, version: MODERATION_POLICY_VERSION };
+}
+
+app.post(
+  "/api/admin/moderation/defaults",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const result = await seedDefaultModerationRules(pool, req.telegramUser.id);
+    await addAdminLog(req.telegramUser.id, "moderation_defaults_sync", result.version, `inserted=${result.inserted}; updated=${result.updated}`);
+    res.json({ ok: true, ...result });
+  })
+);
+
 app.get(
   "/api/admin/moderation",
   requireTelegramAuth,
   syncTelegramUser,
   requireAdmin,
   adminRoute(async (req, res) => {
-    const [events, rules, settings] = await Promise.all([
+    const [events, rules, settings, aiUsage] = await Promise.all([
       pool.query(`
         SELECT
           m.id, m.product_id, m.user_id, m.source, m.reason, m.matches,
-          m.status, m.created_at, p.name AS product_name, p.description,
+          m.status, m.created_at, m.ai_score, m.ai_decision, m.ai_model, m.ai_response_id,
+          p.name AS product_name, p.description, p.ai_risk_score, p.ai_reason,
           p.owner_name, p.owner_username, COALESCE(NULLIF(p.thumbnail, ''), p.image) AS image, p.price
         FROM moderation_events m
         JOIN products p ON p.id = m.product_id
@@ -5882,21 +6577,23 @@ app.get(
         LIMIT 100;
       `),
       pool.query(`
-        SELECT id, pattern, match_type, is_active, note, created_by, created_at, updated_at
+        SELECT id, pattern, match_type, category, action, is_active, note, created_by, created_at, updated_at
         FROM moderation_rules
         ORDER BY is_active DESC, created_at DESC;
       `),
       pool.query(`
-        SELECT enabled, block_links, block_contacts, block_emails, updated_at
+        SELECT enabled, block_links, block_contacts, block_emails, ai_enabled, ai_review_threshold, ai_block_threshold, updated_at
         FROM moderation_settings WHERE id = TRUE;
-      `)
+      `),
+      getAIBudgetStatus(pool)
     ]);
 
     res.json({
       ok: true,
       events: events.rows,
       rules: rules.rows,
-      settings: settings.rows[0] || {}
+      settings: settings.rows[0] || {},
+      aiUsage
     });
   })
 );
@@ -5910,18 +6607,20 @@ app.post(
     const pattern = normalizeText(req.body?.pattern, 200);
     const matchType = normalizeText(req.body?.matchType, 20).toLowerCase();
     const note = normalizeText(req.body?.note, 500);
+    const category = normalizeText(req.body?.category, 40) || "general";
+    const action = ["review", "block"].includes(normalizeText(req.body?.action, 20).toLowerCase()) ? normalizeText(req.body?.action, 20).toLowerCase() : "block";
     if (pattern.length < 2 || !MODERATION_MATCH_TYPES.has(matchType)) {
       return res.status(400).json({ ok: false, error: "Проверьте выражение и тип правила" });
     }
 
     const result = await pool.query(
       `
-        INSERT INTO moderation_rules (id, pattern, match_type, note, created_by)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO moderation_rules (id, pattern, match_type, category, action, note, created_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT DO NOTHING
         RETURNING *;
       `,
-      [randomUUID(), pattern, matchType, note, req.telegramUser.id]
+      [randomUUID(), pattern, matchType, category, action, note, req.telegramUser.id]
     );
     if (!result.rows.length) {
       return res.status(409).json({ ok: false, error: "Такое правило уже существует" });
@@ -5972,7 +6671,8 @@ app.patch(
       `
         UPDATE moderation_settings
         SET enabled = $1, block_links = $2, block_contacts = $3,
-            block_emails = $4, updated_by = $5, updated_at = NOW()
+            block_emails = $4, ai_enabled = $5, ai_review_threshold = $6, ai_block_threshold = $7,
+            updated_by = $8, updated_at = NOW()
         WHERE id = TRUE
         RETURNING *;
       `,
@@ -5981,6 +6681,9 @@ app.patch(
         normalizeBoolean(req.body?.blockLinks),
         normalizeBoolean(req.body?.blockContacts),
         normalizeBoolean(req.body?.blockEmails),
+        normalizeBoolean(req.body?.aiEnabled),
+        Math.max(20, Math.min(89, Number(req.body?.aiReviewThreshold) || 60)),
+        Math.max(70, Math.min(100, Number(req.body?.aiBlockThreshold) || 90)),
         req.telegramUser.id
       ]
     );
@@ -6575,6 +7278,19 @@ async function initializeDatabaseUntilReady() {
           lifecycleTimer = setInterval(runProductLifecycleMaintenance, 60 * 60 * 1000);
           lifecycleTimer.unref?.();
         }
+        if (AUTO_BACKUP_ENABLED && !backupTimer) {
+          const runBackup = async () => {
+            try {
+              const backup = await createDatabaseBackup(pool, { backupDir: BACKUP_DIR, retention: BACKUP_RETENTION_COUNT, appVersion: APP_VERSION });
+              console.log(`Database backup created: ${backup.filename} (${backup.bytes} bytes)`);
+            } catch (backupError) {
+              console.error("Automatic database backup error:", backupError);
+            }
+          };
+          setTimeout(runBackup, 60_000).unref?.();
+          backupTimer = setInterval(runBackup, AUTO_BACKUP_INTERVAL_HOURS * 60 * 60 * 1000);
+          backupTimer.unref?.();
+        }
       } catch (error) {
         databaseState.lastError = String(error?.message || error || "Database connection error");
         console.error(
@@ -6625,6 +7341,7 @@ ensureDatabaseInitialization();
 async function shutdown(signal) {
   console.log(`${signal} received; shutting down`);
   if (lifecycleTimer) clearInterval(lifecycleTimer);
+  if (backupTimer) clearInterval(backupTimer);
   httpServer.close(async () => {
     try {
       await pool.end();

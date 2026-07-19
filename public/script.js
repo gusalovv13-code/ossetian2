@@ -415,6 +415,9 @@ const state = {
     aiListingAssistantEnabled: true,
     aiModerationEnabled: true,
     aiProviderConfigured: false,
+    paymentEnabled: false,
+    paymentProvider: "manual",
+    aiDailyBudgetUsd: 5,
     promotionPlans: [
       { id: "boost", label: "Поднять", days: 1, priceRub: 99, priority: 1 },
       { id: "vip", label: "VIP", days: 7, priceRub: 299, priority: 2 },
@@ -469,6 +472,7 @@ async function apiRequest(url, options = {}) {
       headers: {
         "Content-Type": "application/json",
         ...getTelegramAuthHeaders(),
+        ...(url.startsWith("/api/admin") && sessionStorage.getItem("adminAccessCode") ? { "X-Admin-Access-Code": sessionStorage.getItem("adminAccessCode") } : {}),
         ...headers
       }
     });
@@ -485,6 +489,13 @@ async function apiRequest(url, options = {}) {
       apiError.status = response.status;
       apiError.code = data.code || "";
       apiError.details = data;
+      if (data.code === "ADMIN_SECOND_FACTOR_REQUIRED" && url.startsWith("/api/admin") && !options.__adminRetry) {
+        const code = window.prompt("Введите дополнительный код администратора");
+        if (code) {
+          sessionStorage.setItem("adminAccessCode", code);
+          return apiRequest(url, { ...options, __adminRetry: true });
+        }
+      }
       throw apiError;
     }
 
@@ -517,6 +528,9 @@ async function loadConfig() {
     state.config.aiListingAssistantEnabled = data.aiListingAssistantEnabled !== false;
     state.config.aiModerationEnabled = data.aiModerationEnabled !== false;
     state.config.aiProviderConfigured = Boolean(data.aiProviderConfigured);
+    state.config.paymentEnabled = Boolean(data.paymentEnabled);
+    state.config.paymentProvider = data.paymentProvider || "manual";
+    state.config.aiDailyBudgetUsd = Number(data.aiDailyBudgetUsd) || 5;
     if (Array.isArray(data.promotionPlans) && data.promotionPlans.length) state.config.promotionPlans = data.promotionPlans;
   } catch (error) {
     console.error("Не удалось загрузить конфигурацию:", error);
@@ -530,15 +544,32 @@ function getAdClientKey() {
   return fallbackAdClientKey;
 }
 
+const ADS_CACHE_KEY = "ossetianMarketAdsCache";
+
+function hydrateAdsCache() {
+  try {
+    const cached = JSON.parse(readBrowserStorage("localStorage", ADS_CACHE_KEY) || "null");
+    if (cached && Array.isArray(cached.ads) && Date.now() - Number(cached.savedAt || 0) < 30 * 60 * 1000) {
+      state.ads = cached.ads;
+      renderCatalogTopAds();
+      renderProductDetailAds();
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
 async function loadAds() {
+  if (!state.ads.length) hydrateAdsCache();
   try {
     const data = await apiRequest(`/api/ads?_=${Date.now()}`, { cache: "no-store" });
     state.ads = data.ads || [];
+    writeBrowserStorage("localStorage", ADS_CACHE_KEY, JSON.stringify({ ads: state.ads, savedAt: Date.now() }));
     renderCatalogTopAds();
     renderProductDetailAds();
   } catch (error) {
     console.error("Не удалось загрузить рекламу:", error);
-    state.ads = [];
+    if (!state.ads.length) hydrateAdsCache();
   }
 }
 
@@ -587,7 +618,7 @@ function renderAdCard(ad, variant = "feed") {
 async function openAdCampaign(adId) {
   const ad = state.ads.find(item => item.id === adId);
   if (!ad) return;
-  await trackAdEvent(ad.id, "click");
+  trackAdEvent(ad.id, "click");
 
   if (ad.linkedProductId) {
     await openProduct(ad.linkedProductId);
@@ -2750,6 +2781,7 @@ function swapImageAfterLoad(imageEl, source, sequence) {
 function showProductImage(index) {
   const product = findProductById(state.openedProductId);
   if (!product) return;
+  trackProductEngagement(product.id, "share_click");
 
   const images = getProductImages(product);
   if (images.length === 0) return;
@@ -3113,6 +3145,15 @@ function openFastTelegramShare(product) {
   window.open(telegramUrl, "_blank", "noopener,noreferrer");
 }
 
+function trackProductEngagement(productId, eventType) {
+  if (!productId || !eventType) return;
+  apiRequest(`/api/products/${encodeURIComponent(productId)}/engagement`, {
+    method: "POST",
+    body: JSON.stringify({ eventType, clientKey: getAdClientKey() }),
+    timeoutMs: 5000
+  }).catch(() => {});
+}
+
 async function shareProduct(button = null) {
   const product = findProductById(state.openedProductId);
   if (!product) return;
@@ -3305,7 +3346,7 @@ function renderProductDetails(product) {
   if (productPhoneLine) {
     if (allowCalls && cleanPhone && isAvailable) {
       productPhoneLine.innerHTML = `
-        <a href="${escapeHTML(buildExternalCallPageUrl(cleanPhone) || `tel:${cleanPhone}`)}" class="phone-line-link" aria-label="Позвонить ${escapeHTML(sellerPhone)}" onclick="event.preventDefault(); openExternalCallPage(decodeURIComponent('${escapeHTML(encodeURIComponent(cleanPhone))}'))">
+        <a href="${escapeHTML(buildExternalCallPageUrl(cleanPhone) || `tel:${cleanPhone}`)}" class="phone-line-link" aria-label="Позвонить ${escapeHTML(sellerPhone)}" onclick="event.preventDefault(); trackProductEngagement('${escapeHTML(product.id)}','call_click'); openExternalCallPage(decodeURIComponent('${escapeHTML(encodeURIComponent(cleanPhone))}'))">
           📞 ${escapeHTML(sellerPhone)}
         </a>
       `;
@@ -3321,6 +3362,7 @@ function renderProductDetails(product) {
       messageBtn.disabled = false;
       messageBtn.textContent = "💬 Написать";
       messageBtn.onclick = () => {
+        trackProductEngagement(product.id, "message_click");
         const url = `https://t.me/${sellerUsername}`;
         if (tg?.openTelegramLink) tg.openTelegramLink(url);
         else window.open(url, "_blank", "noopener,noreferrer");
@@ -3346,6 +3388,7 @@ function renderProductDetails(product) {
         tg?.HapticFeedback?.impactOccurred?.("light");
         event.preventDefault();
         event.stopPropagation();
+        trackProductEngagement(product.id, "call_click");
         openExternalCallPage(cleanPhone);
       };
     } else {
@@ -3769,7 +3812,9 @@ function getAdFormData() {
     year: structured.year,
     phone: document.getElementById("adPhone")?.value.trim() || "",
     allowCalls: document.getElementById("adAllowCalls")?.checked !== false,
-    allowMessages: document.getElementById("adAllowMessages")?.checked !== false
+    allowMessages: document.getElementById("adAllowMessages")?.checked !== false,
+    publicPhoneConsent: document.getElementById("adPublicPhoneConsent")?.checked === true,
+    publicTelegramConsent: document.getElementById("adPublicTelegramConsent")?.checked === true
   };
 }
 
@@ -4607,6 +4652,8 @@ function updateHighlightPlanSummary() {
   const price = Number(plan.priceRub) || 0;
   const priceText = price > 0 ? `${price.toLocaleString("ru-RU")} ₽` : "по согласованию";
   summary.innerHTML = `<span>Тариф</span><b>${escapeHTML(plan.label || plan.id)}</b><span>Срок</span><b>${Number(plan.days) || 1} дн.</b><span>Стоимость</span><b>${escapeHTML(priceText)}</b>`;
+  const submitButton = document.getElementById("submitHighlightRequestBtn");
+  if (submitButton) submitButton.textContent = state.config.paymentEnabled && price > 0 ? `Оплатить ${priceText}` : "Отправить заявку";
 }
 
 function requestProductHighlight(productId) {
@@ -4657,6 +4704,18 @@ async function submitProductHighlightRequest(event) {
   }
 
   try {
+    if (state.config.paymentEnabled && Number(plan.priceRub) > 0) {
+      const payment = await apiRequest("/api/payments/promotion", {
+        method: "POST",
+        body: JSON.stringify({ productId, plan: plan.id })
+      });
+      closeHighlightDialog();
+      if (!payment.confirmationUrl) throw new Error("Платёж создан, но ссылка на оплату не получена");
+      if (tg?.openLink) tg.openLink(payment.confirmationUrl);
+      else window.location.assign(payment.confirmationUrl);
+      return;
+    }
+
     await apiRequest(`/api/products/${encodeURIComponent(productId)}/feature-request`, {
       method: "POST",
       body: JSON.stringify({ color, plan: plan.id })
@@ -4672,7 +4731,7 @@ async function submitProductHighlightRequest(event) {
 
     closeHighlightDialog();
     renderMyAds();
-    alert(`Заявка «${plan.label}» отправлена. Администратор подтвердит оплату и включит продвижение.`);
+    alert(`Заявка «${plan.label}» отправлена. Администратор проверит её и включит продвижение.`);
   } catch (error) {
     console.error("Feature request error:", error);
     alert(error.message || "Не удалось отправить заявку на выделение");
@@ -4680,7 +4739,8 @@ async function submitProductHighlightRequest(event) {
     featureRequestInFlight.delete(productId);
     if (submitButton) {
       submitButton.disabled = false;
-      submitButton.textContent = "Отправить заявку";
+      const currentPlan = getPromotionPlan(document.getElementById("highlightPlanSelect")?.value || "vip");
+      submitButton.textContent = state.config.paymentEnabled && Number(currentPlan.priceRub) > 0 ? `Оплатить ${Number(currentPlan.priceRub).toLocaleString("ru-RU")} ₽` : "Отправить заявку";
     }
   }
 }
@@ -5727,6 +5787,9 @@ function renderSellerAnalytics() {
     ["👁", "Просмотры", analytics.totalViews],
     ["♡", "В избранном", analytics.favorites],
     ["✓", "Продано", analytics.soldListings],
+    ["📞", "Звонки", analytics.callClicks],
+    ["💬", "Сообщения", analytics.messageClicks],
+    ["📈", "Конверсия", `${Number(analytics.contactConversionPercent || 0).toFixed(1)}%`],
     ["🚀", "Продвигается", analytics.activePromotions],
     ["🛡", "Доверие", `${trust.score}%`]
   ];
@@ -5770,9 +5833,92 @@ async function loadSellerAnalytics(force = false) {
   }
 }
 
+
+async function submitCoreLegalAcceptances(event) {
+  event.preventDefault();
+  try {
+    await apiRequest("/api/legal/core-acceptances", { method: "POST", body: JSON.stringify({
+      coreTermsAccepted: document.getElementById("coreTermsAccepted")?.checked === true,
+      corePdConsentAccepted: document.getElementById("corePdConsentAccepted")?.checked === true
+    }) });
+    const dialog=document.getElementById("legalOnboardingDialog"); if(dialog?.close) dialog.close(); else dialog?.removeAttribute("open");
+  } catch(error){ alert(error.message || "Не удалось сохранить согласия"); }
+}
+
+async function openBusinessVerificationDialog() {
+  const dialog = document.getElementById("businessVerificationDialog");
+  const status = document.getElementById("businessVerificationStatus");
+  if (!dialog) return;
+  if (status) status.textContent = "Загружаем статус…";
+  if (dialog.showModal) dialog.showModal(); else dialog.setAttribute("open", "");
+  try {
+    const data = await apiRequest("/api/me/business-verification", { cache: "no-store" });
+    const latest = data.requests?.[0];
+    if (status) status.textContent = latest
+      ? `Последняя заявка: ${latest.status === "approved" ? "✅ подтверждена" : latest.status === "rejected" ? "❌ отклонена" : "⏳ на проверке"}${latest.admin_note ? ` · ${latest.admin_note}` : ""}`
+      : "Заявок пока нет.";
+  } catch (error) { if (status) status.textContent = error.message; }
+}
+
+function closeBusinessVerificationDialog() {
+  const dialog = document.getElementById("businessVerificationDialog");
+  if (dialog?.close) dialog.close(); else dialog?.removeAttribute("open");
+}
+
+async function submitBusinessVerification(event) {
+  event.preventDefault();
+  const button = document.getElementById("submitBusinessVerificationBtn");
+  if (button) button.disabled = true;
+  try {
+    await apiRequest("/api/me/business-verification", { method: "POST", body: JSON.stringify({
+      legalName: document.getElementById("businessVerificationLegalName")?.value.trim() || "",
+      inn: document.getElementById("businessVerificationInn")?.value.trim() || "",
+      ogrn: document.getElementById("businessVerificationOgrn")?.value.trim() || "",
+      contactPhone: document.getElementById("businessVerificationPhone")?.value.trim() || "",
+      comment: document.getElementById("businessVerificationComment")?.value.trim() || ""
+    }) });
+    alert("✅ Заявка на верификацию отправлена.");
+    const status = document.getElementById("businessVerificationStatus");
+    if (status) status.textContent = "Последняя заявка: ⏳ на проверке";
+  } catch (error) { alert(error.message || "Не удалось отправить заявку"); }
+  finally { if (button) button.disabled = false; }
+}
+
+async function openPaymentHistoryDialog() {
+  const dialog = document.getElementById("paymentHistoryDialog");
+  const list = document.getElementById("paymentHistoryList");
+  if (!dialog || !list) return;
+  list.innerHTML = '<p class="muted">Загрузка…</p>';
+  if (dialog.showModal) dialog.showModal(); else dialog.setAttribute("open", "");
+  try {
+    const data = await apiRequest("/api/payments", { cache: "no-store" });
+    list.innerHTML = data.payments?.length ? data.payments.map(payment => `
+      <article class="payment-history-row"><div><b>${escapeHTML(payment.plan || payment.purpose || "Платёж")}</b><small>${escapeHTML(new Date(payment.created_at).toLocaleString("ru-RU"))}</small></div><div><b>${Number(payment.amount || 0).toLocaleString("ru-RU")} ₽</b><small>${payment.status === "succeeded" ? "✅ Оплачен" : payment.status === "canceled" ? "❌ Отменён" : "⏳ В обработке"}</small></div></article>`).join("") : '<p class="muted">Платежей пока нет.</p>';
+  } catch (error) { list.innerHTML = `<p class="muted">${escapeHTML(error.message)}</p>`; }
+}
+
+function closePaymentHistoryDialog() { const dialog = document.getElementById("paymentHistoryDialog"); if (dialog?.close) dialog.close(); else dialog?.removeAttribute("open"); }
+
 /* =======================
    INIT
 ======================= */
+
+async function handlePaymentReturn() {
+  const url = new URL(window.location.href);
+  if (url.searchParams.get("payment") !== "return") return;
+  const orderId = url.searchParams.get("order") || "";
+  try {
+    if (orderId) {
+      const data = await apiRequest(`/api/payments/${encodeURIComponent(orderId)}`, { cache: "no-store" });
+      if (data.payment?.status === "succeeded") alert("✅ Оплата прошла. Продвижение объявления активировано.");
+      else if (data.payment?.status === "canceled") alert("Платёж отменён.");
+      else alert("Платёж обрабатывается. Статус можно проверить в истории платежей.");
+    }
+  } catch (error) { console.error("Payment return error:", error); }
+  url.searchParams.delete("payment");
+  url.searchParams.delete("order");
+  history.replaceState(history.state, "", `${url.pathname}${url.search}${url.hash}`);
+}
 
 async function initApp() {
   lockPortraitOrientation();
@@ -5794,6 +5940,7 @@ async function initApp() {
     adsPromise,
     loadFavoriteIds()
   ]);
+  await handlePaymentReturn();
 
   renderCurrentPage();
   updateBottomNav();
@@ -6282,7 +6429,12 @@ function renderAdminStats(stats) {
       <div><b>${Number(stats.adRevenue || 0).toLocaleString("ru-RU", { maximumFractionDigits: 2 })}</b><small>Доход от рекламы</small></div>
       <em>Расчёт по тарифам</em>
     </div>
+    <div class="admin-stat-card admin-stat-revenue"><span>🚀</span><div><b>${Number(stats.promotionRevenue || 0).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} ₽</b><small>Продвижение</small></div><em>Оплаченные заказы</em></div>
+    <button type="button" class="admin-stat-card admin-backup-card" onclick="createAdminBackup(this)"><span>💾</span><div><b>Backup</b><small>Резервная копия БД</small></div><em>Создать вручную</em></button>
   `;
+
+  const verificationTab = document.querySelector('[data-admin-tab="businessVerifications"]');
+  if (verificationTab) { const count=Number(stats.pendingBusinessVerifications)||0; verificationTab.dataset.count=String(count); verificationTab.classList.toggle("has-count", count>0); }
 
   const featureTab = document.querySelector('[data-admin-tab="featureRequests"]');
   if (featureTab) {
@@ -6712,12 +6864,45 @@ async function moderateAdminReport(id, decision, button) {
 }
 
 
+
+function renderAdminBusinessVerifications(requests = []) {
+  const root = document.getElementById("adminContent");
+  if (!root) return;
+  root.innerHTML = `<div class="admin-section-heading"><div><b>Верификация бизнеса</b><small>${requests.length} заявок на проверке</small></div></div><div class="admin-list">${requests.length ? requests.map(item => `
+    <article class="admin-record"><div class="admin-record-main"><div class="admin-record-title-row"><b>${escapeHTML(item.legal_name)}</b><span class="admin-badge warning">На проверке</span></div>
+    <p>ИНН: <b>${escapeHTML(item.inn)}</b>${item.ogrn ? ` · ОГРН: ${escapeHTML(item.ogrn)}` : ""}</p>
+    <small>${escapeHTML(item.business_name || item.business_category || "")}${item.contact_phone ? ` · ${escapeHTML(item.contact_phone)}` : ""}</small>
+    ${item.comment ? `<p>${escapeHTML(item.comment)}</p>` : ""}<input id="verificationNote-${escapeHTML(item.id)}" maxlength="1000" placeholder="Комментарий администратора">
+    <div class="admin-report-actions"><button class="admin-action-button restore" type="button" onclick="reviewBusinessVerification('${escapeHTML(item.id)}','approve',this)">✅ Подтвердить</button><button class="admin-action-button danger" type="button" onclick="reviewBusinessVerification('${escapeHTML(item.id)}','reject',this)">Отклонить</button></div></div></article>`).join("") : '<div class="admin-state"><span>✅</span><b>Очередь пуста</b><small>Новых заявок на верификацию нет.</small></div>'}</div>`;
+}
+
+async function loadAdminBusinessVerifications() {
+  const requestVersion = ++adminState.requestVersion;
+  setAdminActiveTab("businessVerifications"); setAdminLoading("Загружаем заявки на верификацию…");
+  try { const [stats,data]=await Promise.all([apiRequest("/api/admin/stats"),apiRequest("/api/admin/business-verifications?status=pending")]); if(requestVersion!==adminState.requestVersion)return; renderAdminStats(stats); renderAdminBusinessVerifications(data.requests||[]); }
+  catch(error){ if(requestVersion!==adminState.requestVersion)return; setAdminError(error); }
+}
+
+async function reviewBusinessVerification(id, decision, button) {
+  const adminNote=document.getElementById(`verificationNote-${id}`)?.value.trim()||""; if(button)button.disabled=true;
+  try { await apiRequest(`/api/admin/business-verifications/${encodeURIComponent(id)}`,{method:"PATCH",body:JSON.stringify({decision,adminNote})}); await loadAdminBusinessVerifications(); }
+  catch(error){alert(error.message); if(button)button.disabled=false;}
+}
+
+async function createAdminBackup(button) {
+  if (button) { button.disabled=true; button.textContent="Создаём…"; }
+  try { const data=await apiRequest("/api/admin/backups",{method:"POST",body:"{}",timeoutMs:120000}); alert(`✅ Резервная копия создана: ${data.backup?.filename || "готово"}`); }
+  catch(error){ alert(error.message || "Не удалось создать резервную копию"); }
+  finally { if(button){button.disabled=false;button.textContent="💾 Создать backup";} }
+}
+
 function renderAdminModeration(data) {
   const root = document.getElementById("adminContent");
   if (!root) return;
   const settings = data.settings || {};
   const events = data.events || [];
   const rules = data.rules || [];
+  const aiUsage = data.aiUsage || {};
 
   root.innerHTML = `
     <section class="admin-config-card">
@@ -6727,8 +6912,11 @@ function renderAdminModeration(data) {
         <label><input id="moderationLinks" type="checkbox" ${settings.block_links !== false ? "checked" : ""}> Блокировать ссылки и домены</label>
         <label><input id="moderationContacts" type="checkbox" ${settings.block_contacts !== false ? "checked" : ""}> Блокировать телефоны и @username в тексте</label>
         <label><input id="moderationEmails" type="checkbox" ${settings.block_emails !== false ? "checked" : ""}> Блокировать email</label>
+        <label><input id="moderationAiEnabled" type="checkbox" ${settings.ai_enabled !== false ? "checked" : ""}> AI-анализ риска включён</label>
       </div>
-      <button class="admin-action-button restore" type="button" onclick="saveModerationSettings(this)">Сохранить настройки</button>
+      <div class="moderation-threshold-grid"><label>На проверку от %<input id="moderationAiReviewThreshold" type="number" min="1" max="99" value="${Number(settings.ai_review_threshold) || 60}"></label><label>Автоблокировка от %<input id="moderationAiBlockThreshold" type="number" min="1" max="100" value="${Number(settings.ai_block_threshold) || 90}"></label></div>
+      <p class="muted">AI-бюджет сегодня: $${Number(aiUsage.estimatedCostUsd || 0).toFixed(3)} из $${Number(aiUsage.budgetUsd || state.config.aiDailyBudgetUsd || 5).toFixed(2)} · ${Number(aiUsage.requests || 0)} запросов</p>
+      <div class="admin-report-actions"><button class="admin-action-button restore" type="button" onclick="saveModerationSettings(this)">Сохранить настройки</button><button class="admin-action-button" type="button" onclick="syncDefaultModerationRules(this)">Обновить базовый пакет РФ</button></div>
     </section>
 
     <section class="admin-config-card">
@@ -6740,13 +6928,15 @@ function renderAdminModeration(data) {
           <option value="phrase">Фраза</option>
           <option value="domain">Домен</option>
         </select>
+        <input id="moderationRuleCategory" maxlength="40" placeholder="Категория (например, fraud)">
+        <select id="moderationRuleAction"><option value="block">Блокировать</option><option value="review">На проверку</option></select>
         <input id="moderationRuleNote" maxlength="500" placeholder="Комментарий для модераторов">
         <button class="admin-action-button" type="button" onclick="createModerationRule(this)">Добавить</button>
       </div>
       <div class="moderation-rule-list">
         ${rules.length ? rules.map(rule => `
           <div class="moderation-rule-row ${rule.is_active ? "" : "is-muted"}">
-            <div><b>${escapeHTML(rule.pattern)}</b><small>${escapeHTML(rule.match_type)}${rule.note ? ` · ${escapeHTML(rule.note)}` : ""}</small></div>
+            <div><b>${escapeHTML(rule.pattern)}</b><small>${escapeHTML(rule.match_type)} · ${escapeHTML(rule.category || "general")} · ${rule.action === "review" ? "на проверку" : "блокировать"}${rule.note ? ` · ${escapeHTML(rule.note)}` : ""}</small></div>
             <button type="button" class="admin-action-button ${rule.is_active ? "danger" : "restore"}" onclick="toggleModerationRule('${escapeHTML(rule.id)}', this)">${rule.is_active ? "Выключить" : "Включить"}</button>
             <button type="button" class="admin-action-button danger" onclick="deleteModerationRule('${escapeHTML(rule.id)}', this)">Удалить</button>
           </div>`).join("") : '<p class="muted">Правил пока нет.</p>'}
@@ -6761,6 +6951,7 @@ function renderAdminModeration(data) {
           <div class="admin-record-main">
             <div class="admin-record-title-row"><b>${escapeHTML(event.product_name || "Объявление")}</b><span class="admin-badge danger">Заблокировано</span></div>
             <p>${escapeHTML(event.reason || "Нарушение правил")}</p>
+            ${Number(event.ai_score ?? event.ai_risk_score) > 0 ? `<div class="ai-risk-line"><span class="admin-badge ${Number(event.ai_score ?? event.ai_risk_score) >= 90 ? "danger" : "warning"}">AI-риск ${Number(event.ai_score ?? event.ai_risk_score)}%</span><small>${escapeHTML(event.ai_decision || "review")} · ${escapeHTML(event.ai_model || "AI")}</small></div>` : ""}
             <small>${escapeHTML(event.description || "")}</small>
             <div class="admin-record-meta"><span>${escapeHTML(event.owner_name || event.owner_username || event.user_id)}</span><span>${escapeHTML(formatAdminDate(event.created_at))}</span></div>
             <input id="moderationNote-${escapeHTML(event.id)}" maxlength="1000" placeholder="Комментарий модератора">
@@ -6783,21 +6974,35 @@ async function saveModerationSettings(button) {
         enabled: document.getElementById("moderationEnabled")?.checked,
         blockLinks: document.getElementById("moderationLinks")?.checked,
         blockContacts: document.getElementById("moderationContacts")?.checked,
-        blockEmails: document.getElementById("moderationEmails")?.checked
+        blockEmails: document.getElementById("moderationEmails")?.checked,
+        aiEnabled: document.getElementById("moderationAiEnabled")?.checked,
+        aiReviewThreshold: Number(document.getElementById("moderationAiReviewThreshold")?.value) || 60,
+        aiBlockThreshold: Number(document.getElementById("moderationAiBlockThreshold")?.value) || 90
       })
     });
     await loadAdminModeration();
   } catch (error) { alert(error.message); if (button) button.disabled = false; }
 }
 
+async function syncDefaultModerationRules(button) {
+  if (button) button.disabled = true;
+  try {
+    const data = await apiRequest("/api/admin/moderation/defaults", { method: "POST", body: "{}" });
+    alert(`Базовый пакет обновлён: ${Number(data.inserted)||0} новых, ${Number(data.updated)||0} обновлено.`);
+    await loadAdminModeration();
+  } catch (error) { alert(error.message || "Не удалось обновить пакет"); if (button) button.disabled = false; }
+}
+
 async function createModerationRule(button) {
   const pattern = document.getElementById("moderationRulePattern")?.value.trim() || "";
   const matchType = document.getElementById("moderationRuleType")?.value || "word";
   const note = document.getElementById("moderationRuleNote")?.value.trim() || "";
+  const category = document.getElementById("moderationRuleCategory")?.value.trim() || "general";
+  const action = document.getElementById("moderationRuleAction")?.value || "block";
   if (!pattern) return alert("Введите запрещённое выражение");
   if (button) button.disabled = true;
   try {
-    await apiRequest("/api/admin/moderation/rules", { method: "POST", body: JSON.stringify({ pattern, matchType, note }) });
+    await apiRequest("/api/admin/moderation/rules", { method: "POST", body: JSON.stringify({ pattern, matchType, note, category, action }) });
     await loadAdminModeration();
   } catch (error) { alert(error.message); if (button) button.disabled = false; }
 }

@@ -8195,3 +8195,70 @@ body.dark-mode .seller-store-categories span { background: #2a2f34; border-color
     height: 98px;
   }
 }
+
+/* =========================================================
+   v1.19.0 — production/mobile hardening
+   ========================================================= */
+html, body, main, .page, .admin-content, .admin-record-main { min-width: 0; }
+body { overflow-x: hidden; }
+
+.business-verification-dialog,
+.payment-history-dialog { width: min(94vw, 520px); max-width: 520px; }
+.business-verification-dialog form { display: grid; gap: 9px; }
+.business-verification-dialog input,
+.business-verification-dialog textarea,
+.payment-history-dialog input { width: 100%; min-width: 0; box-sizing: border-box; }
+.payment-history-list { display: grid; gap: 10px; max-height: min(58vh, 520px); overflow: auto; }
+.payment-history-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; padding: 12px; border: 1px solid var(--border, rgba(255,255,255,.1)); border-radius: 14px; background: var(--card, rgba(255,255,255,.04)); }
+.payment-history-row > div { min-width: 0; display: grid; gap: 4px; }
+.payment-history-row > div:last-child { text-align: right; flex: 0 0 auto; }
+.payment-history-row small { color: var(--muted, #9aa0aa); }
+
+.moderation-threshold-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 12px 0; }
+.moderation-threshold-grid label { display: grid; gap: 6px; font-size: 12px; color: var(--muted, #9aa0aa); }
+.moderation-threshold-grid input { width: 100%; min-width: 0; box-sizing: border-box; }
+.ai-risk-line { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 7px 0; }
+.admin-backup-card { border: 0; color: inherit; text-align: left; cursor: pointer; font: inherit; }
+
+.admin-tabs { overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+.admin-tabs::-webkit-scrollbar { display: none; }
+.admin-tabs > button { flex: 0 0 auto; white-space: nowrap; }
+.admin-tabs > button.has-count::after { content: attr(data-count); display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; margin-left: 5px; border-radius: 99px; background: #e74c3c; color: #fff; font-size: 10px; }
+.admin-record, .admin-report-controls, .admin-feature-request-card, .moderation-rule-row { max-width: 100%; overflow: hidden; }
+.admin-record-title-row { flex-wrap: wrap; }
+.admin-record p, .admin-record small, .moderation-rule-row b, .moderation-rule-row small { overflow-wrap: anywhere; word-break: break-word; }
+.moderation-switches label { width: 100%; min-width: 0; grid-template-columns: 24px minmax(0, 1fr); }
+.moderation-switches input[type="checkbox"] { width: 22px !important; height: 22px !important; min-width: 22px; flex: 0 0 22px; }
+.moderation-rule-form { grid-template-columns: minmax(0, 1fr); }
+.moderation-rule-form input, .moderation-rule-form select { width: 100%; min-width: 0; box-sizing: border-box; }
+.admin-report-actions { flex-wrap: wrap; }
+.admin-report-actions > button { min-width: min(150px, 100%); flex: 1 1 150px; }
+.analytics-grid { grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); }
+.analytics-product-row { min-width: 0; }
+.analytics-product-row > span { min-width: 0; }
+
+@media (max-width: 430px) {
+  .page { padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); }
+  .admin-page { padding-left: 10px; padding-right: 10px; }
+  .admin-toolbar { min-width: 0; }
+  .admin-search-box { width: 100%; min-width: 0; }
+  .admin-search-box input { min-width: 0; width: 100%; }
+  .admin-record { grid-template-columns: 64px minmax(0, 1fr); padding: 10px; gap: 9px; }
+  .admin-record:not(:has(.admin-record-image)) { grid-template-columns: minmax(0, 1fr); }
+  .admin-record-image { width: 64px; height: 64px; }
+  .admin-config-card { padding: 14px; overflow: hidden; }
+  .moderation-switches { gap: 12px; }
+  .moderation-switches label { display: grid; align-items: center; column-gap: 10px; line-height: 1.25; overflow-wrap: anywhere; }
+  .moderation-threshold-grid { grid-template-columns: 1fr; }
+  .admin-stat-card { min-width: 0; }
+  .payment-history-row { gap: 8px; padding: 10px; }
+  .business-verification-dialog, .payment-history-dialog { width: calc(100vw - 20px); max-height: 88vh; padding: 16px; }
+}
+
+@media (max-width: 350px) {
+  .analytics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .admin-report-actions { display: grid; grid-template-columns: 1fr; }
+  .admin-report-actions > button { width: 100%; }
+}
+.legal-consent-row { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; line-height: 1.35; }
+.legal-consent-row input[type="checkbox"] { width: 20px !important; height: 20px !important; min-width: 20px; flex: 0 0 20px; margin-top: 1px; }

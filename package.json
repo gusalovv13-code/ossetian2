@@ -1,12 +1,13 @@
 {
   "name": "ossetian-market",
-  "version": "1.18.2",
+  "version": "1.19.0",
   "type": "module",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
     "test": "node --test",
-    "check": "node --check server.js && node --check telegram-auth.js && node --check public/script.js"
+    "check": "node --check server.js && node --check telegram-auth.js && node --check public/script.js",
+    "backup": "node scripts/backup.mjs"
   },
   "dependencies": {
     "compression": "^1.8.1",

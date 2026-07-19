@@ -15,8 +15,8 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-  <link rel="manifest" href="manifest.webmanifest?v=1.18.2" />
-  <link rel="stylesheet" href="style.css?v=1.18.3" />
+  <link rel="manifest" href="manifest.webmanifest?v=1.19.0" />
+  <link rel="stylesheet" href="style.css?v=1.19.0" />
 </head>
 
 <body>
@@ -525,6 +525,8 @@
         <span>Разрешить сообщения в Telegram</span>
         <input id="adAllowMessages" type="checkbox" checked />
       </div>
+      <label class="legal-consent-row"><input id="adPublicPhoneConsent" type="checkbox" /><span>Согласен на публичное отображение номера телефона в объявлении</span></label>
+      <label class="legal-consent-row"><input id="adPublicTelegramConsent" type="checkbox" /><span>Согласен на публичное отображение Telegram-контакта</span></label>
 
       <section id="listingQuality" class="quality-card" aria-live="polite">
         <div class="quality-header">
@@ -640,6 +642,14 @@
 
       <button onclick="showPage('sellerAnalytics')" class="profile-row" type="button">
         📊 Аналитика продавца
+      </button>
+
+      <button onclick="openBusinessVerificationDialog()" class="profile-row" type="button">
+        ✅ Верификация бизнеса
+      </button>
+
+      <button onclick="openPaymentHistoryDialog()" class="profile-row" type="button">
+        💳 Платежи и продвижение
       </button>
 
       <button onclick="showPage('chats')" class="profile-row" type="button">
@@ -814,6 +824,7 @@
     <div class="admin-tabs" role="tablist" aria-label="Разделы админ-панели">
       <button data-admin-tab="products" class="active" onclick="loadAdminPanel()" type="button">📦 Объявления</button>
       <button data-admin-tab="featureRequests" onclick="loadAdminFeatureRequests()" type="button">★ Выделение</button>
+      <button data-admin-tab="businessVerifications" onclick="loadAdminBusinessVerifications()" type="button">✅ Верификация</button>
       <button data-admin-tab="reports" onclick="loadAdminReports()" type="button">⚑ Жалобы</button>
       <button data-admin-tab="moderation" onclick="loadAdminModeration()" type="button">🛡 Автомодерация</button>
       <button data-admin-tab="ads" onclick="loadAdminAds()" type="button">📣 Реклама</button>
@@ -875,6 +886,35 @@
         <button id="submitHighlightRequestBtn" type="submit" class="primary">Отправить заявку</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="legalOnboardingDialog" class="profile-edit-dialog">
+    <form onsubmit="submitCoreLegalAcceptances(event)">
+      <div class="dialog-heading"><div><small>Документы сервиса</small><h3>Согласия</h3></div></div>
+      <label class="legal-consent-row"><input id="coreTermsAccepted" type="checkbox" required><span>Я принимаю <a href="legal/#agreement" target="_blank">Пользовательское соглашение</a></span></label>
+      <label class="legal-consent-row"><input id="corePdConsentAccepted" type="checkbox" required><span>Я отдельно даю согласие на обработку персональных данных</span></label>
+      <div class="dialog-actions"><button type="submit" class="primary">Продолжить</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="businessVerificationDialog" class="profile-edit-dialog business-verification-dialog">
+    <form onsubmit="submitBusinessVerification(event)">
+      <div class="dialog-heading"><div><small>Проверенный бизнес</small><h3>Верификация компании</h3></div><button type="button" class="dialog-close" onclick="closeBusinessVerificationDialog()" aria-label="Закрыть">×</button></div>
+      <p id="businessVerificationStatus" class="muted">Загружаем статус…</p>
+      <label for="businessVerificationLegalName">Юридическое название</label><input id="businessVerificationLegalName" maxlength="180" required placeholder="ООО / ИП ...">
+      <label for="businessVerificationInn">ИНН</label><input id="businessVerificationInn" inputmode="numeric" maxlength="12" required placeholder="10 или 12 цифр">
+      <label for="businessVerificationOgrn">ОГРН / ОГРНИП</label><input id="businessVerificationOgrn" inputmode="numeric" maxlength="15" placeholder="Необязательно">
+      <label for="businessVerificationPhone">Контактный телефон</label><input id="businessVerificationPhone" inputmode="tel" maxlength="30" placeholder="+7 ...">
+      <label for="businessVerificationComment">Комментарий</label><textarea id="businessVerificationComment" maxlength="1000" rows="3" placeholder="Дополнительная информация"></textarea>
+      <p class="muted profile-edit-hint">После проверки администратором профиль получит отметку «Проверенный бизнес» и лимит не менее 50 активных объявлений.</p>
+      <div class="dialog-actions"><button type="button" class="outline" onclick="closeBusinessVerificationDialog()">Закрыть</button><button id="submitBusinessVerificationBtn" type="submit" class="primary">Отправить на проверку</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="paymentHistoryDialog" class="profile-edit-dialog payment-history-dialog">
+    <div class="dialog-heading"><div><small>Монетизация</small><h3>Платежи и продвижение</h3></div><button type="button" class="dialog-close" onclick="closePaymentHistoryDialog()" aria-label="Закрыть">×</button></div>
+    <div id="paymentHistoryList" class="payment-history-list"><p class="muted">Загрузка…</p></div>
+    <div class="dialog-actions"><button type="button" class="primary" onclick="closePaymentHistoryDialog()">Готово</button></div>
   </dialog>
 
   <dialog id="profileEditDialog" class="profile-edit-dialog">
@@ -1026,6 +1066,6 @@
   </div>
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">←</div>
 
-  <script src="script.js?v=1.18.2"></script>
+  <script src="script.js?v=1.19.0"></script>
 </body>
 </html>
