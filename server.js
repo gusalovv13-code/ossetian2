@@ -2896,6 +2896,24 @@ async function initDb(db = pool) {
       UNIQUE(user_id, document_key, document_version)
     );
   `);
+  // Совместимость со старыми production-БД: CREATE TABLE IF NOT EXISTS
+  // не добавляет недостающие колонки и ограничения в уже существующую таблицу.
+  await db.query(`ALTER TABLE legal_acceptances ADD COLUMN IF NOT EXISTS document_version TEXT DEFAULT '1.0';`);
+  await db.query(`ALTER TABLE legal_acceptances ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;`);
+  await db.query(`ALTER TABLE legal_acceptances ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ DEFAULT NOW();`);
+  await db.query(`UPDATE legal_acceptances SET document_version = '1.0' WHERE document_version IS NULL OR document_version = '';`);
+  await db.query(`
+    DELETE FROM legal_acceptances older
+    USING legal_acceptances newer
+    WHERE older.ctid < newer.ctid
+      AND older.user_id = newer.user_id
+      AND older.document_key = newer.document_key
+      AND older.document_version = newer.document_version;
+  `);
+  await db.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_legal_acceptances_unique
+    ON legal_acceptances(user_id, document_key, document_version);
+  `);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_legal_acceptances_user ON legal_acceptances(user_id, accepted_at DESC);`);
 
   // v1.19.2: отдельная верификация бизнеса удалена; старые таблицы в существующей БД не используются.
@@ -3895,12 +3913,29 @@ app.patch("/api/me/profile", requireTelegramAuth, syncTelegramUser, async (req, 
 
 
 async function recordLegalAcceptance(database, userId, documentKey, metadata = {}) {
+  const normalizedUserId = String(userId);
+  const normalizedDocumentKey = String(documentKey);
+  const metadataJson = JSON.stringify(metadata || {});
+
+  // UPDATE + conditional INSERT работает и на старых БД, где уникальное
+  // ограничение legal_acceptances ещё не было создано. Это не даёт публикации
+  // объявления падать с SQLSTATE 42P10 во время сохранения согласий.
+  const updated = await database.query(`
+    UPDATE legal_acceptances
+    SET metadata = $4::jsonb, accepted_at = NOW()
+    WHERE user_id = $1 AND document_key = $2 AND document_version = $3
+  `, [normalizedUserId, normalizedDocumentKey, LEGAL_DOCUMENT_VERSION, metadataJson]);
+
+  if (updated.rowCount > 0) return;
+
   await database.query(`
     INSERT INTO legal_acceptances (id, user_id, document_key, document_version, metadata)
-    VALUES ($1,$2,$3,$4,$5::jsonb)
-    ON CONFLICT (user_id, document_key, document_version)
-    DO UPDATE SET metadata=EXCLUDED.metadata, accepted_at=NOW()
-  `, [randomUUID(), String(userId), String(documentKey), LEGAL_DOCUMENT_VERSION, JSON.stringify(metadata || {})]);
+    SELECT $1, $2, $3, $4, $5::jsonb
+    WHERE NOT EXISTS (
+      SELECT 1 FROM legal_acceptances
+      WHERE user_id = $2 AND document_key = $3 AND document_version = $4
+    )
+  `, [randomUUID(), normalizedUserId, normalizedDocumentKey, LEGAL_DOCUMENT_VERSION, metadataJson]);
 }
 
 async function recordCoreLegalAcceptancesFromRequest(database, userId, body = {}) {
