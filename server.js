@@ -3923,17 +3923,27 @@ app.patch("/api/me/profile", requireTelegramAuth, syncTelegramUser, async (req, 
 
 
 async function resolveLegalAcceptanceStorage(database) {
-  const readColumns = async (tableName) => {
+  const readSchema = async (tableName) => {
     const result = await database.query(`
-      SELECT column_name
+      SELECT column_name, is_nullable, column_default, is_identity, is_generated
       FROM information_schema.columns
       WHERE table_schema = ANY (current_schemas(false))
         AND table_name = $1
     `, [tableName]);
-    return new Set(result.rows.map(row => String(row.column_name || "")));
+    const columns = new Set(result.rows.map(row => String(row.column_name || "")));
+    const requiredWithoutDefault = result.rows
+      .filter(row =>
+        String(row.is_nullable || "YES") === "NO" &&
+        row.column_default == null &&
+        String(row.is_identity || "NO") !== "YES" &&
+        String(row.is_generated || "NEVER") === "NEVER"
+      )
+      .map(row => String(row.column_name || ""));
+    return { columns, requiredWithoutDefault };
   };
 
-  let columns = await readColumns("legal_acceptances");
+  let schema = await readSchema("legal_acceptances");
+  let columns = schema.columns;
   const requiredColumns = ["user_id", "document_key", "document_version", "metadata", "accepted_at"];
 
   if (!requiredColumns.every(column => columns.has(column))) {
@@ -3954,10 +3964,27 @@ async function resolveLegalAcceptanceStorage(database) {
         );
       }
     }
-    columns = await readColumns("legal_acceptances");
+    schema = await readSchema("legal_acceptances");
+    columns = schema.columns;
   }
 
-  if (requiredColumns.every(column => columns.has(column))) {
+  // Старые версии таблицы могли иметь дополнительные обязательные поля.
+  // Из известных legacy-полей мы умеем безопасно заполнить acceptance_type.
+  // Если обнаружится другое обязательное поле без DEFAULT, используем v2,
+  // чтобы INSERT не абортил транзакцию создания объявления.
+  const supportedRequiredColumns = new Set([
+    "id",
+    "user_id",
+    "document_key",
+    "document_version",
+    "metadata",
+    "accepted_at",
+    "acceptance_type"
+  ]);
+  const unsupportedRequiredColumns = schema.requiredWithoutDefault
+    .filter(column => !supportedRequiredColumns.has(column));
+
+  if (requiredColumns.every(column => columns.has(column)) && unsupportedRequiredColumns.length === 0) {
     return { tableName: "legal_acceptances", columns };
   }
 
@@ -3974,8 +4001,8 @@ async function resolveLegalAcceptanceStorage(database) {
       accepted_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
-  const fallbackColumns = await readColumns("legal_acceptances_v2");
-  return { tableName: "legal_acceptances_v2", columns: fallbackColumns };
+  const fallbackSchema = await readSchema("legal_acceptances_v2");
+  return { tableName: "legal_acceptances_v2", columns: fallbackSchema.columns };
 }
 
 async function recordLegalAcceptance(database, userId, documentKey, metadata = {}) {
@@ -4033,9 +4060,13 @@ async function recordLegalAcceptance(database, userId, documentKey, metadata = {
 
   pushInsert("id", randomUUID());
   pushInsert("user_id", normalizedUserId);
+  // Legacy v1.16 production-схема использовала acceptance_type как ключ
+  // типа согласия. Дублируем туда documentKey для полной совместимости.
+  pushInsert("acceptance_type", normalizedDocumentKey);
   pushInsert("document_key", normalizedDocumentKey);
   pushInsert("document_version", LEGAL_DOCUMENT_VERSION);
   pushInsert("metadata", metadataJson, "::jsonb");
+  pushInsert("accepted_at", new Date().toISOString());
 
   await database.query(
     `INSERT INTO ${tableName} (${insertColumns.join(", ")}) VALUES (${insertParams.join(", ")})`,
