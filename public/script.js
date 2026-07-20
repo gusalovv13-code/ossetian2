@@ -425,6 +425,8 @@ const state = {
     professionalSubscriptionDays: 30,
     paidListingEnabled: { automobile: false, vacancy: false, apartment: false, house: false, land: false },
     paidListingPrices: { automobile: 199, vacancy: 99, apartment: 299, house: 299, land: 199 },
+    advertisingRates: { flat: 0, cpm: 0, cpc: 0 },
+    pricingVersion: 1,
     aiListingAssistantEnabled: true,
     aiModerationEnabled: true,
     aiProviderConfigured: false,
@@ -539,13 +541,16 @@ async function loadConfig() {
     state.config.professionalSubscriptionDays = Number(data.professionalSubscriptionDays) || 30;
     state.config.paidListingEnabled = { ...state.config.paidListingEnabled, ...(data.paidListingEnabled || {}) };
     state.config.paidListingPrices = { ...state.config.paidListingPrices, ...(data.paidListingPrices || {}) };
+    state.config.advertisingRates = { ...state.config.advertisingRates, ...(data.advertisingRates || {}) };
+    state.config.pricingVersion = Math.max(1, Number(data.pricingVersion) || 1);
     state.config.aiListingAssistantEnabled = data.aiListingAssistantEnabled !== false;
     state.config.aiModerationEnabled = data.aiModerationEnabled !== false;
     state.config.aiProviderConfigured = Boolean(data.aiProviderConfigured);
     state.config.paymentEnabled = Boolean(data.paymentEnabled);
     state.config.paymentProvider = data.paymentProvider || "manual";
     state.config.aiDailyBudgetUsd = Number(data.aiDailyBudgetUsd) || 5;
-    if (Array.isArray(data.promotionPlans) && data.promotionPlans.length) state.config.promotionPlans = data.promotionPlans;
+    if (Array.isArray(data.promotionPlans)) state.config.promotionPlans = data.promotionPlans;
+    syncPromotionPlanOptions();
   } catch (error) {
     console.error("Не удалось загрузить конфигурацию:", error);
   }
@@ -4765,9 +4770,26 @@ function openSupportMessage(message = "") {
   else window.open(url, "_blank", "noopener,noreferrer");
 }
 
+function syncPromotionPlanOptions() {
+  const select = document.getElementById("highlightPlanSelect");
+  if (!select) return;
+  const plans = Array.isArray(state.config.promotionPlans) ? state.config.promotionPlans : [];
+  const previousValue = select.value;
+  select.innerHTML = plans.map(plan => {
+    const icon = plan.id === "boost" ? "🚀" : plan.id === "premium" ? "💎" : "👑";
+    return `<option value="${escapeHTML(plan.id)}">${icon} ${escapeHTML(plan.label || plan.id)} — ${Number(plan.days) || 1} дн.</option>`;
+  }).join("");
+  const preferred = plans.some(plan => plan.id === previousValue)
+    ? previousValue
+    : (plans.some(plan => plan.id === "vip") ? "vip" : plans[0]?.id || "");
+  select.value = preferred;
+  select.disabled = plans.length === 0;
+  updateHighlightPlanSummary();
+}
+
 function getPromotionPlan(planId = "vip") {
   const plans = Array.isArray(state.config.promotionPlans) ? state.config.promotionPlans : [];
-  return plans.find(plan => plan.id === planId) || plans.find(plan => plan.id === "vip") || { id: "vip", label: "VIP", days: 7, priceRub: 299 };
+  return plans.find(plan => plan.id === planId) || plans.find(plan => plan.id === "vip") || plans[0] || null;
 }
 
 function updateHighlightPlanSummary() {
@@ -4775,11 +4797,22 @@ function updateHighlightPlanSummary() {
   const summary = document.getElementById("highlightRequestSummary");
   const plan = getPromotionPlan(select?.value || "vip");
   if (!summary) return;
+  const submitButton = document.getElementById("submitHighlightRequestBtn");
+  if (!plan) {
+    summary.innerHTML = "<span>Продвижение</span><b>Тарифы временно выключены</b>";
+    if (submitButton) {
+      submitButton.disabled = true;
+      submitButton.textContent = "Недоступно";
+    }
+    return;
+  }
   const price = Number(plan.priceRub) || 0;
   const priceText = price > 0 ? `${price.toLocaleString("ru-RU")} ₽` : "по согласованию";
   summary.innerHTML = `<span>Тариф</span><b>${escapeHTML(plan.label || plan.id)}</b><span>Срок</span><b>${Number(plan.days) || 1} дн.</b><span>Стоимость</span><b>${escapeHTML(priceText)}</b>`;
-  const submitButton = document.getElementById("submitHighlightRequestBtn");
-  if (submitButton) submitButton.textContent = state.config.paymentEnabled && price > 0 ? `Оплатить ${priceText}` : "Отправить заявку";
+  if (submitButton) {
+    submitButton.disabled = false;
+    submitButton.textContent = state.config.paymentEnabled && price > 0 ? `Оплатить ${priceText}` : "Отправить заявку";
+  }
 }
 
 function requestProductHighlight(productId) {
@@ -4822,6 +4855,10 @@ async function submitProductHighlightRequest(event) {
   const color = FEATURE_REQUEST_COLOR;
   const submitButton = document.getElementById("submitHighlightRequestBtn");
   const plan = getPromotionPlan(document.getElementById("highlightPlanSelect")?.value || "vip");
+  if (!plan) {
+    alert("Тарифы продвижения сейчас выключены.");
+    return;
+  }
 
   featureRequestInFlight.add(productId);
   if (submitButton) {
@@ -4866,7 +4903,12 @@ async function submitProductHighlightRequest(event) {
     if (submitButton) {
       submitButton.disabled = false;
       const currentPlan = getPromotionPlan(document.getElementById("highlightPlanSelect")?.value || "vip");
-      submitButton.textContent = state.config.paymentEnabled && Number(currentPlan.priceRub) > 0 ? `Оплатить ${Number(currentPlan.priceRub).toLocaleString("ru-RU")} ₽` : "Отправить заявку";
+      submitButton.disabled = !currentPlan;
+      submitButton.textContent = currentPlan
+        ? (state.config.paymentEnabled && Number(currentPlan.priceRub) > 0
+            ? `Оплатить ${Number(currentPlan.priceRub).toLocaleString("ru-RU")} ₽`
+            : "Отправить заявку")
+        : "Недоступно";
     }
   }
 }
@@ -4932,6 +4974,24 @@ async function changeAdStatus(id, status) {
     render();
   } catch (error) {
     console.error("Не удалось изменить статус объявления:", error);
+    if (error.code === "LISTING_PAYMENT_REQUIRED" && error.details?.paymentRequired?.productId) {
+      try {
+        const requirement = error.details.paymentRequired;
+        const checkout = await apiRequest("/api/payments/listing", {
+          method: "POST",
+          body: JSON.stringify({ productId: requirement.productId })
+        });
+        if (checkout.confirmationUrl) {
+          window.location.href = checkout.confirmationUrl;
+          return;
+        }
+        alert(`Для публикации требуется оплата ${Number(requirement.priceRub || 0).toLocaleString("ru-RU")} ₽.`);
+        return;
+      } catch (paymentError) {
+        alert(`Объявление осталось неактивным. Не удалось создать оплату: ${paymentError.message}`);
+        return;
+      }
+    }
     if (error.code === "DUPLICATE_LISTING") {
       alert(error.message);
       return;
@@ -6963,26 +7023,94 @@ function renderAdminMonetization(data = {}) {
   const enabled = data.paidListingEnabled || {};
   const prices = data.paidListingPrices || {};
   const subscription = data.professionalSubscription || {};
+  const feature = data.featureHighlight || {};
+  const advertising = data.advertisingRates || {};
+  const promotionPlans = Array.isArray(data.promotionPlans) ? data.promotionPlans : [];
+  const promotionById = Object.fromEntries(promotionPlans.map(plan => [plan.id, plan]));
   const rows = [
-    ["automobile", "🚗 Продажа автомобиля", prices.automobile],
-    ["vacancy", "💼 Публикация вакансии", prices.vacancy],
-    ["apartment", "🏢 Продажа квартиры", prices.apartment],
-    ["house", "🏠 Продажа дома", prices.house],
-    ["land", "🌳 Продажа участка", prices.land]
+    ["automobile", "🚗 Продажа автомобиля"],
+    ["vacancy", "💼 Публикация вакансии"],
+    ["apartment", "🏢 Продажа квартиры"],
+    ["house", "🏠 Продажа дома"],
+    ["land", "🌳 Продажа участка"]
   ];
+  const promoRows = [
+    ["boost", "🚀 Поднять"],
+    ["vip", "👑 VIP"],
+    ["premium", "💎 Премиум"]
+  ];
+  const updatedText = data.updatedAt
+    ? `Последнее изменение: ${escapeHTML(formatAdminDate(data.updatedAt))}${data.updatedBy ? ` · администратор ${escapeHTML(data.updatedBy)}` : ""}`
+    : "Настройки ещё не менялись через админ-панель.";
+
   root.innerHTML = `
-    <section class="admin-config-card">
-      <div class="admin-section-heading"><div><b>Платные публикации</b><small>Можно включать категории постепенно, когда аудитория уже набрана.</small></div></div>
-      <div class="moderation-switches monetization-switches">
-        ${rows.map(([key, label, price]) => `<label><input id="monetization-${key}" type="checkbox" ${enabled[key] ? "checked" : ""}> <span>${label}<small>${Number(price || 0).toLocaleString("ru-RU")} ₽ за публикацию</small></span></label>`).join("")}
+    <section class="admin-config-card monetization-editor">
+      <div class="admin-section-heading">
+        <div><b>Платные публикации</b><small>Включение и цена задаются отдельно для каждого типа объявления.</small></div>
+        <span class="admin-badge">Версия цен ${Math.max(1, Number(data.pricingVersion) || 1)}</span>
       </div>
-      <p class="muted">Когда переключатель выключен, публикация в этой категории бесплатна. Уже опубликованные объявления не блокируются после включения оплаты.</p>
-      <div class="admin-report-actions"><button class="admin-action-button restore" type="button" onclick="saveAdminMonetization(this)">Сохранить настройки</button></div>
+      <div class="monetization-tariff-list">
+        ${rows.map(([key, label]) => `
+          <div class="monetization-tariff-row">
+            <label class="monetization-toggle">
+              <input id="monetization-enabled-${key}" type="checkbox" ${enabled[key] ? "checked" : ""}>
+              <span><b>${label}</b><small>При выключении публикация бесплатна</small></span>
+            </label>
+            <label class="monetization-number-field">
+              <span>Цена, ₽</span>
+              <input id="monetization-price-${key}" type="number" min="0" max="100000000" step="1" value="${Number(prices[key]) || 0}">
+            </label>
+          </div>
+        `).join("")}
+      </div>
+      <p class="muted">Уже активное объявление не станет платным задним числом. Но при смене бесплатной категории на платную сервер потребует оплату и сохранит объявление черновиком.</p>
     </section>
-    <section class="admin-config-card">
-      <div class="admin-section-heading"><div><b>🏪 Профессиональный продавец</b><small>Эта подписка всегда платная и не отключается переключателем.</small></div></div>
-      <p><b>${Number(subscription.priceRub || state.config.professionalSubscriptionPriceRub || 0).toLocaleString("ru-RU")} ₽</b> на ${Number(subscription.days || state.config.professionalSubscriptionDays || 30)} дней · <b>неограниченное количество объявлений</b>.</p>
-      <p class="muted">После окончания подписки пользователь возвращается к стандартному лимиту — 3 объявления. Существующие объявления не удаляются, но новые нельзя добавить, пока количество не станет ниже лимита или подписка не будет продлена.</p>
+
+    <section class="admin-config-card monetization-editor">
+      <div class="admin-section-heading"><div><b>🏪 Профессиональный продавец</b><small>Стоимость и срок подписки. Цена должна быть больше нуля.</small></div></div>
+      <div class="monetization-inline-fields">
+        <label class="monetization-number-field"><span>Цена, ₽</span><input id="monetization-professional-price" type="number" min="1" max="100000000" step="1" value="${Number(subscription.priceRub) || 1}"></label>
+        <label class="monetization-number-field"><span>Срок, дней</span><input id="monetization-professional-days" type="number" min="1" max="365" step="1" value="${Number(subscription.days) || 30}"></label>
+      </div>
+      <p class="muted">Оплаченный заказ сохраняет цену и срок, действовавшие в момент его создания. Последующие изменения не сокращают уже купленную подписку.</p>
+    </section>
+
+    <section class="admin-config-card monetization-editor">
+      <div class="admin-section-heading"><div><b>★ Выделение и продвижение</b><small>Тарифы показываются пользователю сразу после сохранения.</small></div></div>
+      <div class="monetization-inline-fields">
+        <label class="monetization-number-field"><span>Базовое выделение, ₽</span><input id="monetization-feature-price" type="number" min="0" max="100000000" step="1" value="${Number(feature.priceRub) || 0}"></label>
+        <label class="monetization-number-field"><span>Базовый срок, дней</span><input id="monetization-feature-days" type="number" min="1" max="365" step="1" value="${Number(feature.days) || 7}"></label>
+      </div>
+      <div class="monetization-tariff-list promotion-tariff-list">
+        ${promoRows.map(([id, label]) => {
+          const plan = promotionById[id] || state.config.promotionPlans.find(item => item.id === id) || {};
+          return `
+            <div class="monetization-tariff-row">
+              <label class="monetization-toggle">
+                <input id="monetization-promo-${id}-enabled" type="checkbox" ${plan.enabled !== false ? "checked" : ""}>
+                <span><b>${label}</b><small>Тариф доступен пользователям</small></span>
+              </label>
+              <label class="monetization-number-field"><span>Цена, ₽</span><input id="monetization-promo-${id}-price" type="number" min="0" max="100000000" step="1" value="${Number(plan.priceRub) || 0}"></label>
+              <label class="monetization-number-field"><span>Дней</span><input id="monetization-promo-${id}-days" type="number" min="1" max="365" step="1" value="${Number(plan.days) || 1}"></label>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </section>
+
+    <section class="admin-config-card monetization-editor">
+      <div class="admin-section-heading"><div><b>📣 Реклама</b><small>Значения по умолчанию для новых рекламных кампаний.</small></div></div>
+      <div class="monetization-inline-fields monetization-ad-rates">
+        <label class="monetization-number-field"><span>Фиксированно, ₽</span><input id="monetization-ad-flat" type="number" min="0" max="100000000" step="0.01" value="${Number(advertising.flat) || 0}"></label>
+        <label class="monetization-number-field"><span>CPM, ₽ / 1000</span><input id="monetization-ad-cpm" type="number" min="0" max="100000000" step="0.01" value="${Number(advertising.cpm) || 0}"></label>
+        <label class="monetization-number-field"><span>CPC, ₽ / клик</span><input id="monetization-ad-cpc" type="number" min="0" max="100000000" step="0.01" value="${Number(advertising.cpc) || 0}"></label>
+      </div>
+      <p class="muted">У конкретной кампании тариф по-прежнему можно изменить отдельно во вкладке «Реклама».</p>
+    </section>
+
+    <section class="admin-config-card monetization-save-card">
+      <small>${updatedText}</small>
+      <button class="admin-action-button restore" type="button" onclick="saveAdminMonetization(this)">Сохранить все цены</button>
     </section>
   `;
 }
@@ -7002,21 +7130,78 @@ async function loadAdminMonetization() {
   }
 }
 
+function readMonetizationNumber(id, fallback = 0) {
+  const value = Number(document.getElementById(id)?.value);
+  return Number.isFinite(value) ? value : fallback;
+}
+
 async function saveAdminMonetization(button) {
-  if (button) { button.disabled = true; button.textContent = "Сохраняем…"; }
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Сохраняем…";
+  }
   try {
-    const payload = {};
+    const paidListingEnabled = {};
+    const paidListingPrices = {};
     for (const key of ["automobile", "vacancy", "apartment", "house", "land"]) {
-      payload[key] = document.getElementById(`monetization-${key}`)?.checked === true;
+      paidListingEnabled[key] = document.getElementById(`monetization-enabled-${key}`)?.checked === true;
+      paidListingPrices[key] = readMonetizationNumber(`monetization-price-${key}`, 0);
     }
-    await apiRequest("/api/admin/monetization", { method: "PATCH", body: JSON.stringify(payload) });
-    state.config.paidListingEnabled = { ...state.config.paidListingEnabled, ...payload };
-    alert("✅ Настройки платных публикаций сохранены");
-    await loadAdminMonetization();
+
+    const promotionPlans = {};
+    for (const id of ["boost", "vip", "premium"]) {
+      promotionPlans[id] = {
+        enabled: document.getElementById(`monetization-promo-${id}-enabled`)?.checked === true,
+        priceRub: readMonetizationNumber(`monetization-promo-${id}-price`, 0),
+        days: readMonetizationNumber(`monetization-promo-${id}-days`, 1)
+      };
+    }
+    if (!Object.values(promotionPlans).some(plan => plan.enabled)) {
+      throw new Error("Оставьте включённым хотя бы один тариф продвижения");
+    }
+
+    const payload = {
+      paidListingEnabled,
+      paidListingPrices,
+      professionalSubscription: {
+        priceRub: readMonetizationNumber("monetization-professional-price", 1),
+        days: readMonetizationNumber("monetization-professional-days", 30)
+      },
+      featureHighlight: {
+        priceRub: readMonetizationNumber("monetization-feature-price", 0),
+        days: readMonetizationNumber("monetization-feature-days", 7)
+      },
+      promotionPlans,
+      advertisingRates: {
+        flat: readMonetizationNumber("monetization-ad-flat", 0),
+        cpm: readMonetizationNumber("monetization-ad-cpm", 0),
+        cpc: readMonetizationNumber("monetization-ad-cpc", 0)
+      }
+    };
+
+    const data = await apiRequest("/api/admin/monetization", {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    });
+    state.config.paidListingEnabled = { ...state.config.paidListingEnabled, ...(data.paidListingEnabled || {}) };
+    state.config.paidListingPrices = { ...state.config.paidListingPrices, ...(data.paidListingPrices || {}) };
+    state.config.professionalSubscriptionPriceRub = Number(data.professionalSubscription?.priceRub) || state.config.professionalSubscriptionPriceRub;
+    state.config.professionalSubscriptionDays = Number(data.professionalSubscription?.days) || state.config.professionalSubscriptionDays;
+    state.config.featureHighlightPriceRub = Number(data.featureHighlight?.priceRub) || 0;
+    state.config.featureHighlightDays = Number(data.featureHighlight?.days) || state.config.featureHighlightDays;
+    state.config.advertisingRates = { ...state.config.advertisingRates, ...(data.advertisingRates || {}) };
+    state.config.pricingVersion = Math.max(1, Number(data.pricingVersion) || state.config.pricingVersion || 1);
+    if (Array.isArray(data.promotionPlans)) state.config.promotionPlans = data.promotionPlans.filter(plan => plan.enabled !== false);
+    syncPromotionPlanOptions();
+    alert("✅ Цены и настройки монетизации сохранены");
+    renderAdminMonetization(data);
   } catch (error) {
     alert(error.message || "Не удалось сохранить настройки");
   } finally {
-    if (button) { button.disabled = false; button.textContent = "Сохранить настройки"; }
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Сохранить все цены";
+    }
   }
 }
 
@@ -7275,6 +7460,18 @@ function removeAdCampaignImage() {
   renderAdCampaignImagePreview();
 }
 
+function getDefaultAdvertisingRate(model = "flat") {
+  const rates = state.config.advertisingRates || {};
+  const value = Number(rates[model]);
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function applyDefaultAdvertisingRate() {
+  const billing = document.getElementById("adCampaignBilling")?.value || "flat";
+  const rate = document.getElementById("adCampaignRate");
+  if (rate) rate.value = String(getDefaultAdvertisingRate(billing));
+}
+
 function renderAdminAds(ads = []) {
   adminAdsCache = ads;
   adminAdImageRequestId += 1;
@@ -7313,8 +7510,8 @@ function renderAdminAds(ads = []) {
         <label>Приоритет<input id="adCampaignPriority" type="number" min="-100" max="100" value="0"></label>
         <label>Вставлять через товаров<input id="adCampaignEvery" type="number" min="2" max="20" value="6"></label>
         <label>Лимит показов<input id="adCampaignLimit" type="number" min="0" value="0"><small>0 — без лимита</small></label>
-        <label>Модель оплаты<select id="adCampaignBilling"><option value="flat">Фиксированная сумма</option><option value="cpm">За 1000 показов (CPM)</option><option value="cpc">За клик (CPC)</option></select></label>
-        <label>Тариф, ₽<input id="adCampaignRate" type="number" min="0" step="0.01" value="0"></label>
+        <label>Модель оплаты<select id="adCampaignBilling" onchange="applyDefaultAdvertisingRate()"><option value="flat">Фиксированная сумма</option><option value="cpm">За 1000 показов (CPM)</option><option value="cpc">За клик (CPC)</option></select></label>
+        <label>Тариф, ₽<input id="adCampaignRate" type="number" min="0" step="0.01" value="${getDefaultAdvertisingRate("flat")}"><small>По умолчанию из раздела «Монетизация»</small></label>
         <label class="ad-paid-label"><input id="adCampaignPaid" type="checkbox"> Кампания оплачена</label>
       </div>
       <div class="admin-report-actions"><button type="button" class="admin-action-button restore" onclick="clearAdCampaignForm()">Очистить</button><button id="saveAdCampaignButton" type="button" class="admin-action-button" onclick="saveAdCampaign(this)">Сохранить кампанию</button></div>
@@ -7418,7 +7615,7 @@ function clearAdCampaignForm() {
   const every=document.getElementById("adCampaignEvery"); if(every) every.value="6";
   const limit=document.getElementById("adCampaignLimit"); if(limit) limit.value="0";
   const billing=document.getElementById("adCampaignBilling"); if(billing) billing.value="flat";
-  const rate=document.getElementById("adCampaignRate"); if(rate) rate.value="0";
+  const rate=document.getElementById("adCampaignRate"); if(rate) rate.value=String(getDefaultAdvertisingRate("flat"));
   const paid=document.getElementById("adCampaignPaid"); if(paid) paid.checked=false;
 }
 

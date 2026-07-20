@@ -8401,3 +8401,144 @@ body { overflow-x: hidden; }
     min-height: 142px;
   }
 }
+
+/* v1.20.0 — редактор цен и тарифов */
+.monetization-editor {
+  display: grid;
+  gap: 14px;
+}
+
+.monetization-tariff-list {
+  display: grid;
+  gap: 10px;
+}
+
+.monetization-tariff-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(112px, 150px);
+  gap: 12px;
+  align-items: end;
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.promotion-tariff-list .monetization-tariff-row {
+  grid-template-columns: minmax(0, 1fr) minmax(105px, 135px) minmax(82px, 105px);
+}
+
+.monetization-toggle {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+}
+
+.monetization-toggle input[type="checkbox"] {
+  width: 22px !important;
+  min-width: 22px;
+  height: 22px;
+  margin: 0 !important;
+  padding: 0 !important;
+  accent-color: #635bff;
+}
+
+.monetization-toggle > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.monetization-toggle small,
+.monetization-number-field small {
+  color: var(--muted, #7b8190);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.monetization-number-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  color: var(--muted, #6b7280);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.monetization-number-field input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #d7dbe3;
+  border-radius: 11px;
+  padding: 10px 11px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+}
+
+.monetization-number-field input:focus {
+  outline: 2px solid rgba(99, 91, 255, .22);
+  border-color: #635bff;
+}
+
+.monetization-inline-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.monetization-ad-rates {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.monetization-save-card {
+  position: sticky;
+  bottom: calc(72px + env(safe-area-inset-bottom));
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  box-shadow: 0 14px 35px rgba(17, 24, 39, .14);
+}
+
+.monetization-save-card small {
+  color: var(--muted, #6b7280);
+}
+
+body.dark-mode .monetization-tariff-row {
+  border-color: #36343f;
+  background: #24232a;
+}
+
+body.dark-mode .monetization-number-field input {
+  border-color: #45424e;
+  background: #1d1c22;
+}
+
+@media (max-width: 620px) {
+  .monetization-tariff-row,
+  .promotion-tariff-list .monetization-tariff-row,
+  .monetization-inline-fields,
+  .monetization-ad-rates {
+    grid-template-columns: 1fr;
+  }
+
+  .monetization-tariff-row {
+    align-items: stretch;
+  }
+
+  .monetization-save-card {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .monetization-save-card .admin-action-button {
+    width: 100%;
+  }
+}

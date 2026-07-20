@@ -16,7 +16,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.19.3";
+const APP_VERSION = "1.20.0";
 const LEGAL_DOCUMENT_VERSION = "1.16.0";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -1111,29 +1111,164 @@ function getListingFeeType(category, specifications = {}) {
   return "";
 }
 
-async function getMonetizationSettings(database = pool) {
+let monetizationSettingsCache = { value: null, expiresAt: 0 };
+
+function normalizeMonetizationAmount(value, fallback = 0) {
+  const candidate = value === null || value === undefined || value === "" ? Number(fallback) : Number(value);
+  if (!Number.isFinite(candidate)) return Math.max(0, Number(fallback) || 0);
+  return Math.max(0, Math.min(100_000_000, Math.round(candidate * 100) / 100));
+}
+
+function normalizeMonetizationDays(value, fallback = 1) {
+  const candidate = value === null || value === undefined || value === "" ? Number(fallback) : Number(value);
+  if (!Number.isFinite(candidate)) return Math.max(1, Math.min(365, Number(fallback) || 1));
+  return Math.max(1, Math.min(365, Math.round(candidate)));
+}
+
+function buildDefaultMonetizationSettings() {
+  return {
+    automobile: false,
+    vacancy: false,
+    apartment: false,
+    house: false,
+    land: false,
+    paidListingEnabled: {
+      automobile: false,
+      vacancy: false,
+      apartment: false,
+      house: false,
+      land: false
+    },
+    paidListingPrices: { ...PAID_LISTING_PRICES },
+    professionalSubscription: {
+      alwaysPaid: true,
+      priceRub: PROFESSIONAL_SUBSCRIPTION_PRICE_RUB,
+      days: PROFESSIONAL_SUBSCRIPTION_DAYS,
+      unlimitedListings: true
+    },
+    featureHighlight: {
+      priceRub: FEATURE_HIGHLIGHT_PRICE_RUB,
+      days: FEATURE_HIGHLIGHT_DAYS
+    },
+    promotionPlans: {
+      boost: { ...PROMOTION_PLANS.boost, enabled: true },
+      vip: { ...PROMOTION_PLANS.vip, enabled: true },
+      premium: { ...PROMOTION_PLANS.premium, enabled: true }
+    },
+    advertisingRates: {
+      flat: normalizeMonetizationAmount(process.env.AD_DEFAULT_FLAT_RATE_RUB, 0),
+      cpm: normalizeMonetizationAmount(process.env.AD_DEFAULT_CPM_RATE_RUB, 0),
+      cpc: normalizeMonetizationAmount(process.env.AD_DEFAULT_CPC_RATE_RUB, 0)
+    },
+    pricingVersion: 1,
+    updatedAt: null,
+    updatedBy: ""
+  };
+}
+
+function clearMonetizationSettingsCache() {
+  monetizationSettingsCache = { value: null, expiresAt: 0 };
+}
+
+async function getMonetizationSettings(database = pool, { force = false } = {}) {
+  const canUseCache = database === pool;
+  if (!force && canUseCache && monetizationSettingsCache.value && monetizationSettingsCache.expiresAt > Date.now()) {
+    return monetizationSettingsCache.value;
+  }
+
+  const defaults = buildDefaultMonetizationSettings();
   const result = await database.query(`
-    SELECT automobile_paid, vacancy_paid, apartment_paid, house_paid, land_paid
+    SELECT
+      automobile_paid, vacancy_paid, apartment_paid, house_paid, land_paid,
+      automobile_price_rub, vacancy_price_rub, apartment_price_rub, house_price_rub, land_price_rub,
+      professional_price_rub, professional_days,
+      feature_highlight_price_rub, feature_highlight_days,
+      promo_boost_price_rub, promo_boost_days, promo_boost_enabled,
+      promo_vip_price_rub, promo_vip_days, promo_vip_enabled,
+      promo_premium_price_rub, promo_premium_days, promo_premium_enabled,
+      advertising_flat_rate_rub, advertising_cpm_rate_rub, advertising_cpc_rate_rub,
+      pricing_version, updated_at, updated_by
     FROM monetization_settings WHERE id = TRUE LIMIT 1
   `);
   const row = result.rows[0] || {};
-  return {
+  const paidListingEnabled = {
     automobile: row.automobile_paid === true,
     vacancy: row.vacancy_paid === true,
     apartment: row.apartment_paid === true,
     house: row.house_paid === true,
     land: row.land_paid === true
   };
+  const settings = {
+    ...paidListingEnabled,
+    paidListingEnabled,
+    paidListingPrices: {
+      automobile: normalizeMonetizationAmount(row.automobile_price_rub, defaults.paidListingPrices.automobile),
+      vacancy: normalizeMonetizationAmount(row.vacancy_price_rub, defaults.paidListingPrices.vacancy),
+      apartment: normalizeMonetizationAmount(row.apartment_price_rub, defaults.paidListingPrices.apartment),
+      house: normalizeMonetizationAmount(row.house_price_rub, defaults.paidListingPrices.house),
+      land: normalizeMonetizationAmount(row.land_price_rub, defaults.paidListingPrices.land)
+    },
+    professionalSubscription: {
+      ...defaults.professionalSubscription,
+      priceRub: normalizeMonetizationAmount(row.professional_price_rub, defaults.professionalSubscription.priceRub),
+      days: normalizeMonetizationDays(row.professional_days, defaults.professionalSubscription.days)
+    },
+    featureHighlight: {
+      priceRub: normalizeMonetizationAmount(row.feature_highlight_price_rub, defaults.featureHighlight.priceRub),
+      days: normalizeMonetizationDays(row.feature_highlight_days, defaults.featureHighlight.days)
+    },
+    promotionPlans: {
+      boost: {
+        ...defaults.promotionPlans.boost,
+        priceRub: normalizeMonetizationAmount(row.promo_boost_price_rub, defaults.promotionPlans.boost.priceRub),
+        days: normalizeMonetizationDays(row.promo_boost_days, defaults.promotionPlans.boost.days),
+        enabled: row.promo_boost_enabled !== false
+      },
+      vip: {
+        ...defaults.promotionPlans.vip,
+        priceRub: normalizeMonetizationAmount(row.promo_vip_price_rub, defaults.promotionPlans.vip.priceRub),
+        days: normalizeMonetizationDays(row.promo_vip_days, defaults.promotionPlans.vip.days),
+        enabled: row.promo_vip_enabled !== false
+      },
+      premium: {
+        ...defaults.promotionPlans.premium,
+        priceRub: normalizeMonetizationAmount(row.promo_premium_price_rub, defaults.promotionPlans.premium.priceRub),
+        days: normalizeMonetizationDays(row.promo_premium_days, defaults.promotionPlans.premium.days),
+        enabled: row.promo_premium_enabled !== false
+      }
+    },
+    advertisingRates: {
+      flat: normalizeMonetizationAmount(row.advertising_flat_rate_rub, defaults.advertisingRates.flat),
+      cpm: normalizeMonetizationAmount(row.advertising_cpm_rate_rub, defaults.advertisingRates.cpm),
+      cpc: normalizeMonetizationAmount(row.advertising_cpc_rate_rub, defaults.advertisingRates.cpc)
+    },
+    pricingVersion: Math.max(1, Number(row.pricing_version) || 1),
+    updatedAt: row.updated_at || null,
+    updatedBy: row.updated_by || ""
+  };
+
+  if (canUseCache) {
+    monetizationSettingsCache = { value: settings, expiresAt: Date.now() + 5_000 };
+  }
+  return settings;
+}
+
+function getPromotionPlanFromSettings(settings, planId) {
+  const normalizedPlanId = normalizeText(planId, 20).toLowerCase();
+  const plan = settings?.promotionPlans?.[normalizedPlanId];
+  return plan && plan.enabled !== false ? plan : null;
 }
 
 async function getListingFeeRequirement(database, category, specifications = {}) {
   const feeType = getListingFeeType(category, specifications);
-  if (!feeType) return { required: false, feeType: "", priceRub: 0 };
+  if (!feeType) return { required: false, feeType: "", priceRub: 0, pricingVersion: 1 };
   const settings = await getMonetizationSettings(database);
+  const priceRub = settings.paidListingPrices[feeType] || 0;
   return {
-    required: settings[feeType] === true,
+    required: settings.paidListingEnabled[feeType] === true && priceRub > 0,
     feeType,
-    priceRub: PAID_LISTING_PRICES[feeType] || 0
+    priceRub,
+    pricingVersion: settings.pricingVersion
   };
 }
 
@@ -1176,6 +1311,7 @@ async function getListingQuota(db, userId, { lockUser = false } = {}) {
   const subscriptionUntil = userRow.professional_subscription_until
     ? new Date(userRow.professional_subscription_until).toISOString()
     : null;
+  const monetization = await getMonetizationSettings(db);
   return {
     used,
     limit,
@@ -1184,8 +1320,8 @@ async function getListingQuota(db, userId, { lockUser = false } = {}) {
     tier: unlimited ? "professional" : "standard",
     professionalSubscriptionActive: unlimited,
     professionalSubscriptionUntil: subscriptionUntil,
-    professionalSubscriptionPriceRub: PROFESSIONAL_SUBSCRIPTION_PRICE_RUB,
-    professionalSubscriptionDays: PROFESSIONAL_SUBSCRIPTION_DAYS,
+    professionalSubscriptionPriceRub: monetization.professionalSubscription.priceRub,
+    professionalSubscriptionDays: monetization.professionalSubscription.days,
     defaultLimit: DEFAULT_LISTING_LIMIT
   };
 }
@@ -1910,8 +2046,16 @@ async function createCheckoutPayment({ userId, productId = null, purpose, plan, 
 }
 
 async function activatePaidPromotion(client, order, providerPayment = null) {
-  const plan = PROMOTION_PLANS[order.plan];
-  if (!plan) throw new Error("Неизвестный тариф продвижения");
+  const fallbackPlan = PROMOTION_PLANS[order.plan];
+  if (!fallbackPlan) throw new Error("Неизвестный тариф продвижения");
+  const metadata = order.metadata && typeof order.metadata === "object" ? order.metadata : {};
+  const plan = {
+    ...fallbackPlan,
+    label: normalizeText(metadata.planLabel, 80) || fallbackPlan.label,
+    days: normalizeMonetizationDays(metadata.durationDays, fallbackPlan.days),
+    priceRub: normalizeMonetizationAmount(metadata.quotedPriceRub, Number(order.amount) || fallbackPlan.priceRub),
+    priority: Math.max(0, Math.min(100, Number(metadata.planPriority) || fallbackPlan.priority))
+  };
   const productResult = await client.query(
     `SELECT id, owner_id, status, hidden, moderation_status, featured_until FROM products WHERE id = $1 FOR UPDATE`,
     [order.product_id]
@@ -1952,7 +2096,9 @@ async function activateProfessionalSubscription(client, order, providerPayment =
     ? new Date(userResult.rows[0].professional_subscription_until).getTime()
     : 0;
   const startAt = Math.max(Date.now(), Number.isFinite(currentUntil) ? currentUntil : 0);
-  const subscriptionUntil = new Date(startAt + PROFESSIONAL_SUBSCRIPTION_DAYS * 86_400_000);
+  const metadata = order.metadata && typeof order.metadata === "object" ? order.metadata : {};
+  const subscriptionDays = normalizeMonetizationDays(metadata.durationDays || metadata.subscriptionDays, PROFESSIONAL_SUBSCRIPTION_DAYS);
+  const subscriptionUntil = new Date(startAt + subscriptionDays * 86_400_000);
   await client.query(`
     UPDATE users
     SET is_business = TRUE,
@@ -2879,11 +3025,58 @@ async function initDb(db = pool) {
       apartment_paid BOOLEAN DEFAULT FALSE,
       house_paid BOOLEAN DEFAULT FALSE,
       land_paid BOOLEAN DEFAULT FALSE,
+      automobile_price_rub NUMERIC(12,2) DEFAULT ${PAID_LISTING_PRICES.automobile},
+      vacancy_price_rub NUMERIC(12,2) DEFAULT ${PAID_LISTING_PRICES.vacancy},
+      apartment_price_rub NUMERIC(12,2) DEFAULT ${PAID_LISTING_PRICES.apartment},
+      house_price_rub NUMERIC(12,2) DEFAULT ${PAID_LISTING_PRICES.house},
+      land_price_rub NUMERIC(12,2) DEFAULT ${PAID_LISTING_PRICES.land},
+      professional_price_rub NUMERIC(12,2) DEFAULT ${PROFESSIONAL_SUBSCRIPTION_PRICE_RUB},
+      professional_days INTEGER DEFAULT ${PROFESSIONAL_SUBSCRIPTION_DAYS},
+      feature_highlight_price_rub NUMERIC(12,2) DEFAULT ${FEATURE_HIGHLIGHT_PRICE_RUB},
+      feature_highlight_days INTEGER DEFAULT ${FEATURE_HIGHLIGHT_DAYS},
+      promo_boost_price_rub NUMERIC(12,2) DEFAULT ${PROMOTION_PLANS.boost.priceRub},
+      promo_boost_days INTEGER DEFAULT ${PROMOTION_PLANS.boost.days},
+      promo_boost_enabled BOOLEAN DEFAULT TRUE,
+      promo_vip_price_rub NUMERIC(12,2) DEFAULT ${PROMOTION_PLANS.vip.priceRub},
+      promo_vip_days INTEGER DEFAULT ${PROMOTION_PLANS.vip.days},
+      promo_vip_enabled BOOLEAN DEFAULT TRUE,
+      promo_premium_price_rub NUMERIC(12,2) DEFAULT ${PROMOTION_PLANS.premium.priceRub},
+      promo_premium_days INTEGER DEFAULT ${PROMOTION_PLANS.premium.days},
+      promo_premium_enabled BOOLEAN DEFAULT TRUE,
+      advertising_flat_rate_rub NUMERIC(12,2) DEFAULT 0,
+      advertising_cpm_rate_rub NUMERIC(12,2) DEFAULT 0,
+      advertising_cpc_rate_rub NUMERIC(12,2) DEFAULT 0,
+      pricing_version INTEGER DEFAULT 1,
       updated_at TIMESTAMPTZ DEFAULT NOW(),
       updated_by TEXT DEFAULT ''
     );
   `);
   await db.query(`INSERT INTO monetization_settings (id) VALUES (TRUE) ON CONFLICT (id) DO NOTHING;`);
+  const monetizationMigrations = [
+    `ALTER TABLE monetization_settings ADD COLUMN IF NOT EXISTS automobile_price_rub NUMERIC(12,2) DEFAULT ${PAID_LISTING_PRICES.automobile};`,
+    `ALTER TABLE monetization_settings ADD COLUMN IF NOT EXISTS vacancy_price_rub NUMERIC(12,2) DEFAULT ${PAID_LISTING_PRICES.vacancy};`,
+    `ALTER TABLE monetization_settings ADD COLUMN IF NOT EXISTS apartment_price_rub NUMERIC(12,2) DEFAULT ${PAID_LISTING_PRICES.apartment};`,
+    `ALTER TABLE monetization_settings ADD COLUMN IF NOT EXISTS house_price_rub NUMERIC(12,2) DEFAULT ${PAID_LISTING_PRICES.house};`,
+    `ALTER TABLE monetization_settings ADD COLUMN IF NOT EXISTS land_price_rub NUMERIC(12,2) DEFAULT ${PAID_LISTING_PRICES.land};`,
+    `ALTER TABLE monetization_settings ADD COLUMN IF NOT EXISTS professional_price_rub NUMERIC(12,2) DEFAULT ${PROFESSIONAL_SUBSCRIPTION_PRICE_RUB};`,
+    `ALTER TABLE monetization_settings ADD COLUMN IF NOT EXISTS professional_days INTEGER DEFAULT ${PROFESSIONAL_SUBSCRIPTION_DAYS};`,
+    `ALTER TABLE monetization_settings ADD COLUMN IF NOT EXISTS feature_highlight_price_rub NUMERIC(12,2) DEFAULT ${FEATURE_HIGHLIGHT_PRICE_RUB};`,
+    `ALTER TABLE monetization_settings ADD COLUMN IF NOT EXISTS feature_highlight_days INTEGER DEFAULT ${FEATURE_HIGHLIGHT_DAYS};`,
+    `ALTER TABLE monetization_settings ADD COLUMN IF NOT EXISTS promo_boost_price_rub NUMERIC(12,2) DEFAULT ${PROMOTION_PLANS.boost.priceRub};`,
+    `ALTER TABLE monetization_settings ADD COLUMN IF NOT EXISTS promo_boost_days INTEGER DEFAULT ${PROMOTION_PLANS.boost.days};`,
+    `ALTER TABLE monetization_settings ADD COLUMN IF NOT EXISTS promo_boost_enabled BOOLEAN DEFAULT TRUE;`,
+    `ALTER TABLE monetization_settings ADD COLUMN IF NOT EXISTS promo_vip_price_rub NUMERIC(12,2) DEFAULT ${PROMOTION_PLANS.vip.priceRub};`,
+    `ALTER TABLE monetization_settings ADD COLUMN IF NOT EXISTS promo_vip_days INTEGER DEFAULT ${PROMOTION_PLANS.vip.days};`,
+    `ALTER TABLE monetization_settings ADD COLUMN IF NOT EXISTS promo_vip_enabled BOOLEAN DEFAULT TRUE;`,
+    `ALTER TABLE monetization_settings ADD COLUMN IF NOT EXISTS promo_premium_price_rub NUMERIC(12,2) DEFAULT ${PROMOTION_PLANS.premium.priceRub};`,
+    `ALTER TABLE monetization_settings ADD COLUMN IF NOT EXISTS promo_premium_days INTEGER DEFAULT ${PROMOTION_PLANS.premium.days};`,
+    `ALTER TABLE monetization_settings ADD COLUMN IF NOT EXISTS promo_premium_enabled BOOLEAN DEFAULT TRUE;`,
+    `ALTER TABLE monetization_settings ADD COLUMN IF NOT EXISTS advertising_flat_rate_rub NUMERIC(12,2) DEFAULT 0;`,
+    `ALTER TABLE monetization_settings ADD COLUMN IF NOT EXISTS advertising_cpm_rate_rub NUMERIC(12,2) DEFAULT 0;`,
+    `ALTER TABLE monetization_settings ADD COLUMN IF NOT EXISTS advertising_cpc_rate_rub NUMERIC(12,2) DEFAULT 0;`,
+    `ALTER TABLE monetization_settings ADD COLUMN IF NOT EXISTS pricing_version INTEGER DEFAULT 1;`
+  ];
+  for (const migration of monetizationMigrations) await db.query(migration);
 
   await db.query(`
     CREATE TABLE IF NOT EXISTS legal_acceptances (
@@ -3484,10 +3677,10 @@ app.get("/api/ready", (req, res) => {
 });
 
 app.get("/api/config", async (req, res) => {
-  let paidListingEnabled = { automobile: false, vacancy: false, apartment: false, house: false, land: false };
+  let monetization = buildDefaultMonetizationSettings();
   if (databaseState.ready) {
     try {
-      paidListingEnabled = await getMonetizationSettings(pool);
+      monetization = await getMonetizationSettings(pool);
     } catch (error) {
       console.warn("Monetization config unavailable:", error?.message || error);
     }
@@ -3498,21 +3691,23 @@ app.get("/api/config", async (req, res) => {
     supportUsername: SUPPORT_USERNAME,
     botUsername: BOT_USERNAME,
     productArchiveDays: PRODUCT_ARCHIVE_DAYS,
-    featureHighlightPriceRub: FEATURE_HIGHLIGHT_PRICE_RUB,
-    featureHighlightDays: FEATURE_HIGHLIGHT_DAYS,
+    featureHighlightPriceRub: monetization.featureHighlight.priceRub,
+    featureHighlightDays: monetization.featureHighlight.days,
     defaultListingLimit: DEFAULT_LISTING_LIMIT,
     professionalListingLimit: null,
-    professionalSubscriptionPriceRub: PROFESSIONAL_SUBSCRIPTION_PRICE_RUB,
-    professionalSubscriptionDays: PROFESSIONAL_SUBSCRIPTION_DAYS,
+    professionalSubscriptionPriceRub: monetization.professionalSubscription.priceRub,
+    professionalSubscriptionDays: monetization.professionalSubscription.days,
     aiListingAssistantEnabled: AI_LISTING_ASSISTANT_ENABLED,
     aiModerationEnabled: AI_MODERATION_ENABLED,
     aiProviderConfigured: Boolean(OPENAI_API_KEY),
     aiDailyBudgetUsd: AI_DAILY_BUDGET_USD,
     paymentEnabled: isYooKassaConfigured(),
     paymentProvider: isYooKassaConfigured() ? "yookassa" : "manual",
-    promotionPlans: Object.values(PROMOTION_PLANS),
-    paidListingEnabled,
-    paidListingPrices: PAID_LISTING_PRICES
+    promotionPlans: Object.values(monetization.promotionPlans).filter(plan => plan.enabled !== false),
+    paidListingEnabled: monetization.paidListingEnabled,
+    paidListingPrices: monetization.paidListingPrices,
+    advertisingRates: monetization.advertisingRates,
+    pricingVersion: monetization.pricingVersion
   });
 });
 
@@ -4111,10 +4306,13 @@ app.get("/api/payments", requireTelegramAuth, syncTelegramUser, async (req, res)
 
 app.get("/api/me/professional-subscription", requireTelegramAuth, syncTelegramUser, async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT professional_subscription_started_at, professional_subscription_until
-      FROM users WHERE telegram_id=$1 LIMIT 1
-    `, [String(req.telegramUser.id)]);
+    const [result, monetization] = await Promise.all([
+      pool.query(`
+        SELECT professional_subscription_started_at, professional_subscription_until
+        FROM users WHERE telegram_id=$1 LIMIT 1
+      `, [String(req.telegramUser.id)]),
+      getMonetizationSettings(pool)
+    ]);
     const row = result.rows[0] || {};
     const active = isProfessionalSubscriptionActive(row);
     res.setHeader("Cache-Control", "no-store");
@@ -4124,9 +4322,10 @@ app.get("/api/me/professional-subscription", requireTelegramAuth, syncTelegramUs
         active,
         startedAt: row.professional_subscription_started_at || null,
         until: row.professional_subscription_until || null,
-        priceRub: PROFESSIONAL_SUBSCRIPTION_PRICE_RUB,
-        days: PROFESSIONAL_SUBSCRIPTION_DAYS,
-        unlimitedListings: true
+        priceRub: monetization.professionalSubscription.priceRub,
+        days: monetization.professionalSubscription.days,
+        unlimitedListings: true,
+        pricingVersion: monetization.pricingVersion
       }
     });
   } catch (error) {
@@ -4137,16 +4336,27 @@ app.get("/api/me/professional-subscription", requireTelegramAuth, syncTelegramUs
 app.post("/api/payments/professional-subscription", requireTelegramAuth, syncTelegramUser, paymentRateLimiter, async (req, res) => {
   const userId = String(req.telegramUser.id);
   try {
+    const monetization = await getMonetizationSettings(pool);
+    const subscription = monetization.professionalSubscription;
+    if (subscription.priceRub <= 0) {
+      return res.status(409).json({ ok: false, code: "INVALID_TARIFF_PRICE", error: "Стоимость подписки должна быть больше нуля. Проверьте настройки монетизации." });
+    }
     const checkout = await createCheckoutPayment({
       userId,
       purpose: "professional_subscription",
       plan: "professional_monthly",
-      amount: PROFESSIONAL_SUBSCRIPTION_PRICE_RUB,
-      description: `Подписка «Профессиональный продавец» на ${PROFESSIONAL_SUBSCRIPTION_DAYS} дней`,
-      metadata: { subscriptionDays: PROFESSIONAL_SUBSCRIPTION_DAYS },
+      amount: subscription.priceRub,
+      description: `Подписка «Профессиональный продавец» на ${subscription.days} дней`,
+      metadata: {
+        subscriptionDays: subscription.days,
+        durationDays: subscription.days,
+        quotedPriceRub: subscription.priceRub,
+        pricingVersion: monetization.pricingVersion,
+        tariffKey: "subscription.professional"
+      },
       lockKey: `professional_subscription:${userId}`
     });
-    res.status(checkout.reused ? 200 : 201).json({ ok: true, ...checkout });
+    res.status(checkout.reused ? 200 : 201).json({ ok: true, ...checkout, pricingVersion: monetization.pricingVersion });
   } catch (error) {
     console.error("Create professional subscription payment error:", error);
     const code = error?.code === "PAYMENTS_NOT_CONFIGURED" ? "PAYMENTS_NOT_CONFIGURED" : "PAYMENT_PROVIDER_ERROR";
@@ -4184,7 +4394,13 @@ app.post("/api/payments/listing", requireTelegramAuth, syncTelegramUser, payment
       plan: requirement.feeType,
       amount: requirement.priceRub,
       description: `Публикация объявления — ${normalizeText(product.name, 80)}`,
-      metadata: { category: product.category, feeType: requirement.feeType },
+      metadata: {
+        category: product.category,
+        feeType: requirement.feeType,
+        quotedPriceRub: requirement.priceRub,
+        pricingVersion: requirement.pricingVersion,
+        tariffKey: `listing.${requirement.feeType}`
+      },
       lockKey: `listing_fee:${userId}:${productId}:${requirement.feeType}`
     });
     res.status(checkout.reused ? 200 : 201).json({ ok: true, ...checkout, feeType: requirement.feeType });
@@ -4199,12 +4415,17 @@ app.post("/api/payments/promotion", requireTelegramAuth, syncTelegramUser, payme
   const userId = String(req.telegramUser.id);
   const productId = normalizeText(req.body?.productId, 64);
   const planId = normalizeText(req.body?.plan, 20).toLowerCase();
-  const plan = PROMOTION_PLANS[planId];
   if (!isYooKassaConfigured()) {
     return res.status(503).json({ ok: false, code: "PAYMENTS_NOT_CONFIGURED", error: "Онлайн-оплата пока не настроена. Используйте заявку на продвижение." });
   }
-  if (!productId || !plan) return res.status(400).json({ ok: false, error: "Выберите объявление и тариф" });
+  if (!productId || !planId) return res.status(400).json({ ok: false, error: "Выберите объявление и тариф" });
   try {
+    const monetization = await getMonetizationSettings(pool);
+    const plan = getPromotionPlanFromSettings(monetization, planId);
+    if (!plan) return res.status(400).json({ ok: false, error: "Тариф выключен или не существует" });
+    if (Number(plan.priceRub) <= 0) {
+      return res.status(409).json({ ok: false, code: "INVALID_TARIFF_PRICE", error: "Для этого тарифа не настроена стоимость онлайн-оплаты" });
+    }
     const productResult = await pool.query(`
       SELECT id, owner_id, name, status, hidden, moderation_status
       FROM products WHERE id=$1 AND owner_id=$2 AND COALESCE(status,'active') <> 'deleted'
@@ -4251,7 +4472,15 @@ app.post("/api/payments/promotion", requireTelegramAuth, syncTelegramUser, payme
       await orderClient.query(`
         INSERT INTO payment_orders (id,user_id,product_id,purpose,plan,amount,currency,status,provider,idempotence_key,metadata)
         VALUES ($1,$2,$3,'promotion',$4,$5,'RUB','creating','yookassa',$6,$7::jsonb)
-      `, [orderId, userId, productId, plan.id, amount, idempotenceKey, JSON.stringify({ productName: product.name || "", planLabel: plan.label })]);
+      `, [orderId, userId, productId, plan.id, amount, idempotenceKey, JSON.stringify({
+        productName: product.name || "",
+        planLabel: plan.label,
+        durationDays: plan.days,
+        quotedPriceRub: amount,
+        planPriority: plan.priority,
+        pricingVersion: monetization.pricingVersion,
+        tariffKey: `promotion.${plan.id}`
+      })]);
       await orderClient.query("COMMIT");
     } catch (orderError) {
       await orderClient.query("ROLLBACK").catch(() => {});
@@ -4275,7 +4504,15 @@ app.post("/api/payments/promotion", requireTelegramAuth, syncTelegramUser, payme
       await pool.query(`
         UPDATE payment_orders SET status=$2, provider_payment_id=$3, confirmation_url=$4, updated_at=NOW() WHERE id=$1
       `, [orderId, normalizeText(payment.status, 30) || "pending", normalizeText(payment.id, 100), normalizeText(payment.confirmation?.confirmation_url, 1200)]);
-      res.status(201).json({ ok: true, orderId, status: payment.status || "pending", confirmationUrl: payment.confirmation?.confirmation_url || "", amount, currency: "RUB" });
+      res.status(201).json({
+        ok: true,
+        orderId,
+        status: payment.status || "pending",
+        confirmationUrl: payment.confirmation?.confirmation_url || "",
+        amount,
+        currency: "RUB",
+        pricingVersion: monetization.pricingVersion
+      });
     } catch (providerError) {
       await pool.query(`UPDATE payment_orders SET status='failed', updated_at=NOW() WHERE id=$1`, [orderId]);
       throw providerError;
@@ -5195,7 +5432,13 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
       listingQuota: updatedListingQuota,
       moderation: { blocked: moderation.blocked, aiReview: Boolean(moderation.aiReview), aiScore: Number(moderation.aiScore) || 0, reason: moderation.reason },
       paymentRequired: (!moderation.blocked && requestedStatus === "active" && listingFeeRequirement.required)
-        ? { type: "listing_fee", feeType: listingFeeRequirement.feeType, priceRub: listingFeeRequirement.priceRub, productId: id }
+        ? {
+            type: "listing_fee",
+            feeType: listingFeeRequirement.feeType,
+            priceRub: listingFeeRequirement.priceRub,
+            pricingVersion: listingFeeRequirement.pricingVersion,
+            productId: id
+          }
         : null
     });
   } catch (error) {
@@ -5330,15 +5573,23 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
       specifications: cleanSpecifications,
       ownerId: req.telegramUser.id
     }, client);
-    const listingFeeRequirement = requestedStatus === "active" && (existing.status || "active") !== "active"
+    const existingFeeType = getListingFeeType(existing.category, existing.specifications || {});
+    const listingFeeRequirement = requestedStatus === "active"
       ? await getListingFeeRequirement(client, cleanCategory, cleanSpecifications)
-      : { required: false, feeType: "", priceRub: 0 };
-    const listingFeePaid = listingFeeRequirement.required
+      : { required: false, feeType: "", priceRub: 0, pricingVersion: 1 };
+    const paidClassificationChanged =
+      normalizeText(existing.category, 60) !== cleanCategory ||
+      existingFeeType !== listingFeeRequirement.feeType;
+    const shouldCheckListingPayment =
+      requestedStatus === "active" &&
+      listingFeeRequirement.required &&
+      ((existing.status || "active") !== "active" || paidClassificationChanged);
+    const listingFeePaid = shouldCheckListingPayment
       ? await hasSuccessfulListingPayment(client, req.telegramUser.id, productId, listingFeeRequirement.feeType)
       : false;
     const finalStatus = moderation.blocked
       ? "draft"
-      : (requestedStatus === "draft" || (listingFeeRequirement.required && !listingFeePaid) ? "draft" : "active");
+      : (requestedStatus === "draft" || (shouldCheckListingPayment && !listingFeePaid) ? "draft" : "active");
     const duplicateFingerprint = buildDuplicateFingerprint({
       name: cleanName,
       priceAmount: cleanPriceAmount,
@@ -5444,8 +5695,14 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
         dropped: priceDropped,
         discountEnabled: priceDropped
       },
-      paymentRequired: (!moderation.blocked && requestedStatus === "active" && listingFeeRequirement.required && !listingFeePaid)
-        ? { type: "listing_fee", feeType: listingFeeRequirement.feeType, priceRub: listingFeeRequirement.priceRub, productId }
+      paymentRequired: (!moderation.blocked && shouldCheckListingPayment && !listingFeePaid)
+        ? {
+            type: "listing_fee",
+            feeType: listingFeeRequirement.feeType,
+            priceRub: listingFeeRequirement.priceRub,
+            pricingVersion: listingFeeRequirement.pricingVersion,
+            productId
+          }
         : null
     });
   } catch (error) {
@@ -5667,6 +5924,37 @@ app.patch("/api/products/:id/status", requireTelegramAuth, syncTelegramUser, asy
       });
     }
 
+    if (status === "active" && currentStatus !== "active") {
+      const listingFeeRequirement = await getListingFeeRequirement(
+        client,
+        existing.category,
+        existing.specifications || {}
+      );
+      const listingFeePaid = listingFeeRequirement.required
+        ? await hasSuccessfulListingPayment(
+            client,
+            req.telegramUser.id,
+            productId,
+            listingFeeRequirement.feeType
+          )
+        : false;
+      if (listingFeeRequirement.required && !listingFeePaid) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          ok: false,
+          code: "LISTING_PAYMENT_REQUIRED",
+          error: "Для повторной публикации этого объявления требуется оплата",
+          paymentRequired: {
+            type: "listing_fee",
+            feeType: listingFeeRequirement.feeType,
+            priceRub: listingFeeRequirement.priceRub,
+            pricingVersion: listingFeeRequirement.pricingVersion,
+            productId
+          }
+        });
+      }
+    }
+
     const statusFingerprint = existing.duplicate_fingerprint || buildDuplicateFingerprint({
       name: existing.name,
       priceAmount: existing.price_amount,
@@ -5802,7 +6090,11 @@ app.post("/api/products/:id/feature-request", requireTelegramAuth, syncTelegramU
   try {
     const productId = normalizeText(req.params.id, 64);
     const planId = normalizeText(req.body?.plan, 20).toLowerCase();
-    const plan = PROMOTION_PLANS[planId] || PROMOTION_PLANS.vip;
+    const monetization = await getMonetizationSettings(pool);
+    const plan = getPromotionPlanFromSettings(monetization, planId || "vip");
+    if (!plan) {
+      return res.status(400).json({ ok: false, error: "Тариф выключен или не существует" });
+    }
     const days = plan.days;
 
     if (!productId) {
@@ -6518,17 +6810,18 @@ app.get(
   syncTelegramUser,
   requireAdmin,
   adminRoute(async (req, res) => {
-    const settings = await getMonetizationSettings(pool);
+    const settings = await getMonetizationSettings(pool, { force: true });
     res.json({
       ok: true,
-      paidListingEnabled: settings,
-      paidListingPrices: PAID_LISTING_PRICES,
-      professionalSubscription: {
-        alwaysPaid: true,
-        priceRub: PROFESSIONAL_SUBSCRIPTION_PRICE_RUB,
-        days: PROFESSIONAL_SUBSCRIPTION_DAYS,
-        unlimitedListings: true
-      }
+      paidListingEnabled: settings.paidListingEnabled,
+      paidListingPrices: settings.paidListingPrices,
+      professionalSubscription: settings.professionalSubscription,
+      featureHighlight: settings.featureHighlight,
+      promotionPlans: Object.values(settings.promotionPlans),
+      advertisingRates: settings.advertisingRates,
+      pricingVersion: settings.pricingVersion,
+      updatedAt: settings.updatedAt,
+      updatedBy: settings.updatedBy
     });
   })
 );
@@ -6539,20 +6832,137 @@ app.patch(
   syncTelegramUser,
   requireAdmin,
   adminRoute(async (req, res) => {
-    const automobile = req.body?.automobile === true;
-    const vacancy = req.body?.vacancy === true;
-    const apartment = req.body?.apartment === true;
-    const house = req.body?.house === true;
-    const land = req.body?.land === true;
-    const result = await pool.query(`
+    const current = await getMonetizationSettings(pool, { force: true });
+    const paidInput = req.body?.paidListingEnabled && typeof req.body.paidListingEnabled === "object"
+      ? req.body.paidListingEnabled
+      : req.body || {};
+    const pricesInput = req.body?.paidListingPrices && typeof req.body.paidListingPrices === "object"
+      ? req.body.paidListingPrices
+      : {};
+    const professionalInput = req.body?.professionalSubscription && typeof req.body.professionalSubscription === "object"
+      ? req.body.professionalSubscription
+      : {};
+    const featureInput = req.body?.featureHighlight && typeof req.body.featureHighlight === "object"
+      ? req.body.featureHighlight
+      : {};
+    const promotionInput = req.body?.promotionPlans && typeof req.body.promotionPlans === "object"
+      ? req.body.promotionPlans
+      : {};
+    const advertisingInput = req.body?.advertisingRates && typeof req.body.advertisingRates === "object"
+      ? req.body.advertisingRates
+      : {};
+
+    const readBoolean = (value, fallback) => typeof value === "boolean" ? value : fallback;
+    const readPlan = id => Array.isArray(promotionInput)
+      ? (promotionInput.find(plan => normalizeText(plan?.id, 20).toLowerCase() === id) || {})
+      : (promotionInput[id] || {});
+
+    const paidListingEnabled = {
+      automobile: readBoolean(paidInput.automobile, current.paidListingEnabled.automobile),
+      vacancy: readBoolean(paidInput.vacancy, current.paidListingEnabled.vacancy),
+      apartment: readBoolean(paidInput.apartment, current.paidListingEnabled.apartment),
+      house: readBoolean(paidInput.house, current.paidListingEnabled.house),
+      land: readBoolean(paidInput.land, current.paidListingEnabled.land)
+    };
+    const paidListingPrices = {
+      automobile: normalizeMonetizationAmount(pricesInput.automobile, current.paidListingPrices.automobile),
+      vacancy: normalizeMonetizationAmount(pricesInput.vacancy, current.paidListingPrices.vacancy),
+      apartment: normalizeMonetizationAmount(pricesInput.apartment, current.paidListingPrices.apartment),
+      house: normalizeMonetizationAmount(pricesInput.house, current.paidListingPrices.house),
+      land: normalizeMonetizationAmount(pricesInput.land, current.paidListingPrices.land)
+    };
+    const professionalSubscription = {
+      priceRub: Math.max(1, normalizeMonetizationAmount(professionalInput.priceRub, current.professionalSubscription.priceRub)),
+      days: normalizeMonetizationDays(professionalInput.days, current.professionalSubscription.days)
+    };
+    const featureHighlight = {
+      priceRub: normalizeMonetizationAmount(featureInput.priceRub, current.featureHighlight.priceRub),
+      days: normalizeMonetizationDays(featureInput.days, current.featureHighlight.days)
+    };
+    const boostInput = readPlan("boost");
+    const vipInput = readPlan("vip");
+    const premiumInput = readPlan("premium");
+    const promotionPlans = {
+      boost: {
+        priceRub: normalizeMonetizationAmount(boostInput.priceRub, current.promotionPlans.boost.priceRub),
+        days: normalizeMonetizationDays(boostInput.days, current.promotionPlans.boost.days),
+        enabled: readBoolean(boostInput.enabled, current.promotionPlans.boost.enabled)
+      },
+      vip: {
+        priceRub: normalizeMonetizationAmount(vipInput.priceRub, current.promotionPlans.vip.priceRub),
+        days: normalizeMonetizationDays(vipInput.days, current.promotionPlans.vip.days),
+        enabled: readBoolean(vipInput.enabled, current.promotionPlans.vip.enabled)
+      },
+      premium: {
+        priceRub: normalizeMonetizationAmount(premiumInput.priceRub, current.promotionPlans.premium.priceRub),
+        days: normalizeMonetizationDays(premiumInput.days, current.promotionPlans.premium.days),
+        enabled: readBoolean(premiumInput.enabled, current.promotionPlans.premium.enabled)
+      }
+    };
+    if (!Object.values(promotionPlans).some(plan => plan.enabled)) {
+      return res.status(400).json({ ok: false, error: "Оставьте включённым хотя бы один тариф продвижения" });
+    }
+
+    const advertisingRates = {
+      flat: normalizeMonetizationAmount(advertisingInput.flat, current.advertisingRates.flat),
+      cpm: normalizeMonetizationAmount(advertisingInput.cpm, current.advertisingRates.cpm),
+      cpc: normalizeMonetizationAmount(advertisingInput.cpc, current.advertisingRates.cpc)
+    };
+
+    await pool.query(`
       UPDATE monetization_settings
       SET automobile_paid=$1, vacancy_paid=$2, apartment_paid=$3, house_paid=$4, land_paid=$5,
-          updated_at=NOW(), updated_by=$6
+          automobile_price_rub=$6, vacancy_price_rub=$7, apartment_price_rub=$8, house_price_rub=$9, land_price_rub=$10,
+          professional_price_rub=$11, professional_days=$12,
+          feature_highlight_price_rub=$13, feature_highlight_days=$14,
+          promo_boost_price_rub=$15, promo_boost_days=$16, promo_boost_enabled=$17,
+          promo_vip_price_rub=$18, promo_vip_days=$19, promo_vip_enabled=$20,
+          promo_premium_price_rub=$21, promo_premium_days=$22, promo_premium_enabled=$23,
+          advertising_flat_rate_rub=$24, advertising_cpm_rate_rub=$25, advertising_cpc_rate_rub=$26,
+          pricing_version=COALESCE(pricing_version, 1)+1,
+          updated_at=NOW(), updated_by=$27
       WHERE id=TRUE
-      RETURNING automobile_paid, vacancy_paid, apartment_paid, house_paid, land_paid
-    `, [automobile, vacancy, apartment, house, land, String(req.telegramUser.id)]);
-    await addAdminLog(req.telegramUser.id, "monetization_settings_update", "settings", JSON.stringify(result.rows[0] || {}));
-    res.json({ ok: true, paidListingEnabled: await getMonetizationSettings(pool) });
+    `, [
+      paidListingEnabled.automobile, paidListingEnabled.vacancy, paidListingEnabled.apartment,
+      paidListingEnabled.house, paidListingEnabled.land,
+      paidListingPrices.automobile, paidListingPrices.vacancy, paidListingPrices.apartment,
+      paidListingPrices.house, paidListingPrices.land,
+      professionalSubscription.priceRub, professionalSubscription.days,
+      featureHighlight.priceRub, featureHighlight.days,
+      promotionPlans.boost.priceRub, promotionPlans.boost.days, promotionPlans.boost.enabled,
+      promotionPlans.vip.priceRub, promotionPlans.vip.days, promotionPlans.vip.enabled,
+      promotionPlans.premium.priceRub, promotionPlans.premium.days, promotionPlans.premium.enabled,
+      advertisingRates.flat, advertisingRates.cpm, advertisingRates.cpc,
+      String(req.telegramUser.id)
+    ]);
+
+    clearMonetizationSettingsCache();
+    const settings = await getMonetizationSettings(pool, { force: true });
+    await addAdminLog(
+      req.telegramUser.id,
+      "monetization_settings_update",
+      `pricing_v${settings.pricingVersion}`,
+      JSON.stringify({
+        paidListingEnabled: settings.paidListingEnabled,
+        paidListingPrices: settings.paidListingPrices,
+        professionalSubscription: settings.professionalSubscription,
+        featureHighlight: settings.featureHighlight,
+        promotionPlans: settings.promotionPlans,
+        advertisingRates: settings.advertisingRates
+      })
+    );
+    res.json({
+      ok: true,
+      paidListingEnabled: settings.paidListingEnabled,
+      paidListingPrices: settings.paidListingPrices,
+      professionalSubscription: settings.professionalSubscription,
+      featureHighlight: settings.featureHighlight,
+      promotionPlans: Object.values(settings.promotionPlans),
+      advertisingRates: settings.advertisingRates,
+      pricingVersion: settings.pricingVersion,
+      updatedAt: settings.updatedAt,
+      updatedBy: settings.updatedBy
+    });
   })
 );
 
@@ -6922,7 +7332,8 @@ app.patch(
   adminRoute(async (req, res) => {
     const productId = normalizeText(req.params.id, 64);
     const enabled = normalizeBoolean(req.body?.enabled);
-    const days = Math.max(1, Math.min(90, Number(req.body?.days) || FEATURE_HIGHLIGHT_DAYS));
+    const monetization = await getMonetizationSettings(pool);
+    const days = Math.max(1, Math.min(90, Number(req.body?.days) || monetization.featureHighlight.days));
     const color = FEATURE_COLOR;
     const featuredUntil = enabled ? new Date(Date.now() + days * 86_400_000) : null;
 
@@ -7382,16 +7793,46 @@ app.patch(
       }
       const event = eventResult.rows[0];
       if (decision === 'approve') {
+        const productResult = await client.query(
+          `SELECT id, owner_id, category, specifications, moderation_target_status
+           FROM products WHERE id = $1 FOR UPDATE`,
+          [event.product_id]
+        );
+        if (!productResult.rows.length) {
+          await client.query('ROLLBACK');
+          return res.status(404).json({ ok: false, error: "Объявление для модерации не найдено" });
+        }
+        const product = productResult.rows[0];
+        const targetStatus = ["active", "draft", "sold"].includes(product.moderation_target_status)
+          ? product.moderation_target_status
+          : "active";
+        let approvedStatus = targetStatus;
+        if (targetStatus === "active") {
+          const listingFeeRequirement = await getListingFeeRequirement(
+            client,
+            product.category,
+            product.specifications || {}
+          );
+          const listingFeePaid = listingFeeRequirement.required
+            ? await hasSuccessfulListingPayment(
+                client,
+                product.owner_id,
+                product.id,
+                listingFeeRequirement.feeType
+              )
+            : false;
+          if (listingFeeRequirement.required && !listingFeePaid) approvedStatus = "draft";
+        }
         await client.query(
           `
             UPDATE products
             SET moderation_status = 'approved', moderation_reason = '', moderation_matches = '[]'::jsonb,
                 hidden = FALSE, auto_hidden = FALSE,
-                status = CASE WHEN moderation_target_status IN ('active','draft','sold') THEN moderation_target_status ELSE 'active' END,
+                status = $2,
                 updated_at = NOW()
             WHERE id = $1;
           `,
-          [event.product_id]
+          [event.product_id, approvedStatus]
         );
       } else {
         await client.query(
