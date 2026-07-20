@@ -16,7 +16,7 @@
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
   <link rel="manifest" href="manifest.webmanifest?v=1.19.3" />
-  <link rel="stylesheet" href="style.css?v=1.21.0" />
+  <link rel="stylesheet" href="style.css?v=1.21.1" />
 </head>
 
 <body>
@@ -544,28 +544,39 @@
       ></textarea>
       <p class="field-hint">До 20 характеристик в формате «Название: значение».</p>
 
-      <div class="toggle-row">
-        <span>Получать звонки</span>
-        <input id="adAllowCalls" type="checkbox" checked />
-      </div>
+      <section class="listing-contact-card" aria-labelledby="adContactMethodsTitle">
+        <div class="listing-contact-card__heading">
+          <div>
+            <small>Связь с продавцом</small>
+            <b id="adContactMethodsTitle">Оставьте хотя бы один способ</b>
+          </div>
+          <span id="adContactMethodStatus">Телефон и сообщения</span>
+        </div>
 
-      <div id="adPhoneField" class="phone-field-group">
-        <label for="adPhone">Телефон</label>
-        <input
-          id="adPhone"
-          placeholder="+7 999 123-45-67"
-          inputmode="tel"
-          enterkeyhint="done"
-        />
-        <p class="field-hint">Если звонки выключены, номер не показывается в объявлении.</p>
-      </div>
+        <div class="listing-contact-options">
+          <label class="listing-contact-option" for="adAllowCalls">
+            <span class="listing-contact-option__icon">📞</span>
+            <span><b>Телефон</b><small>Покупатель сможет позвонить</small></span>
+            <input id="adAllowCalls" type="checkbox" checked />
+          </label>
+          <label class="listing-contact-option" for="adAllowMessages">
+            <span class="listing-contact-option__icon">💬</span>
+            <span><b>Сообщения</b><small>Telegram, а без username — SMS</small></span>
+            <input id="adAllowMessages" type="checkbox" checked />
+          </label>
+        </div>
 
-      <div class="toggle-row">
-        <span>Разрешить сообщения в Telegram</span>
-        <input id="adAllowMessages" type="checkbox" checked />
-      </div>
-      <label class="legal-consent-row"><input id="adPublicPhoneConsent" type="checkbox" /><span>Согласен на публичное отображение номера телефона в объявлении</span></label>
-      <label class="legal-consent-row"><input id="adPublicTelegramConsent" type="checkbox" /><span>Согласен на публичное отображение Telegram-контакта</span></label>
+        <p id="adContactMethodHint" class="field-hint contact-method-hint">Можно оставить только телефон или только сообщения, но нельзя выключить оба способа.</p>
+
+        <div id="adPhoneField" class="phone-field-group">
+          <label for="adPhone">Телефон</label>
+          <input id="adPhone" placeholder="+7 999 123-45-67" inputmode="tel" enterkeyhint="done" />
+          <p id="adPhoneFieldHint" class="field-hint">Номер показывается только для выбранных способов связи.</p>
+        </div>
+
+        <label id="adPublicPhoneConsentRow" class="legal-consent-row"><input id="adPublicPhoneConsent" type="checkbox" /><span>Согласен использовать номер телефона для выбранного способа связи</span></label>
+        <label id="adPublicTelegramConsentRow" class="legal-consent-row"><input id="adPublicTelegramConsent" type="checkbox" /><span>Согласен показывать Telegram-контакт для сообщений</span></label>
+      </section>
 
       <section id="listingQuality" class="quality-card" aria-live="polite">
         <div class="quality-header">
@@ -1086,6 +1097,6 @@
   </div>
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">←</div>
 
-  <script src="script.js?v=1.19.3&hotfix=1.19.6&release=1.21.0"></script>
+  <script src="script.js?v=1.19.3&hotfix=1.19.6&release=1.21.1"></script>
 </body>
 </html>

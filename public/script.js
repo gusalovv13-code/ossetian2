@@ -2188,6 +2188,13 @@ function normalizePhoneForTel(phone) {
   return "+" + digits;
 }
 
+function buildSmsLink(phone, text = "") {
+  const normalizedPhone = normalizePhoneForTel(phone);
+  if (!normalizedPhone) return "";
+  const cleanText = String(text || "").trim();
+  return cleanText ? `sms:${normalizedPhone}?body=${encodeURIComponent(cleanText)}` : `sms:${normalizedPhone}`;
+}
+
 let appToastTimer = null;
 
 function showToast(message) {
@@ -3843,14 +3850,21 @@ function renderProductDetails(product) {
   }
 
   if (messageBtn) {
-    if (isAvailable && allowMessages && sellerUsername) {
+    const smsLink = cleanPhone ? buildSmsLink(cleanPhone, `Здравствуйте! Пишу по объявлению «${product.name || ""}».`) : "";
+    if (isAvailable && allowMessages && (sellerUsername || smsLink)) {
       messageBtn.disabled = false;
-      messageBtn.textContent = "💬 Написать";
+      messageBtn.textContent = sellerUsername ? "💬 Написать" : "✉️ SMS";
       messageBtn.onclick = () => {
         trackProductEngagement(product.id, "message_click");
-        const url = `https://t.me/${sellerUsername}`;
-        if (tg?.openTelegramLink) tg.openTelegramLink(url);
-        else window.open(url, "_blank", "noopener,noreferrer");
+        if (sellerUsername) {
+          const url = `https://t.me/${sellerUsername}`;
+          if (tg?.openTelegramLink) tg.openTelegramLink(url);
+          else window.open(url, "_blank", "noopener,noreferrer");
+          return;
+        }
+        if (smsLink) {
+          window.location.href = smsLink;
+        }
       };
     } else {
       messageBtn.disabled = true;
@@ -4313,19 +4327,57 @@ function getAdFormData() {
   };
 }
 
+function ensureAtLeastOneContactMethod(preferred = "calls") {
+  const allowCallsInput = document.getElementById("adAllowCalls");
+  const allowMessagesInput = document.getElementById("adAllowMessages");
+  if (!allowCallsInput || !allowMessagesInput) return;
+  if (allowCallsInput.checked || allowMessagesInput.checked) return;
+  if (preferred === "messages") allowMessagesInput.checked = true;
+  else allowCallsInput.checked = true;
+  tg?.HapticFeedback?.notificationOccurred?.("warning");
+}
+
 function updateCallPreferencesUI() {
   const allowCallsInput = document.getElementById("adAllowCalls");
+  const allowMessagesInput = document.getElementById("adAllowMessages");
   const phoneField = document.getElementById("adPhoneField");
   const phoneInput = document.getElementById("adPhone");
-  const enabled = allowCallsInput?.checked !== false;
+  const phoneHint = document.getElementById("adPhoneFieldHint");
+  const contactHint = document.getElementById("adContactMethodHint");
+  const status = document.getElementById("adContactMethodStatus");
+  const phoneConsentRow = document.getElementById("adPublicPhoneConsentRow");
+  const telegramConsentRow = document.getElementById("adPublicTelegramConsentRow");
+  const phoneConsent = document.getElementById("adPublicPhoneConsent");
+  const telegramConsent = document.getElementById("adPublicTelegramConsent");
+  if (!allowCallsInput || !allowMessagesInput) return;
 
-  if (phoneField) phoneField.hidden = !enabled;
-  if (phoneInput) {
-    phoneInput.disabled = !enabled;
-    if (enabled && !phoneInput.value.trim() && state.telegramUser?.phone) {
-      phoneInput.value = state.telegramUser.phone;
-    }
+  const callsEnabled = allowCallsInput.checked;
+  const messagesEnabled = allowMessagesInput.checked;
+  const hasTelegramUsername = Boolean(String(state.telegramUser?.username || "").replace(/^@/, "").trim());
+  const smsFallback = messagesEnabled && !hasTelegramUsername;
+  const phoneNeeded = callsEnabled || smsFallback;
+
+  if (status) {
+    status.textContent = callsEnabled && messagesEnabled
+      ? "Телефон и сообщения"
+      : callsEnabled ? "Только телефон" : hasTelegramUsername ? "Только Telegram" : "Только SMS";
   }
+  if (contactHint) contactHint.textContent = "Можно оставить только телефон или только сообщения, но нельзя выключить оба способа.";
+  if (phoneField) phoneField.hidden = !phoneNeeded;
+  if (phoneInput) {
+    phoneInput.disabled = !phoneNeeded;
+    if (phoneNeeded && !phoneInput.value.trim() && state.telegramUser?.phone) phoneInput.value = state.telegramUser.phone;
+  }
+  if (phoneHint) {
+    phoneHint.textContent = callsEnabled && smsFallback
+      ? "Номер будет доступен для звонков и SMS."
+      : callsEnabled ? "Номер будет показан покупателю для звонка."
+      : "Telegram username не найден — номер будет использоваться только для SMS.";
+  }
+  if (phoneConsentRow) phoneConsentRow.hidden = !phoneNeeded;
+  if (telegramConsentRow) telegramConsentRow.hidden = !(messagesEnabled && hasTelegramUsername);
+  if (!phoneNeeded && phoneConsent) phoneConsent.checked = false;
+  if (!(messagesEnabled && hasTelegramUsername) && telegramConsent) telegramConsent.checked = false;
 }
 
 function updateListingQuality() {
@@ -4836,6 +4888,31 @@ async function publishAd(status = "active") {
       return;
     }
 
+    if (!ad.allowCalls && !ad.allowMessages) {
+      alert("Оставьте хотя бы один способ связи: телефон или сообщения");
+      showPage("create2");
+      return;
+    }
+    const hasTelegramUsername = Boolean(String(state.telegramUser?.username || "").replace(/^@/, "").trim());
+    const phoneNeeded = ad.allowCalls || (ad.allowMessages && !hasTelegramUsername);
+    if (phoneNeeded && !normalizePhoneForTel(ad.phone)) {
+      alert(ad.allowMessages && !hasTelegramUsername && !ad.allowCalls
+        ? "Укажите телефон для SMS или добавьте username в Telegram"
+        : "Укажите телефон для звонков");
+      showPage("create2");
+      return;
+    }
+    if (phoneNeeded && !ad.publicPhoneConsent) {
+      alert("Подтвердите согласие на использование номера для связи");
+      showPage("create2");
+      return;
+    }
+    if (ad.allowMessages && hasTelegramUsername && !ad.publicTelegramConsent) {
+      alert("Подтвердите согласие на публикацию Telegram-контакта");
+      showPage("create2");
+      return;
+    }
+
     const images = draftAd.images.slice(0, MAX_PHOTOS);
     const mainImage = images[0] || "";
     if (mainImage && (draftAd.thumbnailSource !== mainImage || !draftAd.thumbnail)) {
@@ -4868,7 +4945,7 @@ async function publishAd(status = "active") {
         negotiable: ad.negotiable,
         delivery: ad.delivery,
         specifications: ad.specifications,
-        phone: ad.phone,
+        phone: phoneNeeded ? ad.phone : "",
         allowCalls: ad.allowCalls,
         allowMessages: ad.allowMessages,
         publicPhoneConsent: ad.publicPhoneConsent,
@@ -5007,6 +5084,8 @@ function clearCreateForm() {
   const phone = document.getElementById("adPhone");
   const allowCalls = document.getElementById("adAllowCalls");
   const allowMessages = document.getElementById("adAllowMessages");
+  const publicPhoneConsent = document.getElementById("adPublicPhoneConsent");
+  const publicTelegramConsent = document.getElementById("adPublicTelegramConsent");
   const preview = document.getElementById("previewCard");
   const photoInput = document.getElementById("photoInput");
   const cameraInput = document.getElementById("cameraInput");
@@ -5039,6 +5118,8 @@ function clearCreateForm() {
   if (phone) phone.value = state.telegramUser?.phone || "";
   if (allowCalls) allowCalls.checked = true;
   if (allowMessages) allowMessages.checked = true;
+  if (publicPhoneConsent) publicPhoneConsent.checked = false;
+  if (publicTelegramConsent) publicTelegramConsent.checked = false;
   updateCallPreferencesUI();
   if (preview) preview.innerHTML = "";
   if (photoInput) photoInput.value = "";
@@ -5106,6 +5187,8 @@ async function editAd(id) {
   const phone = document.getElementById("adPhone");
   const allowCalls = document.getElementById("adAllowCalls");
   const allowMessages = document.getElementById("adAllowMessages");
+  const publicPhoneConsent = document.getElementById("adPublicPhoneConsent");
+  const publicTelegramConsent = document.getElementById("adPublicTelegramConsent");
 
   if (title) title.value = product.name || "";
   if (price) price.value = product.priceDropped && product.previousPrice ? product.previousPrice : (product.price || "");
@@ -5139,6 +5222,8 @@ async function editAd(id) {
   if (phone) phone.value = product.phone || "";
   if (allowCalls) allowCalls.checked = product.allowCalls !== false;
   if (allowMessages) allowMessages.checked = product.allowMessages !== false;
+  if (publicPhoneConsent) publicPhoneConsent.checked = Boolean(product.phone);
+  if (publicTelegramConsent) publicTelegramConsent.checked = product.allowMessages !== false;
   updateCallPreferencesUI();
 
   draftAd.images = getProductImages(product).filter(Boolean).slice(0, MAX_PHOTOS);
@@ -5470,13 +5555,14 @@ function renderSearchSuggestions(items = [], query = "") {
   const root = document.getElementById("searchSuggestions");
   const input = document.getElementById("searchInput");
   if (!root || !input || document.activeElement !== input) return;
-  const normalizedItems = items.length ? items : (!query ? getRecentSearches().map(value => ({ type: "query", title: value, subtitle: "Недавний поиск", query: value })) : []);
+  const normalizedItems = items.length
+    ? items
+    : (!query ? getRecentSearches().slice(0, 4).map(value => ({ type: "query", title: value, subtitle: "Недавний поиск", query: value })) : []);
   if (!normalizedItems.length) { closeSearchSuggestions(); return; }
-  root.innerHTML = normalizedItems.slice(0, 10).map((item, index) => {
-    const icon = item.type === "product" ? "📦" : item.type === "category" ? "▦" : "⌕";
-    const subtitle = item.subtitle || (item.type === "category" ? "Категория" : item.type === "product" ? "Объявление" : "Поиск");
-    const image = item.image ? `<img src="${escapeHTML(safeImageUrl(item.image))}" width="44" height="44" alt="" loading="lazy">` : `<span class="search-suggestion-icon">${icon}</span>`;
-    return `<button id="searchSuggestion${index}" class="search-suggestion-item" type="button" role="option" aria-selected="false" data-index="${index}" data-suggestion="${escapeHTML(encodeURIComponent(JSON.stringify(item)))}">${image}<span><b>${escapeHTML(item.title || item.query || "")}</b><small>${escapeHTML(subtitle)}</small></span><em>›</em></button>`;
+  root.innerHTML = normalizedItems.filter(item => item?.type !== "product").slice(0, 5).map((item, index) => {
+    const icon = item.type === "category" ? "▦" : "⌕";
+    const subtitle = item.subtitle || (item.type === "category" ? "Подкатегория" : "Поиск");
+    return `<button id="searchSuggestion${index}" class="search-suggestion-item search-suggestion-item--${escapeHTML(item.type || "query")}" type="button" role="option" aria-selected="false" data-index="${index}" data-suggestion="${escapeHTML(encodeURIComponent(JSON.stringify(item)))}"><span class="search-suggestion-icon" aria-hidden="true">${icon}</span><span class="search-suggestion-copy"><b>${escapeHTML(item.title || item.query || "")}</b><small>${escapeHTML(subtitle)}</small></span><em>›</em></button>`;
   }).join("");
   root.hidden = false;
   input.setAttribute("aria-expanded", "true");
@@ -5498,7 +5584,7 @@ async function loadSearchSuggestions(query, { immediate = false } = {}) {
     searchSuggestionAbortController?.abort();
     searchSuggestionAbortController = new AbortController();
     try {
-      const data = await apiRequest(`/api/search/suggestions?q=${encodeURIComponent(clean)}&limit=10`, { signal: searchSuggestionAbortController.signal, timeoutMs: 6000 });
+      const data = await apiRequest(`/api/search/suggestions?q=${encodeURIComponent(clean)}&limit=5`, { signal: searchSuggestionAbortController.signal, timeoutMs: 6000 });
       const items = Array.isArray(data.suggestions) ? data.suggestions : [];
       searchSuggestionCache.set(key, { savedAt: Date.now(), items });
       renderSearchSuggestions(items, clean);
@@ -5524,10 +5610,6 @@ function activateSearchSuggestion(index) {
 function selectSearchSuggestion(item) {
   const input = document.getElementById("searchInput");
   closeSearchSuggestions();
-  if (item.type === "product" && item.productId) {
-    openProduct(item.productId);
-    return;
-  }
   const query = String(item.query || item.title || "").trim();
   if (item.type === "category" && item.category) {
     state.category = item.category;
@@ -5848,6 +5930,13 @@ function initEvents() {
   document.getElementById("adLocation")?.addEventListener("change", () => refreshAdDistrictOptions(""));
   document.getElementById("adDistrict")?.addEventListener("change", () => updateCustomSelectInput("adDistrict", "adDistrictCustom"));
   document.getElementById("adAllowCalls")?.addEventListener("change", () => {
+    ensureAtLeastOneContactMethod("messages");
+    updateCallPreferencesUI();
+    updatePreviewCard();
+    updateCreateButtons();
+  });
+  document.getElementById("adAllowMessages")?.addEventListener("change", () => {
+    ensureAtLeastOneContactMethod("calls");
     updateCallPreferencesUI();
     updatePreviewCard();
     updateCreateButtons();

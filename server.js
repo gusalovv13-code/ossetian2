@@ -16,7 +16,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.21.0";
+const APP_VERSION = "1.21.1";
 const LEGAL_DOCUMENT_VERSION = "1.16.0";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -231,6 +231,9 @@ const OPENAI_API_KEY = String(process.env.OPENAI_API_KEY || "").trim();
 const OPENAI_MODEL = String(process.env.OPENAI_MODEL || "gpt-5.6-terra").trim();
 const AI_LISTING_MODEL = String(process.env.AI_LISTING_MODEL || OPENAI_MODEL || "gpt-5.6-terra").trim();
 const AI_MODERATION_MODEL = String(process.env.AI_MODERATION_MODEL || "gpt-5.6-luna").trim();
+const IMAGE_MODERATION_MODEL = String(process.env.IMAGE_MODERATION_MODEL || "omni-moderation-latest").trim();
+const IMAGE_MODERATION_FAIL_CLOSED = String(process.env.IMAGE_MODERATION_FAIL_CLOSED || "true").toLowerCase() !== "false";
+const IMAGE_MODERATION_CACHE_VERSION = "image-safety-v2";
 const AI_MODERATION_ENABLED = String(process.env.AI_MODERATION_ENABLED || "true").toLowerCase() !== "false";
 const AI_LISTING_ASSISTANT_ENABLED = String(process.env.AI_LISTING_ASSISTANT_ENABLED || "true").toLowerCase() !== "false";
 const AI_TIMEOUT_MS = Math.max(5_000, Math.min(60_000, Number(process.env.AI_TIMEOUT_MS) || 20_000));
@@ -2766,75 +2769,114 @@ async function buildModerationImageData(value) {
   }
 }
 
+async function callOpenAIImageModeration(dataUrl) {
+  if (!OPENAI_API_KEY) return { ok: false, unavailable: true, error: "OPENAI_API_KEY не настроен" };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+  timeout.unref?.();
+  try {
+    const response = await fetch("https://api.openai.com/v1/moderations", {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+        "User-Agent": `OssetianMarket/${APP_VERSION}`
+      },
+      body: JSON.stringify({
+        model: IMAGE_MODERATION_MODEL,
+        input: [{ type: "image_url", image_url: { url: dataUrl } }]
+      })
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) return { ok: false, error: payload?.error?.message || `OpenAI moderation HTTP ${response.status}` };
+    const moderation = payload?.results?.[0];
+    if (!moderation || typeof moderation !== "object") return { ok: false, error: "Сервис модерации вернул пустой результат" };
+    return { ok: true, data: moderation, responseId: payload?.id || "", model: payload?.model || IMAGE_MODERATION_MODEL };
+  } catch (error) {
+    return { ok: false, error: error?.name === "AbortError" ? "Модерация фото не ответила вовремя" : String(error?.message || error) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function normalizeOpenAIImageModeration(result = {}) {
+  const categories = result.categories && typeof result.categories === "object" ? result.categories : {};
+  const scores = result.category_scores && typeof result.category_scores === "object" ? result.category_scores : {};
+  const score = key => Math.max(0, Math.min(1, Number(scores[key]) || 0));
+  const flagged = key => categories[key] === true;
+  const blockReasons = [];
+  const reviewReasons = [];
+
+  if (flagged("sexual/minors") || score("sexual/minors") >= 0.01) blockReasons.push("сексуальный контент с несовершеннолетними");
+  if (flagged("sexual") || score("sexual") >= 0.72) blockReasons.push("обнажённый или откровенно сексуальный контент");
+  else if (score("sexual") >= 0.20) reviewReasons.push("возможный откровенный контент");
+  if (flagged("violence/graphic") || score("violence/graphic") >= 0.82) blockReasons.push("шокирующее насилие");
+  else if (flagged("violence") || score("violence") >= 0.72) reviewReasons.push("изображение насилия");
+  if (flagged("self-harm") || flagged("self-harm/intent") || score("self-harm") >= 0.72) reviewReasons.push("контент, связанный с причинением вреда себе");
+
+  const riskScore = Math.round(Math.max(
+    score("sexual"), score("sexual/minors"), score("violence"),
+    score("violence/graphic"), score("self-harm"), score("self-harm/intent")
+  ) * 100);
+  const action = blockReasons.length ? "block" : reviewReasons.length ? "review" : "allow";
+  const labels = [...blockReasons, ...reviewReasons];
+  return {
+    action,
+    score: action === "block" ? Math.max(90, riskScore) : action === "review" ? Math.max(60, riskScore) : riskScore,
+    reason: labels.length ? `Фото: ${labels.join(", ")}` : "",
+    categories: labels,
+    rawCategories: categories,
+    rawScores: scores
+  };
+}
+
 async function evaluateSingleImageSafety(value, userId = "", database = pool) {
   const prepared = await buildModerationImageData(value);
-  if (!prepared) return { available: false, action: "allow", score: 0, reason: "", categories: [], likelyCategory: "" };
+  if (!prepared) {
+    return IMAGE_MODERATION_FAIL_CLOSED && AI_MODERATION_ENABLED
+      ? { available: false, action: "review", score: 100, reason: "Фото не удалось подготовить для проверки. Требуется ручная модерация.", categories: ["image-processing-failed"], likelyCategory: "" }
+      : { available: false, action: "allow", score: 0, reason: "", categories: [], likelyCategory: "" };
+  }
+
   try {
-    const cached = await database.query(`SELECT result FROM image_moderation_cache WHERE image_hash = $1 LIMIT 1`, [prepared.imageHash]);
-    if (cached.rows[0]?.result && typeof cached.rows[0].result === "object") {
-      return { ...cached.rows[0].result, available: true, cached: true, imageHash: prepared.imageHash };
+    const cached = await database.query(`SELECT result, model FROM image_moderation_cache WHERE image_hash = $1 LIMIT 1`, [prepared.imageHash]);
+    const cachedResult = cached.rows[0]?.result;
+    if (cachedResult && typeof cachedResult === "object" && cachedResult.engineVersion === IMAGE_MODERATION_CACHE_VERSION && cached.rows[0]?.model === IMAGE_MODERATION_MODEL) {
+      return { ...cachedResult, available: true, cached: true, imageHash: prepared.imageHash };
     }
   } catch (error) {
     console.warn("Image moderation cache read failed:", error?.message || error);
   }
-  if (!AI_MODERATION_ENABLED || !OPENAI_API_KEY) {
-    return { available: false, action: "allow", score: 0, reason: "", categories: [], likelyCategory: "", imageHash: prepared.imageHash };
+
+  if (!AI_MODERATION_ENABLED) return { available: false, action: "allow", score: 0, reason: "", categories: [], likelyCategory: "", imageHash: prepared.imageHash };
+  if (!OPENAI_API_KEY) {
+    return IMAGE_MODERATION_FAIL_CLOSED
+      ? { available: false, action: "review", score: 100, reason: "Фото не проверено: OPENAI_API_KEY не настроен. Требуется ручная модерация.", categories: ["moderation-unavailable"], likelyCategory: "", imageHash: prepared.imageHash }
+      : { available: false, action: "allow", score: 0, reason: "", categories: [], likelyCategory: "", imageHash: prepared.imageHash };
   }
-  const schema = {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      action: { type: "string", enum: ["allow", "review", "block"] },
-      riskScore: { type: "integer" },
-      reason: { type: "string" },
-      categories: { type: "array", items: { type: "string" } },
-      likelyCategory: { type: "string", enum: [...Array.from(PRODUCT_CATEGORIES), "unknown"] },
-      categoryConfidence: { type: "integer" }
-    },
-    required: ["action", "riskScore", "reason", "categories", "likelyCategory", "categoryConfidence"]
-  };
-  const result = await callOpenAIStructured({
-    schemaName: "marketplace_image_safety",
-    schema,
-    maxOutputTokens: 350,
-    model: AI_MODERATION_MODEL,
-    kind: "moderation",
-    userId,
-    input: [{
-      role: "user",
-      content: [
-        { type: "input_text", text: "Проверь фотографию объявления российского маркетплейса. block: явная нагота/порнография, сексуальный контент с несовершеннолетними, оружие или наркотики крупным планом, шокирующее насилие. review: сомнительный сексуальный или опасный контент. Обычные люди в одежде, купальники без сексуального контекста, медицинские и бытовые товары разрешай. Также независимо от риска определи наиболее вероятную категорию товара и categoryConfidence от 0 до 100." },
-        { type: "input_image", image_url: prepared.dataUrl }
-      ]
-    }]
-  });
-  if (!result.ok) return {
-    available: true,
-    action: "review",
-    score: 60,
-    reason: "Фото не удалось автоматически проверить. Требуется ручная модерация.",
-    categories: ["moderation-unavailable"],
-    likelyCategory: "",
-    error: result.error,
-    imageHash: prepared.imageHash
-  };
-  const data = result.data || {};
+
+  const result = await callOpenAIImageModeration(prepared.dataUrl);
+  if (!result.ok) {
+    return IMAGE_MODERATION_FAIL_CLOSED
+      ? { available: false, action: "review", score: 100, reason: `Фото не удалось проверить автоматически: ${normalizeText(result.error, 300) || "ошибка сервиса"}. Требуется ручная модерация.`, categories: ["moderation-unavailable"], likelyCategory: "", error: result.error, imageHash: prepared.imageHash }
+      : { available: false, action: "allow", score: 0, reason: "", categories: [], likelyCategory: "", error: result.error, imageHash: prepared.imageHash };
+  }
+
   const normalized = {
-    action: ["allow", "review", "block"].includes(data.action) ? data.action : "allow",
-    score: Math.max(0, Math.min(100, Number(data.riskScore) || 0)),
-    reason: normalizeText(data.reason, 600),
-    categories: Array.isArray(data.categories) ? data.categories.slice(0, 8).map(item => normalizeText(item, 80)).filter(Boolean) : [],
-    likelyCategory: PRODUCT_CATEGORIES.has(data.likelyCategory) ? data.likelyCategory : "",
-    categoryConfidence: Math.max(0, Math.min(100, Number(data.categoryConfidence) || 0)),
-    model: AI_MODERATION_MODEL,
-    responseId: result.responseId || ""
+    ...normalizeOpenAIImageModeration(result.data),
+    likelyCategory: "",
+    categoryConfidence: 0,
+    model: result.model || IMAGE_MODERATION_MODEL,
+    responseId: result.responseId || "",
+    engineVersion: IMAGE_MODERATION_CACHE_VERSION
   };
   try {
     await database.query(`
       INSERT INTO image_moderation_cache (image_hash, result, model, updated_at)
       VALUES ($1, $2::jsonb, $3, NOW())
       ON CONFLICT (image_hash) DO UPDATE SET result = EXCLUDED.result, model = EXCLUDED.model, updated_at = NOW()
-    `, [prepared.imageHash, JSON.stringify(normalized), AI_MODERATION_MODEL]);
+    `, [prepared.imageHash, JSON.stringify(normalized), IMAGE_MODERATION_MODEL]);
   } catch (error) {
     console.warn("Image moderation cache write failed:", error?.message || error);
   }
@@ -2842,35 +2884,31 @@ async function evaluateSingleImageSafety(value, userId = "", database = pool) {
 }
 
 async function evaluateProductImages(product, settings = {}, database = pool) {
-  const images = Array.isArray(product.images) ? product.images.filter(Boolean).slice(0, 3) : [];
+  const images = Array.isArray(product.images) ? product.images.filter(Boolean).slice(0, 5) : [];
   if (!images.length) return { available: false, blocked: false, review: false, score: 0, reason: "", matches: [], results: [] };
-  const results = [];
-  for (const image of images) {
-    results.push(await evaluateSingleImageSafety(image, product.ownerId || product.owner_id || "", database));
-  }
-  const blockThreshold = Math.max(70, Math.min(100, Number(settings.ai_block_threshold) || 90));
-  const reviewThreshold = Math.max(20, Math.min(blockThreshold - 1, Number(settings.ai_review_threshold) || 60));
-  const blockedResult = results.find(item => item.action === "block" && item.score >= blockThreshold);
-  const reviewResult = results.find(item => item.action === "review" && item.score >= reviewThreshold);
+  const results = await Promise.all(images.map(image =>
+    evaluateSingleImageSafety(image, product.ownerId || product.owner_id || "", database)
+  ));
+  const reviewThreshold = Math.max(20, Math.min(99, Number(settings.ai_review_threshold) || 60));
+  const blockedResult = results.find(item => item.action === "block" || item.blocked === true);
+  const reviewResult = results.find(item => item.action === "review" || item.review === true || Number(item.score) >= reviewThreshold);
   const safetySelected = blockedResult || reviewResult || [...results].sort((a, b) => (b.score || 0) - (a.score || 0))[0] || {};
-  const categorySelected = [...results]
-    .filter(item => item.likelyCategory)
-    .sort((a, b) => (b.categoryConfidence || 0) - (a.categoryConfidence || 0))[0] || {};
   return {
     available: results.some(item => item.available),
     blocked: Boolean(blockedResult),
     review: !blockedResult && Boolean(reviewResult),
     score: Number(safetySelected.score) || 0,
     reason: safetySelected.reason || "",
-    likelyCategory: categorySelected.likelyCategory || "",
-    categoryConfidence: Number(categorySelected.categoryConfidence) || 0,
+    likelyCategory: "",
+    categoryConfidence: 0,
     matches: (safetySelected.categories || []).map(label => ({ type: "image-ai", label: `Фото: ${label}`, score: Number(safetySelected.score) || 0 })),
     results
   };
 }
 
 async function evaluateAIModeration(product, settings = {}) {
-  if (!AI_MODERATION_ENABLED || settings.ai_enabled === false || !OPENAI_API_KEY) return { available: false, blocked: false, review: false, score: 0, reason: "", matches: [] };
+  if (!AI_MODERATION_ENABLED || !OPENAI_API_KEY) return { available: false, blocked: false, review: false, score: 0, reason: "", matches: [] };
+  if (settings.ai_enabled === false) return { available: false, blocked: false, review: false, score: 0, reason: "", matches: [] };
   const content = buildModerationContent(product).slice(0, 7000);
   if (!content) return { available: true, blocked: false, review: false, score: 0, reason: "", matches: [] };
   const schema = {
@@ -5578,15 +5616,20 @@ app.get("/api/search/suggestions", searchRateLimiter, async (req, res) => {
   try {
     const query = normalizeText(req.query.q, 80);
     const normalized = query.toLowerCase();
-    const limit = Math.max(3, Math.min(12, Number(req.query.limit) || 10));
+    const limit = Math.max(3, Math.min(5, Number(req.query.limit) || 5));
     const suggestions = [];
     const seen = new Set();
     const add = item => {
-      const key = `${item.type}:${String(item.title || "").toLowerCase()}:${item.category || ""}:${item.subcategoryId || ""}`;
-      if (!item.title || seen.has(key) || suggestions.length >= limit) return;
+      const key = `${item.type}:${String(item.title || item.query || "").toLowerCase()}:${item.category || ""}:${item.subcategoryId || ""}`;
+      if (!item.title && !item.query) return;
+      if (seen.has(key) || suggestions.length >= limit) return;
       seen.add(key);
       suggestions.push(item);
     };
+
+    if (query.length >= 2) {
+      add({ type: "query", title: query, subtitle: "Искать во всех объявлениях", query });
+    }
 
     for (const [category, taxonomy] of Object.entries(MARKET_TAXONOMY)) {
       for (const subcategory of taxonomy.subcategories || []) {
@@ -5597,35 +5640,7 @@ app.get("/api/search/suggestions", searchRateLimiter, async (req, res) => {
       }
     }
 
-    if (query.length >= 2 && suggestions.length < limit) {
-      const result = await pool.query(`
-        SELECT p.id, p.name, p.price, p.category, p.subcategory_id, p.updated_at,
-               CASE WHEN NULLIF(p.thumbnail, '') IS NOT NULL OR NULLIF(p.image, '') IS NOT NULL OR EXISTS (SELECT 1 FROM product_images pi WHERE pi.product_id=p.id) THEN TRUE ELSE FALSE END AS has_image
-        FROM products p
-        WHERE COALESCE(p.status, 'active') = 'active'
-          AND COALESCE(p.hidden, FALSE) = FALSE
-          AND COALESCE(p.moderation_status, 'approved') = 'approved'
-          AND (p.name ILIKE $1 OR p.description ILIKE $1 OR p.category ILIKE $1 OR p.subcategory_id ILIKE $1)
-        ORDER BY COALESCE(p.featured_paid, FALSE) DESC, p.views DESC, p.updated_at DESC
-        LIMIT $2
-      `, [`%${query}%`, limit]);
-      for (const row of result.rows) {
-        add({
-          type: "product",
-          title: row.name,
-          subtitle: [row.category, row.price].filter(Boolean).join(" · "),
-          productId: row.id,
-          category: row.category,
-          subcategoryId: row.subcategory_id || "",
-          image: row.has_image ? buildProductMediaUrl(row.id, "thumbnail", row.updated_at) : ""
-        });
-      }
-    }
-
-    if (query.length >= 2) {
-      add({ type: "query", title: query, subtitle: "Искать во всех объявлениях", query });
-    }
-    res.set("Cache-Control", "public, max-age=30, stale-while-revalidate=120");
+    res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=180");
     res.json({ ok: true, query, suggestions: suggestions.slice(0, limit) });
   } catch (error) {
     console.error("Search suggestions error:", error);
@@ -6034,10 +6049,20 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
     if (!cleanName || !cleanPrice || !cleanCategory || !cleanDescription) {
       return res.status(400).json({ ok: false, error: "Проверьте название, цену, категорию и описание" });
     }
-    if (allowCalls !== false && cleanPhone && publicPhoneConsent !== true) {
-      return res.status(400).json({ ok: false, code: "PUBLIC_PHONE_CONSENT_REQUIRED", error: "Подтвердите согласие на публикацию номера телефона" });
+    const callsEnabled = allowCalls !== false;
+    const messagesEnabled = allowMessages !== false;
+    const telegramContactAvailable = Boolean(normalizeText(req.telegramUser?.username, 64));
+    const smsFallbackRequired = messagesEnabled && !telegramContactAvailable;
+    if (!callsEnabled && !messagesEnabled) {
+      return res.status(400).json({ ok: false, code: "CONTACT_METHOD_REQUIRED", error: "Оставьте хотя бы один способ связи: телефон или сообщения" });
     }
-    if (allowMessages !== false && publicTelegramConsent !== true) {
+    if ((callsEnabled || smsFallbackRequired) && !cleanPhone) {
+      return res.status(400).json({ ok: false, code: "PHONE_REQUIRED", error: smsFallbackRequired ? "Укажите телефон для SMS или добавьте username в Telegram" : "Укажите телефон для звонков" });
+    }
+    if ((callsEnabled || smsFallbackRequired) && publicPhoneConsent !== true) {
+      return res.status(400).json({ ok: false, code: "PUBLIC_PHONE_CONSENT_REQUIRED", error: "Подтвердите согласие на использование номера для связи" });
+    }
+    if (messagesEnabled && telegramContactAvailable && publicTelegramConsent !== true) {
       return res.status(400).json({ ok: false, code: "PUBLIC_TELEGRAM_CONSENT_REQUIRED", error: "Подтвердите согласие на публикацию Telegram-контакта" });
     }
 
@@ -6131,7 +6156,7 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
         id, req.telegramUser.id, ownerName || "Пользователь Telegram", req.telegramUser.username || "",
         cleanName, cleanPrice, cleanPriceAmount, cleanCategory, cleanSubcategoryId, JSON.stringify(cleanAttributes),
         CATEGORY_TAXONOMY_VERSION, cleanDescription, cleanImages[0] || "", JSON.stringify(cleanImages),
-        cleanLocation, cleanPhone, allowCalls !== false, allowMessages !== false, cleanCondition,
+        cleanLocation, cleanPhone, callsEnabled, messagesEnabled, cleanCondition,
         normalizeBoolean(negotiable), normalizeBoolean(delivery), cleanDistrict, JSON.stringify(cleanSpecifications),
         finalStatus, moderation.blocked, moderation.blocked, moderation.blocked ? "blocked" : "approved",
         moderation.reason, JSON.stringify(moderation.matches), requestedStatus === "draft" ? "draft" : "active",
@@ -6210,7 +6235,7 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
       name, price, category, desc, image, thumbnail, images, location, phone,
       allowCalls, allowMessages, condition, negotiable, delivery, district,
       specifications, status, discountEnabled, originalPrice,
-      subcategoryId, attributes
+      publicPhoneConsent, publicTelegramConsent, subcategoryId, attributes
     } = req.body;
 
     if (!productId) return res.status(400).json({ ok: false, error: "Некорректный ID товара" });
@@ -6245,6 +6270,22 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     if (!cleanName || !cleanPrice || !cleanDescription) {
       return res.status(400).json({ ok: false, error: "Проверьте название, цену и описание" });
     }
+    const callsEnabled = allowCalls !== false;
+    const messagesEnabled = allowMessages !== false;
+    const telegramContactAvailable = Boolean(normalizeText(req.telegramUser?.username, 64));
+    const smsFallbackRequired = messagesEnabled && !telegramContactAvailable;
+    if (!callsEnabled && !messagesEnabled) {
+      return res.status(400).json({ ok: false, code: "CONTACT_METHOD_REQUIRED", error: "Оставьте хотя бы один способ связи: телефон или сообщения" });
+    }
+    if ((callsEnabled || smsFallbackRequired) && !cleanPhone) {
+      return res.status(400).json({ ok: false, code: "PHONE_REQUIRED", error: smsFallbackRequired ? "Укажите телефон для SMS или добавьте username в Telegram" : "Укажите телефон для звонков" });
+    }
+    if ((callsEnabled || smsFallbackRequired) && publicPhoneConsent !== true) {
+      return res.status(400).json({ ok: false, code: "PUBLIC_PHONE_CONSENT_REQUIRED", error: "Подтвердите согласие на использование номера для связи" });
+    }
+    if (messagesEnabled && telegramContactAvailable && publicTelegramConsent !== true) {
+      return res.status(400).json({ ok: false, code: "PUBLIC_TELEGRAM_CONSENT_REQUIRED", error: "Подтвердите согласие на публикацию Telegram-контакта" });
+    }
     if (requestedDiscountEnabled && (!cleanOriginalPrice || cleanOriginalPriceAmount <= cleanPriceAmount)) {
       return res.status(400).json({
         ok: false,
@@ -6258,6 +6299,7 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     const requestedThumbnail = await optimizeStoredProductImage(thumbnail || cleanImages[0] || "", { thumbnail: true });
 
     await client.query("BEGIN");
+    await recordListingLegalAcceptances(client, req.telegramUser.id, { publicPhoneConsent, publicTelegramConsent });
     const existingResult = await client.query(
       `SELECT * FROM products WHERE id = $1 AND owner_id = $2 AND COALESCE(status, 'active') <> 'deleted' FOR UPDATE`,
       [productId, req.telegramUser.id]
@@ -6409,7 +6451,7 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
       [
         productId, req.telegramUser.id, cleanName, cleanPrice, cleanPriceAmount,
         cleanCategory, cleanDescription, cleanImages[0] || "", JSON.stringify(cleanImages),
-        cleanLocation, cleanPhone, allowCalls !== false, allowMessages !== false, cleanCondition,
+        cleanLocation, cleanPhone, callsEnabled, messagesEnabled, cleanCondition,
         normalizeBoolean(negotiable), normalizeBoolean(delivery), cleanDistrict,
         JSON.stringify(cleanSpecifications), finalStatus,
         finalPreviousPrice, finalPreviousPriceAmount, finalPriceDroppedAt,
