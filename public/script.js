@@ -4474,6 +4474,8 @@ async function publishAd(status = "active") {
         phone: ad.phone,
         allowCalls: ad.allowCalls,
         allowMessages: ad.allowMessages,
+        publicPhoneConsent: ad.publicPhoneConsent,
+        publicTelegramConsent: ad.publicTelegramConsent,
         status: targetStatus
       })
     });

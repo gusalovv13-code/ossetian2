@@ -8346,3 +8346,58 @@ body { overflow-x: hidden; }
     height: 112px;
   }
 }
+
+/* ===== v1.19.5: larger catalog media + consent hotfix companion ===== */
+/*
+ * Make product photography the visual focus of the two-column catalog while
+ * retaining a uniform tile geometry. The extra card height is allocated to
+ * the image, not as blank space between the title and price.
+ */
+#productList.product-list,
+#favorites .product-list {
+  grid-auto-rows: 285px;
+}
+
+#productList.product-list > .product-card,
+#productList > .product-card.is-featured:not(.owner-product-card),
+#favorites .product-list > .product-card,
+#productList.product-list > .advertising-feed {
+  height: 285px;
+  min-height: 285px;
+  max-height: 285px;
+}
+
+#productList > .product-card:not(.owner-product-card) > img,
+#productList > .product-card.is-featured:not(.owner-product-card) > img,
+#productList > .product-card.is-vacancy-card:not(.owner-product-card) > img,
+#favorites .product-list > .product-card > img {
+  height: 150px;
+  min-height: 150px;
+  object-fit: cover;
+  object-position: center;
+  margin-bottom: 5px;
+}
+
+@media (max-width: 360px) {
+  #productList.product-list,
+  #favorites .product-list {
+    grid-auto-rows: 275px;
+  }
+
+  #productList.product-list > .product-card,
+  #productList > .product-card.is-featured:not(.owner-product-card),
+  #productList.product-list > .advertising-feed,
+  #favorites .product-list > .product-card {
+    height: 275px;
+    min-height: 275px;
+    max-height: 275px;
+  }
+
+  #productList > .product-card:not(.owner-product-card) > img,
+  #productList > .product-card.is-featured:not(.owner-product-card) > img,
+  #productList > .product-card.is-vacancy-card:not(.owner-product-card) > img,
+  #favorites .product-list > .product-card > img {
+    height: 142px;
+    min-height: 142px;
+  }
+}
