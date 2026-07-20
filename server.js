@@ -16,7 +16,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = "1.20.0";
+const APP_VERSION = "1.21.0";
 const LEGAL_DOCUMENT_VERSION = "1.16.0";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -86,6 +86,125 @@ const PRODUCT_CATEGORIES = new Set([
   "Недвижимость",
   "Вакансии"
 ]);
+const CATEGORY_TAXONOMY_VERSION = 2;
+const JOB_TAXONOMY_FIELDS = Object.freeze([
+  { key: "employmentType", label: "Тип занятости", type: "select", options: ["Полная занятость", "Частичная занятость", "Проектная работа", "Стажировка", "Временная работа"], required: true },
+  { key: "schedule", label: "График работы", type: "select", options: ["Полный день", "Сменный график", "Гибкий график", "Удалённая работа", "Вахтовый метод"], required: true },
+  { key: "experience", label: "Опыт работы", type: "select", options: ["Не требуется", "До 1 года", "1–3 года", "3–6 лет", "Более 6 лет"] }
+]);
+const MARKET_TAXONOMY = Object.freeze({
+  "Электроника": {
+    subcategories: [
+      { id: "smartphones", name: "Смартфоны и телефоны", aliases: ["Смартфон", "Кнопочный телефон"], fields: [
+        { key: "brand", label: "Бренд", type: "text" }, { key: "model", label: "Модель", type: "text" },
+        { key: "storageGb", label: "Память, ГБ", type: "number", min: 1, max: 4096 }
+      ] },
+      { id: "computers", name: "Ноутбуки и компьютеры", aliases: ["Ноутбук", "Компьютер"], fields: [
+        { key: "brand", label: "Бренд", type: "text" }, { key: "model", label: "Модель", type: "text" }
+      ] },
+      { id: "tablets", name: "Планшеты", aliases: ["Планшет"], fields: [{ key: "brand", label: "Бренд", type: "text" }] },
+      { id: "tv-audio", name: "ТВ, аудио и наушники", aliases: ["Телевизор", "Наушники"], fields: [{ key: "brand", label: "Бренд", type: "text" }] },
+      { id: "gaming-photo", name: "Игры, часы и фототехника", aliases: ["Игровая приставка", "Смарт-часы", "Фотоаппарат"], fields: [{ key: "brand", label: "Бренд", type: "text" }] },
+      { id: "electronics-other", name: "Другая электроника", aliases: ["Другое"], fields: [] }
+    ]
+  },
+  "Авто": {
+    subcategories: [
+      { id: "passenger-car", name: "Легковые автомобили", aliases: ["Легковой автомобиль"], feeType: "automobile", fields: [
+        { key: "brand", label: "Марка", type: "text", required: true }, { key: "model", label: "Модель", type: "text", required: true },
+        { key: "year", label: "Год выпуска", type: "number", min: 1900, max: 2100, required: true }, { key: "mileageKm", label: "Пробег, км", type: "number", min: 0, max: 3000000 }
+      ] },
+      { id: "suv", name: "Кроссоверы и внедорожники", aliases: ["Кроссовер / внедорожник"], feeType: "automobile", fields: [
+        { key: "brand", label: "Марка", type: "text", required: true }, { key: "model", label: "Модель", type: "text", required: true },
+        { key: "year", label: "Год выпуска", type: "number", min: 1900, max: 2100, required: true }, { key: "mileageKm", label: "Пробег, км", type: "number", min: 0, max: 3000000 }
+      ] },
+      { id: "commercial-vehicle", name: "Коммерческий транспорт", aliases: ["Коммерческий транспорт"], feeType: "automobile", fields: [
+        { key: "brand", label: "Марка", type: "text", required: true }, { key: "model", label: "Модель", type: "text" }, { key: "year", label: "Год выпуска", type: "number", min: 1900, max: 2100 }
+      ] },
+      { id: "motorcycles", name: "Мотоциклы", aliases: ["Мотоцикл"], feeType: "automobile", fields: [
+        { key: "brand", label: "Марка", type: "text" }, { key: "model", label: "Модель", type: "text" }, { key: "year", label: "Год выпуска", type: "number", min: 1900, max: 2100 }
+      ] },
+      { id: "auto-parts", name: "Автозапчасти", aliases: ["Автозапчасть"], fields: [
+        { key: "brand", label: "Марка автомобиля", type: "text" }, { key: "partNumber", label: "Артикул", type: "text" }
+      ] }
+    ]
+  },
+  "Одежда": {
+    subcategories: [
+      { id: "women-clothes", name: "Женская одежда", aliases: ["Женская одежда"], fields: [{ key: "size", label: "Размер", type: "text" }, { key: "brand", label: "Бренд", type: "text" }] },
+      { id: "men-clothes", name: "Мужская одежда", aliases: ["Мужская одежда"], fields: [{ key: "size", label: "Размер", type: "text" }, { key: "brand", label: "Бренд", type: "text" }] },
+      { id: "kids-clothes", name: "Детская одежда", aliases: ["Детская одежда"], fields: [{ key: "size", label: "Размер / рост", type: "text" }] },
+      { id: "shoes", name: "Обувь", aliases: ["Обувь"], fields: [{ key: "shoeSize", label: "Размер обуви", type: "text" }, { key: "brand", label: "Бренд", type: "text" }] },
+      { id: "accessories", name: "Аксессуары", aliases: ["Аксессуары"], fields: [{ key: "brand", label: "Бренд", type: "text" }] }
+    ]
+  },
+  "Дом": {
+    subcategories: [
+      { id: "furniture", name: "Мебель", aliases: ["Мебель"], fields: [{ key: "material", label: "Материал", type: "text" }] },
+      { id: "appliances", name: "Бытовая техника", aliases: ["Бытовая техника"], fields: [{ key: "brand", label: "Бренд", type: "text" }] },
+      { id: "dishes-decor", name: "Посуда и декор", aliases: ["Посуда", "Декор"], fields: [] },
+      { id: "repair-materials", name: "Ремонт и материалы", aliases: ["Ремонт", "Стройматериалы"], fields: [] }
+    ]
+  },
+  "Инструменты": {
+    subcategories: [
+      { id: "power-tools", name: "Электроинструмент", aliases: ["Электроинструмент"], fields: [{ key: "brand", label: "Бренд", type: "text" }] },
+      { id: "hand-tools", name: "Ручной инструмент", aliases: ["Ручной инструмент"], fields: [] },
+      { id: "equipment", name: "Станки и оборудование", aliases: ["Оборудование", "Станок"], fields: [{ key: "brand", label: "Бренд", type: "text" }] }
+    ]
+  },
+  "Сад и огород": {
+    subcategories: [
+      { id: "garden-equipment", name: "Садовая техника", aliases: ["Садовая техника"], fields: [{ key: "brand", label: "Бренд", type: "text" }] },
+      { id: "plants", name: "Растения и саженцы", aliases: ["Растения", "Саженцы"], fields: [] },
+      { id: "garden-supplies", name: "Товары для сада", aliases: ["Товары для сада"], fields: [] }
+    ]
+  },
+  "Животные": {
+    subcategories: [
+      { id: "dogs", name: "Собаки", aliases: ["Собака", "Щенок"], fields: [{ key: "breed", label: "Порода", type: "text" }, { key: "ageMonths", label: "Возраст, месяцев", type: "number", min: 0, max: 360 }] },
+      { id: "cats", name: "Кошки", aliases: ["Кошка", "Котёнок"], fields: [{ key: "breed", label: "Порода", type: "text" }, { key: "ageMonths", label: "Возраст, месяцев", type: "number", min: 0, max: 360 }] },
+      { id: "farm-animals", name: "Сельхозживотные", aliases: ["Сельхозживотные"], fields: [{ key: "animalType", label: "Вид животного", type: "text" }] },
+      { id: "pet-supplies", name: "Товары для животных", aliases: ["Товары для животных"], fields: [] }
+    ]
+  },
+  "Недвижимость": {
+    subcategories: [
+      { id: "apartment", name: "Квартиры", aliases: ["Квартира"], feeType: "apartment", fields: [
+        { key: "dealType", label: "Тип сделки", type: "select", options: ["Продажа", "Аренда"], required: true },
+        { key: "rooms", label: "Комнат", type: "number", min: 0, max: 20, required: true },
+        { key: "areaM2", label: "Площадь, м²", type: "number", min: 1, max: 100000, required: true },
+        { key: "floor", label: "Этаж", type: "number", min: 0, max: 200 }, { key: "floorsTotal", label: "Этажей в доме", type: "number", min: 1, max: 200 }
+      ] },
+      { id: "house", name: "Дома и коттеджи", aliases: ["Дом", "Коттедж"], feeType: "house", fields: [
+        { key: "dealType", label: "Тип сделки", type: "select", options: ["Продажа", "Аренда"], required: true },
+        { key: "areaM2", label: "Площадь дома, м²", type: "number", min: 1, max: 100000, required: true },
+        { key: "landArea", label: "Площадь участка", type: "number", min: 0.01, max: 100000 },
+        { key: "landUnit", label: "Единица участка", type: "select", options: ["сотка", "гектар"] }
+      ] },
+      { id: "land", name: "Земельные участки", aliases: ["Участок"], feeType: "land", fields: [
+        { key: "dealType", label: "Тип сделки", type: "select", options: ["Продажа", "Аренда"], required: true },
+        { key: "landArea", label: "Площадь участка", type: "number", min: 0.01, max: 100000, required: true },
+        { key: "landUnit", label: "Единица площади", type: "select", options: ["сотка", "гектар"], required: true },
+        { key: "landPurpose", label: "Назначение", type: "text" }
+      ] },
+      { id: "commercial-real-estate", name: "Коммерческая недвижимость", aliases: ["Коммерческая недвижимость"], fields: [
+        { key: "dealType", label: "Тип сделки", type: "select", options: ["Продажа", "Аренда"], required: true }, { key: "areaM2", label: "Площадь, м²", type: "number", min: 1, max: 100000 }
+      ] }
+    ]
+  },
+  "Вакансии": {
+    subcategories: [
+      { id: "sales", name: "Продажи и торговля", aliases: ["Продажи", "Розничная торговля"], feeType: "vacancy", fields: JOB_TAXONOMY_FIELDS },
+      { id: "transport-jobs", name: "Транспорт и логистика", aliases: ["Транспорт и логистика"], feeType: "vacancy", fields: JOB_TAXONOMY_FIELDS },
+      { id: "construction-jobs", name: "Строительство и производство", aliases: ["Строительство", "Производство"], feeType: "vacancy", fields: JOB_TAXONOMY_FIELDS },
+      { id: "service-jobs", name: "Сервис, питание и красота", aliases: ["Общественное питание", "Красота и здоровье"], feeType: "vacancy", fields: JOB_TAXONOMY_FIELDS },
+      { id: "office-it-jobs", name: "Офис, образование и IT", aliases: ["Офис и администрация", "Образование", "IT и связь"], feeType: "vacancy", fields: JOB_TAXONOMY_FIELDS },
+      { id: "other-jobs", name: "Другие вакансии", aliases: ["Охрана", "Домашний персонал", "Сельское хозяйство", "Без специальной подготовки", "Другое"], feeType: "vacancy", fields: JOB_TAXONOMY_FIELDS }
+    ]
+  }
+});
+
 const MODERATION_STATUSES = new Set(["approved", "blocked", "rejected"]);
 const MODERATION_MATCH_TYPES = new Set(["word", "phrase", "domain"]);
 const AD_PLACEMENTS = new Set(["catalog_top", "catalog_feed", "product_detail"]);
@@ -140,7 +259,7 @@ const ADMIN_SECOND_FACTOR_LOCK_MINUTES = Math.max(1, Math.min(1440, Number(proce
 const SLOW_REQUEST_MS = Math.max(100, Math.min(60_000, Number(process.env.SLOW_REQUEST_MS) || 2000));
 const PRODUCT_IMAGE_MAX_WIDTH = Math.max(800, Math.min(3000, Number(process.env.PRODUCT_IMAGE_MAX_WIDTH) || 1600));
 const PRODUCT_IMAGE_WEBP_QUALITY = Math.max(50, Math.min(95, Number(process.env.PRODUCT_IMAGE_WEBP_QUALITY) || 82));
-const PRODUCT_THUMBNAIL_WIDTH = Math.max(240, Math.min(1000, Number(process.env.PRODUCT_THUMBNAIL_WIDTH) || 640));
+const PRODUCT_THUMBNAIL_WIDTH = Math.max(240, Math.min(1000, Number(process.env.PRODUCT_THUMBNAIL_WIDTH) || 480));
 const ALERT_TELEGRAM_CHAT_ID = String(process.env.ALERT_TELEGRAM_CHAT_ID || "").trim();
 const ERROR_ALERT_THRESHOLD = Math.max(2, Math.min(100, Number(process.env.ERROR_ALERT_THRESHOLD) || 10));
 const ERROR_ALERT_WINDOW_MS = Math.max(60_000, Math.min(60 * 60_000, Number(process.env.ERROR_ALERT_WINDOW_MS) || 5 * 60_000));
@@ -265,6 +384,96 @@ pool.on("error", error => {
   console.error("Unexpected PostgreSQL pool error:", error);
   ensureDatabaseInitialization();
 });
+
+function sanitizeTelemetryText(value, maxLength = 2000) {
+  return normalizeText(String(value || "")
+    .replace(/tma\s+[A-Za-z0-9_%.-]+/gi, "tma [redacted]")
+    .replace(/(?:authorization|cookie|initdata|token|secret|password|phone)\s*[:=]\s*[^\s,;]+/gi, "$1=[redacted]")
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[email]")
+    .replace(/(?:\+?7|8)[\s()\-]*\d{3}[\s()\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}/g, "[phone]")
+    .replace(/data:image\/[^;]+;base64,[A-Za-z0-9+/=]+/gi, "[image-data]"), maxLength);
+}
+
+function sanitizeTelemetryContext(value, depth = 0) {
+  if (depth > 3) return "[truncated]";
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") return sanitizeTelemetryText(value, 800);
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (Array.isArray(value)) return value.slice(0, 20).map(item => sanitizeTelemetryContext(item, depth + 1));
+  if (typeof value === "object") {
+    const result = {};
+    for (const [rawKey, rawValue] of Object.entries(value).slice(0, 30)) {
+      const key = normalizeText(rawKey, 80);
+      if (!key || /authorization|cookie|initdata|token|secret|password|phone|description|image/i.test(key)) continue;
+      result[key] = sanitizeTelemetryContext(rawValue, depth + 1);
+    }
+    return result;
+  }
+  return sanitizeTelemetryText(value, 200);
+}
+
+async function recordErrorEvent({ source = "server", level = "error", message = "", stack = "", route = "", method = "", requestId = "", userId = "", platform = "", context = {} } = {}, database = pool) {
+  const cleanMessage = sanitizeTelemetryText(message || "Unknown error", 1500);
+  const cleanStack = sanitizeTelemetryText(stack, 8000);
+  const cleanRoute = sanitizeTelemetryText(route, 300).replace(/\?.*$/, "");
+  const fingerprint = createHash("sha256")
+    .update([source, cleanMessage, cleanStack.split("\n").slice(0, 3).join("\n"), cleanRoute].join("|"))
+    .digest("hex");
+  try {
+    const stored = await database.query(`
+      INSERT INTO error_events (
+        id, source, level, fingerprint, message, stack, route, method, request_id, user_id,
+        app_version, platform, context, occurrences, first_seen_at, last_seen_at
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,1,NOW(),NOW())
+      ON CONFLICT (fingerprint) DO UPDATE SET
+        occurrences = error_events.occurrences + 1,
+        last_seen_at = NOW(),
+        level = EXCLUDED.level,
+        message = EXCLUDED.message,
+        stack = EXCLUDED.stack,
+        route = EXCLUDED.route,
+        method = EXCLUDED.method,
+        request_id = EXCLUDED.request_id,
+        user_id = EXCLUDED.user_id,
+        platform = EXCLUDED.platform,
+        context = EXCLUDED.context,
+        app_version = EXCLUDED.app_version
+      RETURNING occurrences
+    `, [
+      randomUUID(), normalizeText(source, 30) || "server", normalizeText(level, 20) || "error", fingerprint,
+      cleanMessage, cleanStack, cleanRoute, normalizeText(method, 12), normalizeText(requestId, 80), normalizeText(userId, 80),
+      APP_VERSION, normalizeText(platform, 80), JSON.stringify(sanitizeTelemetryContext(context) || {})
+    ]);
+    const occurrences = Number(stored.rows[0]?.occurrences) || 1;
+    if (ALERT_TELEGRAM_CHAT_ID && [1, 10, 50].includes(occurrences)) {
+      callTelegramBotApi("sendMessage", {
+        chat_id: ALERT_TELEGRAM_CHAT_ID,
+        text: `⚠️ Алания Маркет · ${normalizeText(source, 30) || "server"}
+${cleanMessage.slice(0, 700)}${cleanRoute ? `
+${normalizeText(method, 12)} ${cleanRoute}` : ""}${requestId ? `
+requestId=${normalizeText(requestId, 80)}` : ""}
+Повторов: ${occurrences} · версия ${APP_VERSION}`
+      }).catch(alertError => console.warn("Central error alert failed:", alertError?.message || alertError));
+    }
+  } catch (storageError) {
+    console.warn("Central error storage failed:", storageError?.message || storageError);
+  }
+}
+
+const nativeConsoleError = console.error.bind(console);
+console.error = (...args) => {
+  nativeConsoleError(...args);
+  if (!databaseState.ready) return;
+  const errorArg = args.find(item => item instanceof Error);
+  const message = args.map(item => item instanceof Error ? item.message : (typeof item === "string" ? item : "")).filter(Boolean).join(" ").slice(0, 1500);
+  queueMicrotask(() => recordErrorEvent({
+    source: "server",
+    level: "error",
+    message: message || errorArg?.message || "console.error",
+    stack: errorArg?.stack || "",
+    context: { channel: "console.error" }
+  }).catch(() => {}));
+};
 
 const requireTelegramAuth = createTelegramAuthMiddleware({
   botToken: BOT_TOKEN,
@@ -450,6 +659,13 @@ function mapProduct(row) {
     previousPriceAmount: Number(row.previous_price_amount) || parsePriceAmount(row.previous_price),
     priceDroppedAt: row.price_dropped_at ? new Date(row.price_dropped_at).getTime() : null,
     category: row.category,
+    subcategoryId: row.subcategory_id || "",
+    attributes: row.attributes && typeof row.attributes === "object" && !Array.isArray(row.attributes) ? row.attributes : {},
+    taxonomyVersion: Number(row.taxonomy_version) || 1,
+    categoryMismatchScore: Number(row.category_mismatch_score) || 0,
+    categoryMismatchReason: row.category_mismatch_reason || "",
+    imageModerationStatus: row.image_moderation_status || "",
+    imageModerationResult: row.image_moderation_result && typeof row.image_moderation_result === "object" ? row.image_moderation_result : {},
     desc: row.description,
     image: images[0] || row.image || "",
     thumbnail: row.thumbnail || images[0] || row.image || "",
@@ -513,6 +729,9 @@ const PRODUCT_SUMMARY_COLUMNS = `
   p.previous_price_amount,
   p.price_dropped_at,
   p.category,
+  p.subcategory_id,
+  p.attributes,
+  p.taxonomy_version,
   LEFT(p.description, 240) AS description,
   CASE
     WHEN EXISTS (SELECT 1 FROM product_images pi WHERE pi.product_id = p.id) THEN TRUE
@@ -559,6 +778,13 @@ const PRODUCT_PUBLIC_DETAIL_COLUMNS = `
   p.previous_price_amount,
   p.price_dropped_at,
   p.category,
+  p.subcategory_id,
+  p.attributes,
+  p.taxonomy_version,
+  p.category_mismatch_score,
+  p.category_mismatch_reason,
+  p.image_moderation_status,
+  p.image_moderation_result,
   p.description,
   p.location,
   p.district,
@@ -662,6 +888,9 @@ function mapProductSummary(row) {
       ? Math.max(1, Math.round(((previousAmount - currentAmount) / previousAmount) * 100))
       : 0,
     category: row.category,
+    subcategoryId: row.subcategory_id || "",
+    attributes: row.attributes && typeof row.attributes === "object" && !Array.isArray(row.attributes) ? row.attributes : {},
+    taxonomyVersion: Number(row.taxonomy_version) || 1,
     desc: row.description || "",
     image,
     thumbnail: image,
@@ -1093,8 +1322,146 @@ function normalizeListingFeeType(value) {
   return ["automobile", "vacancy", "apartment", "house", "land"].includes(normalized) ? normalized : "";
 }
 
-function getListingFeeType(category, specifications = {}) {
+function getTaxonomyCategory(category) {
+  return MARKET_TAXONOMY[normalizeText(category, 60)] || null;
+}
+
+function getTaxonomySubcategory(category, value) {
+  const taxonomy = getTaxonomyCategory(category);
+  if (!taxonomy) return null;
+  const normalized = normalizeText(value, 100).toLowerCase();
+  if (!normalized) return null;
+  return taxonomy.subcategories.find(item =>
+    item.id.toLowerCase() === normalized ||
+    item.name.toLowerCase() === normalized ||
+    (item.aliases || []).some(alias => alias.toLowerCase() === normalized)
+  ) || null;
+}
+
+function inferTaxonomySubcategory(category, specifications = {}, explicitValue = "") {
+  const direct = getTaxonomySubcategory(category, explicitValue);
+  if (direct) return direct;
+  const specs = specifications && typeof specifications === "object" ? specifications : {};
+  const candidates = [
+    specs["Подкатегория"], specs["Тип товара"], specs["Тип недвижимости"], specs["Сфера работы"], specs["Тип"]
+  ];
+  for (const candidate of candidates) {
+    const match = getTaxonomySubcategory(category, candidate);
+    if (match) return match;
+  }
+  return null;
+}
+
+function normalizeProductAttributes(category, subcategoryId, attributes = {}, specifications = {}) {
+  const subcategory = inferTaxonomySubcategory(category, specifications, subcategoryId);
+  const input = attributes && typeof attributes === "object" && !Array.isArray(attributes) ? attributes : {};
+  const allowed = new Map((subcategory?.fields || []).map(field => [field.key, field]));
+  const normalized = {};
+  for (const [key, rawValue] of Object.entries(input).slice(0, 40)) {
+    const cleanKey = normalizeText(key, 60);
+    const field = allowed.get(cleanKey);
+    if (!field) continue;
+    if (rawValue === null || rawValue === undefined || rawValue === "") continue;
+    if (field.type === "number") {
+      const number = Number(String(rawValue).replace(",", "."));
+      if (!Number.isFinite(number)) continue;
+      const min = Number.isFinite(Number(field.min)) ? Number(field.min) : -1e12;
+      const max = Number.isFinite(Number(field.max)) ? Number(field.max) : 1e12;
+      normalized[cleanKey] = Math.max(min, Math.min(max, number));
+      continue;
+    }
+    const value = normalizeText(rawValue, 160);
+    if (!value) continue;
+    if (field.type === "select" && Array.isArray(field.options) && !field.options.includes(value)) continue;
+    normalized[cleanKey] = value;
+  }
+
+  const specs = specifications && typeof specifications === "object" ? specifications : {};
+  const aliases = {
+    brand: ["Марка / бренд", "Марка", "Бренд"], model: ["Модель"], year: ["Год выпуска", "Год"],
+    dealType: ["Тип сделки"], rooms: ["Комнат", "Количество комнат"], areaM2: ["Площадь", "Площадь, м²"],
+    floor: ["Этаж"], floorsTotal: ["Этажей в доме"], landArea: ["Площадь участка"], landUnit: ["Единица площади"]
+  };
+  for (const [key, names] of Object.entries(aliases)) {
+    if (normalized[key] !== undefined || !allowed.has(key)) continue;
+    const value = names.map(name => specs[name]).find(item => item !== undefined && item !== null && item !== "");
+    if (value === undefined) continue;
+    const field = allowed.get(key);
+    if (field.type === "number") {
+      const number = Number(String(value).replace(/[^0-9.,-]/g, "").replace(",", "."));
+      if (Number.isFinite(number)) normalized[key] = number;
+    } else {
+      const clean = normalizeText(value, 160);
+      if (clean) normalized[key] = clean;
+    }
+  }
+  return normalized;
+}
+
+function validateTaxonomySelection(category, subcategoryId, attributes = {}, requestedStatus = "active") {
+  const taxonomy = getTaxonomyCategory(category);
+  if (!taxonomy) return { ok: false, error: "Категория не поддерживается" };
+  const subcategory = getTaxonomySubcategory(category, subcategoryId);
+  if (!subcategory) {
+    return requestedStatus === "draft"
+      ? { ok: true, subcategory: null, missing: [] }
+      : { ok: false, code: "SUBCATEGORY_REQUIRED", error: "Выберите подкатегорию объявления" };
+  }
+  const missing = (subcategory.fields || [])
+    .filter(field => field.required && (attributes[field.key] === undefined || attributes[field.key] === ""))
+    .map(field => field.label);
+  if (requestedStatus !== "draft" && missing.length) {
+    return { ok: false, code: "CATEGORY_FIELDS_REQUIRED", error: `Заполните обязательные поля: ${missing.join(", ")}`, missing };
+  }
+  return { ok: true, subcategory, missing };
+}
+
+const CATEGORY_CLASSIFIER_KEYWORDS = Object.freeze({
+  "Авто": ["автомоб", "машин", "toyota", "lada", "ваз", "bmw", "mercedes", "hyundai", "kia", "пробег", "двигател", "коробк", "шины", "бампер"],
+  "Недвижимость": ["квартир", "комнат", "этаж", "дом ", "коттедж", "участ", "соток", "гектар", "ипотек", "аренд"],
+  "Одежда": ["плать", "куртк", "брюк", "джинс", "рубаш", "футбол", "кроссов", "ботин", "туфл", "размер"],
+  "Электроника": ["iphone", "samsung", "телефон", "смартфон", "ноутбук", "компьютер", "телевизор", "планшет", "наушник"],
+  "Вакансии": ["ваканси", "работа", "зарплат", "требуется", "график", "смен", "опыт работы"],
+  "Животные": ["щен", "котен", "кошка", "собака", "порода", "животн", "корова", "овца"],
+  "Дом": ["диван", "шкаф", "стол", "стул", "холодильник", "стиральн", "мебель", "посуда"],
+  "Инструменты": ["дрель", "перфоратор", "болгарк", "шуруповерт", "станок", "инструмент"],
+  "Сад и огород": ["сажен", "рассад", "газонокос", "мотоблок", "семен", "удобрени", "садов"]
+});
+
+function evaluateCategoryConsistency({ category, subcategoryId, name, desc, specifications, attributes }) {
+  const text = normalizeText([
+    name, desc,
+    specifications && typeof specifications === "object" ? Object.entries(specifications).flat().join(" ") : "",
+    attributes && typeof attributes === "object" ? Object.values(attributes).join(" ") : ""
+  ].filter(Boolean).join(" "), 12000).toLowerCase();
+  if (!text) return { blocked: false, score: 0, reason: "", suggestedCategory: "" };
+  const scores = Object.entries(CATEGORY_CLASSIFIER_KEYWORDS).map(([candidate, words]) => ({
+    category: candidate,
+    score: words.reduce((sum, word) => sum + (text.includes(word) ? 1 : 0), 0)
+  })).sort((a, b) => b.score - a.score);
+  const declared = scores.find(item => item.category === category)?.score || 0;
+  const top = scores[0] || { category: "", score: 0 };
+  const mismatch = top.category && top.category !== category && top.score >= 3 && top.score >= declared + 2;
+  const selectedSubcategory = getTaxonomySubcategory(category, subcategoryId);
+  if (mismatch) {
+    return {
+      blocked: true,
+      score: Math.min(100, 55 + top.score * 8),
+      reason: `Содержание похоже на категорию «${top.category}», а выбрана «${category}»`,
+      suggestedCategory: top.category
+    };
+  }
+  if (selectedSubcategory?.id === "auto-parts" && /\b(продам|авто|машин)\b/u.test(text) && /\b(год|пробег|двигател|коробк)\b/u.test(text)) {
+    return { blocked: true, score: 85, reason: "Похоже, продаётся автомобиль, а не запчасть", suggestedCategory: "Авто" };
+  }
+  return { blocked: false, score: 0, reason: "", suggestedCategory: "" };
+}
+
+function getListingFeeType(category, specifications = {}, subcategoryId = "") {
   const cleanCategory = normalizeText(category, 60);
+  const subcategory = inferTaxonomySubcategory(cleanCategory, specifications, subcategoryId);
+  if (subcategory?.feeType) return normalizeListingFeeType(subcategory.feeType);
+
   const specs = specifications && typeof specifications === "object" ? specifications : {};
   const itemType = normalizeText(
     specs["Тип товара"] || specs["Подкатегория"] || specs["Тип"] || specs["Тип недвижимости"] || "",
@@ -1259,8 +1626,8 @@ function getPromotionPlanFromSettings(settings, planId) {
   return plan && plan.enabled !== false ? plan : null;
 }
 
-async function getListingFeeRequirement(database, category, specifications = {}) {
-  const feeType = getListingFeeType(category, specifications);
+async function getListingFeeRequirement(database, category, specifications = {}, subcategoryId = "") {
+  const feeType = getListingFeeType(category, specifications, subcategoryId);
   if (!feeType) return { required: false, feeType: "", priceRub: 0, pricingVersion: 1 };
   const settings = await getMonetizationSettings(database);
   const priceRub = settings.paidListingPrices[feeType] || 0;
@@ -2115,14 +2482,14 @@ async function activatePaidListing(client, order) {
   const feeType = normalizeListingFeeType(order.plan);
   if (!feeType) throw new Error("Неизвестный тип платной публикации");
   const productResult = await client.query(
-    `SELECT id, owner_id, status, hidden, moderation_status, category, specifications
+    `SELECT id, owner_id, status, hidden, moderation_status, category, subcategory_id, specifications
      FROM products WHERE id = $1 FOR UPDATE`,
     [order.product_id]
   );
   if (!productResult.rows.length) throw new Error("Объявление для оплаты не найдено");
   const product = productResult.rows[0];
   if (String(product.owner_id) !== String(order.user_id)) throw new Error("Владелец платежа не совпадает с владельцем объявления");
-  if (getListingFeeType(product.category, product.specifications || {}) !== feeType) throw new Error("Тип оплаченного объявления изменился");
+  if (getListingFeeType(product.category, product.specifications || {}, product.subcategory_id || "") !== feeType) throw new Error("Тип оплаченного объявления изменился");
   if (product.hidden || (product.moderation_status || "approved") !== "approved") {
     throw new Error("Оплаченное объявление ожидает модерацию и пока не может быть опубликовано");
   }
@@ -2382,6 +2749,126 @@ async function suggestListingFromImage({ image, context = {}, userId = "" }) {
   };
 }
 
+async function buildModerationImageData(value) {
+  const parsed = parseStoredDataImage(value);
+  if (!parsed) return null;
+  const imageHash = createHash("sha256").update(parsed.buffer).digest("hex");
+  try {
+    const output = await sharp(parsed.buffer, { limitInputPixels: 40_000_000 })
+      .rotate()
+      .resize({ width: 512, height: 512, fit: "inside", withoutEnlargement: true })
+      .webp({ quality: 70, effort: 3 })
+      .toBuffer();
+    return { imageHash, dataUrl: `data:image/webp;base64,${output.toString("base64")}` };
+  } catch (error) {
+    console.warn("Moderation thumbnail error:", error?.message || error);
+    return null;
+  }
+}
+
+async function evaluateSingleImageSafety(value, userId = "", database = pool) {
+  const prepared = await buildModerationImageData(value);
+  if (!prepared) return { available: false, action: "allow", score: 0, reason: "", categories: [], likelyCategory: "" };
+  try {
+    const cached = await database.query(`SELECT result FROM image_moderation_cache WHERE image_hash = $1 LIMIT 1`, [prepared.imageHash]);
+    if (cached.rows[0]?.result && typeof cached.rows[0].result === "object") {
+      return { ...cached.rows[0].result, available: true, cached: true, imageHash: prepared.imageHash };
+    }
+  } catch (error) {
+    console.warn("Image moderation cache read failed:", error?.message || error);
+  }
+  if (!AI_MODERATION_ENABLED || !OPENAI_API_KEY) {
+    return { available: false, action: "allow", score: 0, reason: "", categories: [], likelyCategory: "", imageHash: prepared.imageHash };
+  }
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      action: { type: "string", enum: ["allow", "review", "block"] },
+      riskScore: { type: "integer" },
+      reason: { type: "string" },
+      categories: { type: "array", items: { type: "string" } },
+      likelyCategory: { type: "string", enum: [...Array.from(PRODUCT_CATEGORIES), "unknown"] },
+      categoryConfidence: { type: "integer" }
+    },
+    required: ["action", "riskScore", "reason", "categories", "likelyCategory", "categoryConfidence"]
+  };
+  const result = await callOpenAIStructured({
+    schemaName: "marketplace_image_safety",
+    schema,
+    maxOutputTokens: 350,
+    model: AI_MODERATION_MODEL,
+    kind: "moderation",
+    userId,
+    input: [{
+      role: "user",
+      content: [
+        { type: "input_text", text: "Проверь фотографию объявления российского маркетплейса. block: явная нагота/порнография, сексуальный контент с несовершеннолетними, оружие или наркотики крупным планом, шокирующее насилие. review: сомнительный сексуальный или опасный контент. Обычные люди в одежде, купальники без сексуального контекста, медицинские и бытовые товары разрешай. Также независимо от риска определи наиболее вероятную категорию товара и categoryConfidence от 0 до 100." },
+        { type: "input_image", image_url: prepared.dataUrl }
+      ]
+    }]
+  });
+  if (!result.ok) return {
+    available: true,
+    action: "review",
+    score: 60,
+    reason: "Фото не удалось автоматически проверить. Требуется ручная модерация.",
+    categories: ["moderation-unavailable"],
+    likelyCategory: "",
+    error: result.error,
+    imageHash: prepared.imageHash
+  };
+  const data = result.data || {};
+  const normalized = {
+    action: ["allow", "review", "block"].includes(data.action) ? data.action : "allow",
+    score: Math.max(0, Math.min(100, Number(data.riskScore) || 0)),
+    reason: normalizeText(data.reason, 600),
+    categories: Array.isArray(data.categories) ? data.categories.slice(0, 8).map(item => normalizeText(item, 80)).filter(Boolean) : [],
+    likelyCategory: PRODUCT_CATEGORIES.has(data.likelyCategory) ? data.likelyCategory : "",
+    categoryConfidence: Math.max(0, Math.min(100, Number(data.categoryConfidence) || 0)),
+    model: AI_MODERATION_MODEL,
+    responseId: result.responseId || ""
+  };
+  try {
+    await database.query(`
+      INSERT INTO image_moderation_cache (image_hash, result, model, updated_at)
+      VALUES ($1, $2::jsonb, $3, NOW())
+      ON CONFLICT (image_hash) DO UPDATE SET result = EXCLUDED.result, model = EXCLUDED.model, updated_at = NOW()
+    `, [prepared.imageHash, JSON.stringify(normalized), AI_MODERATION_MODEL]);
+  } catch (error) {
+    console.warn("Image moderation cache write failed:", error?.message || error);
+  }
+  return { ...normalized, available: true, imageHash: prepared.imageHash };
+}
+
+async function evaluateProductImages(product, settings = {}, database = pool) {
+  const images = Array.isArray(product.images) ? product.images.filter(Boolean).slice(0, 3) : [];
+  if (!images.length) return { available: false, blocked: false, review: false, score: 0, reason: "", matches: [], results: [] };
+  const results = [];
+  for (const image of images) {
+    results.push(await evaluateSingleImageSafety(image, product.ownerId || product.owner_id || "", database));
+  }
+  const blockThreshold = Math.max(70, Math.min(100, Number(settings.ai_block_threshold) || 90));
+  const reviewThreshold = Math.max(20, Math.min(blockThreshold - 1, Number(settings.ai_review_threshold) || 60));
+  const blockedResult = results.find(item => item.action === "block" && item.score >= blockThreshold);
+  const reviewResult = results.find(item => item.action === "review" && item.score >= reviewThreshold);
+  const safetySelected = blockedResult || reviewResult || [...results].sort((a, b) => (b.score || 0) - (a.score || 0))[0] || {};
+  const categorySelected = [...results]
+    .filter(item => item.likelyCategory)
+    .sort((a, b) => (b.categoryConfidence || 0) - (a.categoryConfidence || 0))[0] || {};
+  return {
+    available: results.some(item => item.available),
+    blocked: Boolean(blockedResult),
+    review: !blockedResult && Boolean(reviewResult),
+    score: Number(safetySelected.score) || 0,
+    reason: safetySelected.reason || "",
+    likelyCategory: categorySelected.likelyCategory || "",
+    categoryConfidence: Number(categorySelected.categoryConfidence) || 0,
+    matches: (safetySelected.categories || []).map(label => ({ type: "image-ai", label: `Фото: ${label}`, score: Number(safetySelected.score) || 0 })),
+    results
+  };
+}
+
 async function evaluateAIModeration(product, settings = {}) {
   if (!AI_MODERATION_ENABLED || settings.ai_enabled === false || !OPENAI_API_KEY) return { available: false, blocked: false, review: false, score: 0, reason: "", matches: [] };
   const content = buildModerationContent(product).slice(0, 7000);
@@ -2488,32 +2975,70 @@ async function evaluateProductModeration(product, database = pool) {
     items.findIndex(item => item.type === match.type && item.label === match.label) === index
   );
 
+  const categoryCheck = evaluateCategoryConsistency(product);
+  if (categoryCheck.blocked) {
+    uniqueMatches.push({ type: "category", label: categoryCheck.reason, score: categoryCheck.score });
+  }
+
   if (uniqueMatches.length > 0) {
     return {
       blocked: true,
-      aiReview: false,
-      aiScore: 0,
+      aiReview: categoryCheck.blocked,
+      aiScore: Number(categoryCheck.score) || 0,
+      aiDecision: categoryCheck.blocked ? "review" : "block",
+      categoryMismatch: categoryCheck,
+      imageModeration: { status: "not_checked", results: [] },
       reason: uniqueMatches.map(item => item.label).join("; ").slice(0, 1000),
       matches: uniqueMatches.slice(0, 20)
     };
   }
 
-  const aiModeration = await evaluateAIModeration(product, settings);
-  const aiNeedsHold = Boolean(aiModeration.blocked || aiModeration.review);
-  const aiReason = aiNeedsHold
-    ? `${aiModeration.review ? "AI рекомендует проверку модератором" : "AI выявил высокий риск"}${aiModeration.reason ? `: ${aiModeration.reason}` : ""}`
-    : "";
+  const [aiModeration, imageModeration] = await Promise.all([
+    evaluateAIModeration(product, settings),
+    evaluateProductImages(product, settings, database)
+  ]);
+  const imageCategoryMismatch = Boolean(
+    imageModeration.likelyCategory &&
+    imageModeration.likelyCategory !== product.category &&
+    imageModeration.categoryConfidence >= 75
+  );
+  const aiNeedsHold = Boolean(aiModeration.blocked || aiModeration.review || imageModeration.blocked || imageModeration.review || imageCategoryMismatch);
+  const reasonParts = [];
+  if (aiModeration.blocked || aiModeration.review) {
+    reasonParts.push(`${aiModeration.review ? "AI рекомендует проверку текста" : "AI выявил высокий риск в тексте"}${aiModeration.reason ? `: ${aiModeration.reason}` : ""}`);
+  }
+  if (imageModeration.blocked || imageModeration.review) {
+    reasonParts.push(`${imageModeration.review ? "Фото требует проверки" : "Фото заблокировано"}${imageModeration.reason ? `: ${imageModeration.reason}` : ""}`);
+  }
+  if (imageCategoryMismatch) {
+    reasonParts.push(`Фото похоже на категорию «${imageModeration.likelyCategory}», а выбрана «${product.category}»`);
+  }
+  const combinedScore = Math.max(Number(aiModeration.score) || 0, Number(imageModeration.score) || 0);
+  const combinedMatches = [
+    ...(aiModeration.matches || []),
+    ...(imageModeration.matches || []),
+    ...(imageCategoryMismatch ? [{ type: "image-category", label: `Фото: вероятная категория ${imageModeration.likelyCategory}`, score: imageModeration.categoryConfidence }] : [])
+  ];
   return {
     blocked: aiNeedsHold,
-    aiReview: Boolean(aiModeration.review),
-    aiScore: Number(aiModeration.score) || 0,
-    aiAvailable: Boolean(aiModeration.available),
+    aiReview: Boolean(aiModeration.review || imageModeration.review || imageCategoryMismatch),
+    aiScore: combinedScore,
+    aiAvailable: Boolean(aiModeration.available || imageModeration.available),
     aiError: aiModeration.error || "",
-    aiDecision: aiModeration.action || "allow",
-    aiModel: aiModeration.model || "",
+    aiDecision: imageModeration.blocked || aiModeration.blocked ? "block" : (aiNeedsHold ? "review" : "allow"),
+    aiModel: aiModeration.model || AI_MODERATION_MODEL,
     aiResponseId: aiModeration.responseId || "",
-    reason: aiReason.slice(0, 1000),
-    matches: (aiModeration.matches || []).slice(0, 20)
+    categoryMismatch: imageCategoryMismatch ? { blocked: true, score: imageModeration.categoryConfidence, reason: reasonParts.at(-1), suggestedCategory: imageModeration.likelyCategory } : categoryCheck,
+    imageModeration: {
+      status: imageModeration.blocked ? "blocked" : imageModeration.review || imageCategoryMismatch ? "review" : imageModeration.available ? "approved" : "unavailable",
+      score: Number(imageModeration.score) || 0,
+      reason: imageModeration.reason || "",
+      likelyCategory: imageModeration.likelyCategory || "",
+      categoryConfidence: Number(imageModeration.categoryConfidence) || 0,
+      results: imageModeration.results || []
+    },
+    reason: reasonParts.join("; ").slice(0, 1000),
+    matches: combinedMatches.slice(0, 20)
   };
 }
 
@@ -3150,11 +3675,67 @@ async function initDb(db = pool) {
   `);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_ai_usage_created ON ai_usage_events(created_at DESC);`);
 
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS image_moderation_cache (
+      image_hash TEXT PRIMARY KEY,
+      result JSONB NOT NULL DEFAULT '{}'::jsonb,
+      model TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS error_events (
+      id TEXT PRIMARY KEY,
+      source TEXT NOT NULL,
+      level TEXT DEFAULT 'error',
+      fingerprint TEXT DEFAULT '',
+      message TEXT NOT NULL,
+      stack TEXT DEFAULT '',
+      route TEXT DEFAULT '',
+      method TEXT DEFAULT '',
+      request_id TEXT DEFAULT '',
+      user_id TEXT DEFAULT '',
+      app_version TEXT DEFAULT '',
+      platform TEXT DEFAULT '',
+      context JSONB DEFAULT '{}'::jsonb,
+      occurrences INTEGER DEFAULT 1,
+      first_seen_at TIMESTAMPTZ DEFAULT NOW(),
+      last_seen_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_error_events_last_seen ON error_events(last_seen_at DESC);`);
+  await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_error_events_fingerprint ON error_events(fingerprint);`);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS web_vital_events (
+      id TEXT PRIMARY KEY,
+      metric_name TEXT NOT NULL,
+      metric_value NUMERIC(14,3) NOT NULL,
+      rating TEXT DEFAULT '',
+      page TEXT DEFAULT '',
+      platform TEXT DEFAULT '',
+      connection_type TEXT DEFAULT '',
+      app_version TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_web_vital_events_created ON web_vital_events(created_at DESC);`);
+
   await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS ai_risk_score INTEGER DEFAULT 0;`);
   await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS ai_decision TEXT DEFAULT '';`);
   await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS ai_reason TEXT DEFAULT '';`);
   await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS ai_model TEXT DEFAULT '';`);
   await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS ai_response_id TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS subcategory_id TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS attributes JSONB DEFAULT '{}'::jsonb;`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS taxonomy_version INTEGER DEFAULT ${CATEGORY_TAXONOMY_VERSION};`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS category_mismatch_score INTEGER DEFAULT 0;`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS category_mismatch_reason TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_moderation_status TEXT DEFAULT '';`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_moderation_result JSONB DEFAULT '{}'::jsonb;`);
   await db.query(`ALTER TABLE moderation_events ADD COLUMN IF NOT EXISTS ai_score INTEGER DEFAULT 0;`);
   await db.query(`ALTER TABLE moderation_events ADD COLUMN IF NOT EXISTS ai_decision TEXT DEFAULT '';`);
   await db.query(`ALTER TABLE moderation_events ADD COLUMN IF NOT EXISTS ai_model TEXT DEFAULT '';`);
@@ -3676,6 +4257,52 @@ app.get("/api/ready", (req, res) => {
   });
 });
 
+app.post("/api/telemetry/errors", async (req, res) => {
+  try {
+    const payload = req.body && typeof req.body === "object" ? req.body : {};
+    const message = sanitizeTelemetryText(payload.message, 1500);
+    if (!message) return res.status(400).json({ ok: false, error: "Сообщение об ошибке пустое" });
+    await recordErrorEvent({
+      source: "browser",
+      level: normalizeText(payload.level, 20) || "error",
+      message,
+      stack: payload.stack,
+      route: payload.route || req.headers.referer || "",
+      method: "CLIENT",
+      requestId: payload.requestId || req.requestId,
+      platform: payload.platform || req.headers["user-agent"] || "",
+      context: payload.context || {}
+    });
+    res.status(202).json({ ok: true });
+  } catch (error) {
+    console.warn("Client telemetry error:", error?.message || error);
+    res.status(202).json({ ok: true });
+  }
+});
+
+app.post("/api/telemetry/web-vitals", async (req, res) => {
+  try {
+    const payload = req.body && typeof req.body === "object" ? req.body : {};
+    const name = normalizeText(payload.name, 20).toUpperCase();
+    const value = Number(payload.value);
+    if (!["LCP", "INP", "CLS"].includes(name) || !Number.isFinite(value) || value < 0) {
+      return res.status(400).json({ ok: false, error: "Некорректная метрика" });
+    }
+    await pool.query(`
+      INSERT INTO web_vital_events (id, metric_name, metric_value, rating, page, platform, connection_type, app_version)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+    `, [
+      randomUUID(), name, Math.min(value, 10_000_000), normalizeText(payload.rating, 20),
+      sanitizeTelemetryText(payload.page, 200).replace(/\?.*$/, ""), normalizeText(payload.platform, 80),
+      normalizeText(payload.connectionType, 40), APP_VERSION
+    ]);
+    res.status(202).json({ ok: true });
+  } catch (error) {
+    console.warn("Web vital telemetry error:", error?.message || error);
+    res.status(202).json({ ok: true });
+  }
+});
+
 app.get("/api/config", async (req, res) => {
   let monetization = buildDefaultMonetizationSettings();
   if (databaseState.ready) {
@@ -3707,7 +4334,10 @@ app.get("/api/config", async (req, res) => {
     paidListingEnabled: monetization.paidListingEnabled,
     paidListingPrices: monetization.paidListingPrices,
     advertisingRates: monetization.advertisingRates,
-    pricingVersion: monetization.pricingVersion
+    pricingVersion: monetization.pricingVersion,
+    taxonomyVersion: CATEGORY_TAXONOMY_VERSION,
+    taxonomy: MARKET_TAXONOMY,
+    telemetryEnabled: true
   });
 });
 
@@ -4370,7 +5000,7 @@ app.post("/api/payments/listing", requireTelegramAuth, syncTelegramUser, payment
   if (!productId) return res.status(400).json({ ok: false, error: "Не указано объявление" });
   try {
     const productResult = await pool.query(`
-      SELECT id, owner_id, name, status, hidden, moderation_status, category, specifications
+      SELECT id, owner_id, name, status, hidden, moderation_status, category, subcategory_id, specifications
       FROM products WHERE id=$1 AND owner_id=$2 AND COALESCE(status,'active') <> 'deleted' LIMIT 1
     `, [productId, userId]);
     const product = productResult.rows[0];
@@ -4378,7 +5008,7 @@ app.post("/api/payments/listing", requireTelegramAuth, syncTelegramUser, payment
     if (product.hidden || (product.moderation_status || "approved") !== "approved") {
       return res.status(409).json({ ok: false, code: "LISTING_NOT_APPROVED", error: "Сначала дождитесь одобрения объявления модерацией" });
     }
-    const requirement = await getListingFeeRequirement(pool, product.category, product.specifications || {});
+    const requirement = await getListingFeeRequirement(pool, product.category, product.specifications || {}, product.subcategory_id || "");
     if (!requirement.required) {
       return res.status(409).json({ ok: false, code: "LISTING_PAYMENT_NOT_REQUIRED", error: "Для этой категории платная публикация сейчас выключена" });
     }
@@ -4684,42 +5314,53 @@ app.get("/api/users/:id", async (req, res) => {
 app.get("/api/users/:id/products", async (req, res) => {
   try {
     const userId = normalizeText(req.params.id, 64);
+    if (!userId) return res.status(400).json({ ok: false, error: "Некорректный ID продавца" });
+    const requestedStatus = normalizeText(req.query.status, 20).toLowerCase();
+    const status = ["active", "sold"].includes(requestedStatus) ? requestedStatus : "all";
+    const page = normalizePositiveInteger(req.query.page, 1, 100000);
+    const limit = normalizePositiveInteger(req.query.limit, 12, 30);
+    const offset = (page - 1) * limit;
+    const countsResult = await pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE COALESCE(p.status, 'active') = 'active' AND COALESCE(p.hidden, FALSE) = FALSE AND COALESCE(p.moderation_status, 'approved') = 'approved')::int AS active_count,
+        COUNT(*) FILTER (WHERE COALESCE(p.status, 'active') = 'sold')::int AS sold_count
+      FROM products p WHERE p.owner_id = $1
+    `, [userId]);
+    const counts = {
+      active: Number(countsResult.rows[0]?.active_count) || 0,
+      sold: Number(countsResult.rows[0]?.sold_count) || 0
+    };
 
-    if (!userId) {
-      return res.status(400).json({ ok: false, error: "Некорректный ID продавца" });
-    }
-
-    const activeResult = await pool.query(
-      `
+    const loadStatus = async selectedStatus => {
+      const active = selectedStatus === "active";
+      return pool.query(`
         SELECT ${PRODUCT_SUMMARY_COLUMNS}
         FROM products p
         WHERE p.owner_id = $1
-          AND COALESCE(p.status, 'active') = 'active'
-          AND COALESCE(p.hidden, FALSE) = FALSE
-          AND COALESCE(p.moderation_status, 'approved') = 'approved'
-        ORDER BY p.created_at DESC
-        LIMIT 30;
-      `,
-      [userId]
-    );
+          AND COALESCE(p.status, 'active') = $2
+          ${active ? "AND COALESCE(p.hidden, FALSE) = FALSE AND COALESCE(p.moderation_status, 'approved') = 'approved'" : ""}
+        ORDER BY ${active ? "p.created_at" : "COALESCE(p.sold_at, p.updated_at, p.created_at)"} DESC
+        LIMIT $3 OFFSET $4
+      `, [userId, selectedStatus, limit, offset]);
+    };
 
-    const soldResult = await pool.query(
-      `
-        SELECT ${PRODUCT_SUMMARY_COLUMNS}
-        FROM products p
-        WHERE p.owner_id = $1
-          AND COALESCE(p.status, 'active') = 'sold'
-        ORDER BY COALESCE(p.sold_at, p.updated_at, p.created_at) DESC
-        LIMIT 30;
-      `,
-      [userId]
-    );
-
+    const activeResult = status === "sold" ? { rows: [] } : await loadStatus("active");
+    const soldResult = status === "active" ? { rows: [] } : await loadStatus("sold");
+    const products = activeResult.rows.map(mapProductSummary);
+    const soldProducts = soldResult.rows.map(mapProductSummary);
+    const selectedCount = status === "sold" ? counts.sold : counts.active;
     res.setHeader("Cache-Control", "public, max-age=15, stale-while-revalidate=30");
     res.json({
       ok: true,
-      products: activeResult.rows.map(mapProductSummary),
-      soldProducts: soldResult.rows.map(mapProductSummary)
+      products,
+      soldProducts: soldResult.rows.map(mapProductSummary),
+      counts,
+      pagination: {
+        page,
+        limit,
+        total: status === "all" ? counts.active + counts.sold : selectedCount,
+        hasMore: status === "all" ? false : offset + (status === "sold" ? soldProducts.length : products.length) < selectedCount
+      }
     });
   } catch (error) {
     console.error("Get seller products error:", error);
@@ -4933,6 +5574,66 @@ app.use((req, res, next) => {
   return next();
 });
 
+app.get("/api/search/suggestions", searchRateLimiter, async (req, res) => {
+  try {
+    const query = normalizeText(req.query.q, 80);
+    const normalized = query.toLowerCase();
+    const limit = Math.max(3, Math.min(12, Number(req.query.limit) || 10));
+    const suggestions = [];
+    const seen = new Set();
+    const add = item => {
+      const key = `${item.type}:${String(item.title || "").toLowerCase()}:${item.category || ""}:${item.subcategoryId || ""}`;
+      if (!item.title || seen.has(key) || suggestions.length >= limit) return;
+      seen.add(key);
+      suggestions.push(item);
+    };
+
+    for (const [category, taxonomy] of Object.entries(MARKET_TAXONOMY)) {
+      for (const subcategory of taxonomy.subcategories || []) {
+        const haystack = [category, subcategory.name, ...(subcategory.aliases || [])].join(" ").toLowerCase();
+        if (!normalized || haystack.includes(normalized)) {
+          add({ type: "category", title: subcategory.name, subtitle: category, category, subcategoryId: subcategory.id });
+        }
+      }
+    }
+
+    if (query.length >= 2 && suggestions.length < limit) {
+      const result = await pool.query(`
+        SELECT p.id, p.name, p.price, p.category, p.subcategory_id, p.updated_at,
+               CASE WHEN NULLIF(p.thumbnail, '') IS NOT NULL OR NULLIF(p.image, '') IS NOT NULL OR EXISTS (SELECT 1 FROM product_images pi WHERE pi.product_id=p.id) THEN TRUE ELSE FALSE END AS has_image
+        FROM products p
+        WHERE COALESCE(p.status, 'active') = 'active'
+          AND COALESCE(p.hidden, FALSE) = FALSE
+          AND COALESCE(p.moderation_status, 'approved') = 'approved'
+          AND (p.name ILIKE $1 OR p.description ILIKE $1 OR p.category ILIKE $1 OR p.subcategory_id ILIKE $1)
+        ORDER BY COALESCE(p.featured_paid, FALSE) DESC, p.views DESC, p.updated_at DESC
+        LIMIT $2
+      `, [`%${query}%`, limit]);
+      for (const row of result.rows) {
+        add({
+          type: "product",
+          title: row.name,
+          subtitle: [row.category, row.price].filter(Boolean).join(" · "),
+          productId: row.id,
+          category: row.category,
+          subcategoryId: row.subcategory_id || "",
+          image: row.has_image ? buildProductMediaUrl(row.id, "thumbnail", row.updated_at) : ""
+        });
+      }
+    }
+
+    if (query.length >= 2) {
+      add({ type: "query", title: query, subtitle: "Искать во всех объявлениях", query });
+    }
+    res.set("Cache-Control", "public, max-age=30, stale-while-revalidate=120");
+    res.json({ ok: true, query, suggestions: suggestions.slice(0, limit) });
+  } catch (error) {
+    console.error("Search suggestions error:", error);
+    recordErrorEvent({ source: "server", message: error.message, stack: error.stack, route: req.path, method: req.method, requestId: req.requestId }).catch(() => {});
+    res.status(500).json({ ok: false, error: "Не удалось загрузить подсказки" });
+  }
+});
+
 app.get("/api/products", async (req, res) => {
   try {
     const page = normalizePositiveInteger(req.query.page, 1, 100000);
@@ -4941,6 +5642,7 @@ app.get("/api/products", async (req, res) => {
     const search = normalizeText(req.query.q, 100);
     const requestedCategory = normalizeText(req.query.category, 60);
     const category = PRODUCT_CATEGORIES.has(requestedCategory) ? requestedCategory : "";
+    const subcategoryId = normalizeText(req.query.subcategoryId, 100);
     const city = normalizeText(req.query.city, 80);
     const district = normalizeText(req.query.district, 80);
     const itemType = normalizeText(req.query.itemType, 80);
@@ -5007,12 +5709,15 @@ app.get("/api/products", async (req, res) => {
           )
           OR LOWER(COALESCE(p.price, '')) LIKE ${likeParameter}
           OR LOWER(COALESCE(p.specifications::text, '')) LIKE ${likeParameter}
+          OR LOWER(COALESCE(p.attributes::text, '')) LIKE ${likeParameter}
+          OR LOWER(COALESCE(p.subcategory_id, '')) LIKE ${likeParameter}
           ${searchCapabilities.pgTrgm ? `OR word_similarity(${exactParameter}, LOWER(COALESCE(p.name, ''))) > 0.52` : ""}
         )`);
         relevanceParts.push(`CASE
           WHEN LOWER(COALESCE(p.name, '')) = ${exactParameter} THEN 14
           WHEN LOWER(COALESCE(p.name, '')) LIKE ${likeParameter} THEN 9
           WHEN LOWER(COALESCE(p.specifications::text, '')) LIKE ${likeParameter} THEN 5
+          WHEN LOWER(COALESCE(p.attributes::text, '')) LIKE ${likeParameter} THEN 5
           WHEN LOWER(COALESCE(p.category, '')) LIKE ${likeParameter} THEN 3
           WHEN EXISTS (SELECT 1 FROM users search_owner WHERE search_owner.telegram_id = p.owner_id AND LOWER(COALESCE(search_owner.business_name, '')) LIKE ${likeParameter}) THEN 3
           WHEN LOWER(COALESCE(p.description, '')) LIKE ${likeParameter} THEN 2
@@ -5027,6 +5732,34 @@ app.get("/api/products", async (req, res) => {
     if (category) {
       values.push(category);
       conditions.push(`p.category = $${values.length}`);
+    }
+
+    if (subcategoryId) {
+      values.push(subcategoryId);
+      conditions.push(`p.subcategory_id = $${values.length}`);
+    }
+
+    const selectedTaxonomySubcategory = category && subcategoryId
+      ? getTaxonomySubcategory(category, subcategoryId)
+      : null;
+    for (const field of selectedTaxonomySubcategory?.fields || []) {
+      const key = String(field.key || "");
+      if (!/^[A-Za-z0-9_]+$/.test(key)) continue;
+      const exactRaw = normalizeText(req.query[`attr_${key}`], 160);
+      const minRaw = normalizeText(req.query[`attr_${key}_min`], 40).replace(",", ".");
+      const maxRaw = normalizeText(req.query[`attr_${key}_max`], 40).replace(",", ".");
+      if (field.type === "number") {
+        const numericExpression = `(CASE WHEN COALESCE(p.attributes->>'${key}', '') ~ '^-?[0-9]+([.,][0-9]+)?$' THEN REPLACE(p.attributes->>'${key}', ',', '.')::numeric END)`;
+        const exact = exactRaw === "" ? null : Number(exactRaw.replace(",", "."));
+        const min = minRaw === "" ? null : Number(minRaw);
+        const max = maxRaw === "" ? null : Number(maxRaw);
+        if (Number.isFinite(exact)) { values.push(exact); conditions.push(`${numericExpression} = $${values.length}`); }
+        if (Number.isFinite(min)) { values.push(min); conditions.push(`${numericExpression} >= $${values.length}`); }
+        if (Number.isFinite(max)) { values.push(max); conditions.push(`${numericExpression} <= $${values.length}`); }
+      } else if (exactRaw) {
+        values.push(exactRaw.toLowerCase());
+        conditions.push(`LOWER(COALESCE(p.attributes->>'${key}', '')) = $${values.length}`);
+      }
     }
 
     if (city) {
@@ -5100,7 +5833,7 @@ app.get("/api/products", async (req, res) => {
     res.json({
       ok: true,
       products: visibleRows.map(mapProductSummary),
-      filters: { search, category, city, district, itemType, brand, model, year, minPrice, maxPrice, sort },
+      filters: { search, category, subcategoryId, city, district, itemType, brand, model, year, minPrice, maxPrice, sort },
       searchMeta: {
         normalized: normalizeSearchText(search),
         expandedTerms: expandedSearchTerms,
@@ -5271,7 +6004,8 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
     const {
       name, price, category, desc, image, thumbnail, images, location, phone,
       allowCalls, allowMessages, condition, negotiable, delivery, district,
-      specifications, status, publicPhoneConsent, publicTelegramConsent
+      specifications, status, publicPhoneConsent, publicTelegramConsent,
+      subcategoryId, attributes
     } = req.body;
 
     const cleanName = normalizeText(name, 120);
@@ -5285,6 +6019,14 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
     const cleanDistrict = normalizeText(district, 80);
     const cleanSpecifications = normalizeSpecifications(specifications);
     const requestedStatus = normalizeProductStatus(status, "active");
+    const inferredSubcategory = inferTaxonomySubcategory(cleanCategory, cleanSpecifications, subcategoryId);
+    const cleanSubcategoryId = inferredSubcategory?.id || normalizeText(subcategoryId, 100);
+    const cleanAttributes = normalizeProductAttributes(cleanCategory, cleanSubcategoryId, attributes, cleanSpecifications);
+    const taxonomyValidation = validateTaxonomySelection(cleanCategory, cleanSubcategoryId, cleanAttributes, requestedStatus);
+    if (!taxonomyValidation.ok) {
+      return res.status(400).json({ ok: false, code: taxonomyValidation.code || "INVALID_TAXONOMY", error: taxonomyValidation.error, missing: taxonomyValidation.missing || [] });
+    }
+    if (taxonomyValidation.subcategory) cleanSpecifications["Подкатегория"] = taxonomyValidation.subcategory.name;
 
     if (!PRODUCT_CATEGORIES.has(cleanCategory)) {
       return res.status(400).json({ ok: false, error: "Выберите допустимую категорию" });
@@ -5330,11 +6072,15 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
       desc: cleanDescription,
       location: cleanLocation,
       district: cleanDistrict,
+      category: cleanCategory,
+      subcategoryId: cleanSubcategoryId,
+      attributes: cleanAttributes,
       specifications: cleanSpecifications,
+      images: cleanImages,
       ownerId: req.telegramUser.id
     }, client);
     const listingFeeRequirement = requestedStatus === "active"
-      ? await getListingFeeRequirement(client, cleanCategory, cleanSpecifications)
+      ? await getListingFeeRequirement(client, cleanCategory, cleanSpecifications, cleanSubcategoryId)
       : { required: false, feeType: "", priceRub: 0 };
     const finalStatus = moderation.blocked
       ? "draft"
@@ -5366,32 +6112,32 @@ app.post("/api/products", requireTelegramAuth, syncTelegramUser, async (req, res
       `
         INSERT INTO products (
           id, owner_id, owner_name, owner_username, name, price, price_amount,
-          category, description, image, images, location, phone, allow_calls, allow_messages,
-          condition, negotiable, delivery, district, specifications, views, status,
-          hidden, auto_hidden, moderation_status, moderation_reason, moderation_matches,
-          moderation_target_status, published_at, expires_at, duplicate_fingerprint
+          category, subcategory_id, attributes, taxonomy_version, description, image, images,
+          location, phone, allow_calls, allow_messages, condition, negotiable, delivery, district,
+          specifications, views, status, hidden, auto_hidden, moderation_status, moderation_reason,
+          moderation_matches, moderation_target_status, published_at, expires_at, duplicate_fingerprint,
+          category_mismatch_score, category_mismatch_reason, image_moderation_status, image_moderation_result
         )
         VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13,
-          $14, $15, $16, $17, $18, $19, $20::jsonb, 0, $21, $22, $23, $24, $25, $26::jsonb, $27,
-          CASE WHEN $21 = 'active' THEN NOW() ELSE NULL END,
-          CASE WHEN $21 = 'active' THEN NOW() + ($28::int * INTERVAL '1 day') ELSE NULL END,
-          $29
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14::jsonb,$15,$16,$17,$18,$19,$20,$21,$22,
+          $23::jsonb,0,$24,$25,$26,$27,$28,$29::jsonb,$30,
+          CASE WHEN $24 = 'active' THEN NOW() ELSE NULL END,
+          CASE WHEN $24 = 'active' THEN NOW() + ($31::int * INTERVAL '1 day') ELSE NULL END,
+          $32,$33,$34,$35,$36::jsonb
         )
         RETURNING *;
       `,
       [
-        id, req.telegramUser.id, ownerName || "Пользователь Telegram",
-        req.telegramUser.username || "", cleanName, cleanPrice, cleanPriceAmount,
-        cleanCategory, cleanDescription, cleanImages[0] || "", JSON.stringify(cleanImages),
+        id, req.telegramUser.id, ownerName || "Пользователь Telegram", req.telegramUser.username || "",
+        cleanName, cleanPrice, cleanPriceAmount, cleanCategory, cleanSubcategoryId, JSON.stringify(cleanAttributes),
+        CATEGORY_TAXONOMY_VERSION, cleanDescription, cleanImages[0] || "", JSON.stringify(cleanImages),
         cleanLocation, cleanPhone, allowCalls !== false, allowMessages !== false, cleanCondition,
-        normalizeBoolean(negotiable), normalizeBoolean(delivery), cleanDistrict,
-        JSON.stringify(cleanSpecifications), finalStatus, moderation.blocked,
-        moderation.blocked, moderation.blocked ? "blocked" : "approved",
-        moderation.reason, JSON.stringify(moderation.matches),
-        requestedStatus === "draft" ? "draft" : "active",
-        PRODUCT_ARCHIVE_DAYS,
-        duplicateFingerprint
+        normalizeBoolean(negotiable), normalizeBoolean(delivery), cleanDistrict, JSON.stringify(cleanSpecifications),
+        finalStatus, moderation.blocked, moderation.blocked, moderation.blocked ? "blocked" : "approved",
+        moderation.reason, JSON.stringify(moderation.matches), requestedStatus === "draft" ? "draft" : "active",
+        PRODUCT_ARCHIVE_DAYS, duplicateFingerprint, Number(moderation.categoryMismatch?.score) || 0,
+        moderation.categoryMismatch?.reason || "", moderation.imageModeration?.status || "",
+        JSON.stringify(moderation.imageModeration || {})
       ]
     );
 
@@ -5463,7 +6209,8 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     const {
       name, price, category, desc, image, thumbnail, images, location, phone,
       allowCalls, allowMessages, condition, negotiable, delivery, district,
-      specifications, status, discountEnabled, originalPrice
+      specifications, status, discountEnabled, originalPrice,
+      subcategoryId, attributes
     } = req.body;
 
     if (!productId) return res.status(400).json({ ok: false, error: "Некорректный ID товара" });
@@ -5483,6 +6230,14 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
     const cleanDistrict = normalizeText(district, 80);
     const cleanSpecifications = normalizeSpecifications(specifications);
     const requestedStatus = normalizeProductStatus(status, "active");
+    const inferredSubcategory = inferTaxonomySubcategory(cleanCategory, cleanSpecifications, subcategoryId);
+    const cleanSubcategoryId = inferredSubcategory?.id || normalizeText(subcategoryId, 100);
+    const cleanAttributes = normalizeProductAttributes(cleanCategory, cleanSubcategoryId, attributes, cleanSpecifications);
+    const taxonomyValidation = validateTaxonomySelection(cleanCategory, cleanSubcategoryId, cleanAttributes, requestedStatus);
+    if (!taxonomyValidation.ok) {
+      return res.status(400).json({ ok: false, code: taxonomyValidation.code || "INVALID_TAXONOMY", error: taxonomyValidation.error, missing: taxonomyValidation.missing || [] });
+    }
+    if (taxonomyValidation.subcategory) cleanSpecifications["Подкатегория"] = taxonomyValidation.subcategory.name;
 
     if (!PRODUCT_CATEGORIES.has(cleanCategory)) {
       return res.status(400).json({ ok: false, error: "Выберите допустимую категорию" });
@@ -5570,15 +6325,20 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
       desc: cleanDescription,
       location: cleanLocation,
       district: cleanDistrict,
+      category: cleanCategory,
+      subcategoryId: cleanSubcategoryId,
+      attributes: cleanAttributes,
       specifications: cleanSpecifications,
+      images: cleanImages,
       ownerId: req.telegramUser.id
     }, client);
-    const existingFeeType = getListingFeeType(existing.category, existing.specifications || {});
+    const existingFeeType = getListingFeeType(existing.category, existing.specifications || {}, existing.subcategory_id || "");
     const listingFeeRequirement = requestedStatus === "active"
-      ? await getListingFeeRequirement(client, cleanCategory, cleanSpecifications)
+      ? await getListingFeeRequirement(client, cleanCategory, cleanSpecifications, cleanSubcategoryId)
       : { required: false, feeType: "", priceRub: 0, pricingVersion: 1 };
     const paidClassificationChanged =
       normalizeText(existing.category, 60) !== cleanCategory ||
+      normalizeText(existing.subcategory_id, 100) !== cleanSubcategoryId ||
       existingFeeType !== listingFeeRequirement.feeType;
     const shouldCheckListingPayment =
       requestedStatus === "active" &&
@@ -5635,6 +6395,13 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
             expires_at = CASE WHEN $19 = 'active' AND COALESCE(status, '') <> 'active' THEN NOW() + ($29::int * INTERVAL '1 day') ELSE expires_at END,
             archived_at = CASE WHEN $19 = 'active' THEN NULL ELSE archived_at END,
             duplicate_fingerprint = $30,
+            subcategory_id = $31,
+            attributes = $32::jsonb,
+            taxonomy_version = $33,
+            category_mismatch_score = $34,
+            category_mismatch_reason = $35,
+            image_moderation_status = $36,
+            image_moderation_result = $37::jsonb,
             updated_at = NOW()
         WHERE id = $1 AND owner_id = $2
         RETURNING *;
@@ -5648,7 +6415,10 @@ app.patch("/api/products/:id", requireTelegramAuth, syncTelegramUser, async (req
         finalPreviousPrice, finalPreviousPriceAmount, finalPriceDroppedAt,
         moderation.blocked ? "blocked" : "approved", moderation.reason,
         JSON.stringify(moderation.matches), moderation.blocked,
-        requestedStatus, cleanThumbnail, PRODUCT_ARCHIVE_DAYS, duplicateFingerprint
+        requestedStatus, cleanThumbnail, PRODUCT_ARCHIVE_DAYS, duplicateFingerprint,
+        cleanSubcategoryId, JSON.stringify(cleanAttributes), CATEGORY_TAXONOMY_VERSION,
+        Number(moderation.categoryMismatch?.score) || 0, moderation.categoryMismatch?.reason || "",
+        moderation.imageModeration?.status || "", JSON.stringify(moderation.imageModeration || {})
       ]
     );
 
@@ -5928,7 +6698,8 @@ app.patch("/api/products/:id/status", requireTelegramAuth, syncTelegramUser, asy
       const listingFeeRequirement = await getListingFeeRequirement(
         client,
         existing.category,
-        existing.specifications || {}
+        existing.specifications || {},
+        existing.subcategory_id || ""
       );
       const listingFeePaid = listingFeeRequirement.required
         ? await hasSuccessfulListingPayment(
@@ -6436,22 +7207,31 @@ app.get("/api/users/:id/reviews", async (req, res) => {
   try {
     const sellerId = normalizeText(req.params.id, 64);
     if (!sellerId) return res.status(400).json({ ok: false, error: "Некорректный ID продавца" });
-    const [reviewsResult, trust] = await Promise.all([
-      pool.query(
-        `SELECT sr.id, sr.rating, sr.comment, sr.created_at, sr.updated_at,
-                COALESCE(NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''),
-                         CASE WHEN COALESCE(u.username, '') <> '' THEN '@' || u.username ELSE NULL END,
-                         'Покупатель') AS reviewer_name
-         FROM seller_reviews sr
-         LEFT JOIN users u ON u.telegram_id = sr.reviewer_id
-         WHERE sr.seller_id = $1
-         ORDER BY sr.updated_at DESC
-         LIMIT 30`,
-        [sellerId]
-      ),
+    const page = normalizePositiveInteger(req.query.page, 1, 100000);
+    const limit = normalizePositiveInteger(req.query.limit, 10, 30);
+    const offset = (page - 1) * limit;
+    const [reviewsResult, countResult, trust] = await Promise.all([
+      pool.query(`
+        SELECT sr.id, sr.rating, sr.comment, sr.created_at, sr.updated_at,
+               COALESCE(NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''),
+                        CASE WHEN COALESCE(u.username, '') <> '' THEN '@' || u.username ELSE NULL END,
+                        'Покупатель') AS reviewer_name
+        FROM seller_reviews sr
+        LEFT JOIN users u ON u.telegram_id = sr.reviewer_id
+        WHERE sr.seller_id = $1
+        ORDER BY sr.updated_at DESC
+        LIMIT $2 OFFSET $3
+      `, [sellerId, limit, offset]),
+      pool.query(`SELECT COUNT(*)::int AS count FROM seller_reviews WHERE seller_id = $1`, [sellerId]),
       getSellerTrust(pool, sellerId)
     ]);
-    res.json({ ok: true, reviews: reviewsResult.rows.map(mapSellerReview), trust });
+    const total = Number(countResult.rows[0]?.count) || 0;
+    res.json({
+      ok: true,
+      reviews: reviewsResult.rows.map(mapSellerReview),
+      trust,
+      pagination: { page, limit, total, hasMore: offset + reviewsResult.rows.length < total }
+    });
   } catch (error) {
     console.error("Get seller reviews error:", error);
     res.status(500).json({ ok: false, error: "Не удалось загрузить отзывы" });
@@ -6966,6 +7746,47 @@ app.patch(
   })
 );
 
+
+app.get(
+  "/api/admin/observability",
+  requireTelegramAuth,
+  syncTelegramUser,
+  requireAdmin,
+  adminRoute(async (req, res) => {
+    const [errorsResult, vitalsResult, errorSummaryResult] = await Promise.all([
+      pool.query(`
+        SELECT id, source, level, message, stack, route, method, request_id, app_version, platform,
+               context, occurrences, first_seen_at, last_seen_at
+        FROM error_events
+        ORDER BY last_seen_at DESC
+        LIMIT 100
+      `),
+      pool.query(`
+        SELECT metric_name,
+               percentile_cont(0.75) WITHIN GROUP (ORDER BY metric_value)::numeric(14,3) AS p75,
+               AVG(metric_value)::numeric(14,3) AS average,
+               COUNT(*)::int AS samples
+        FROM web_vital_events
+        WHERE created_at >= NOW() - INTERVAL '7 days'
+        GROUP BY metric_name
+        ORDER BY metric_name
+      `),
+      pool.query(`
+        SELECT source, level, COUNT(*)::int AS groups, COALESCE(SUM(occurrences),0)::int AS occurrences
+        FROM error_events
+        WHERE last_seen_at >= NOW() - INTERVAL '24 hours'
+        GROUP BY source, level
+        ORDER BY occurrences DESC
+      `)
+    ]);
+    res.json({
+      ok: true,
+      errors: errorsResult.rows,
+      vitals: vitalsResult.rows.map(row => ({ name: row.metric_name, p75: Number(row.p75) || 0, average: Number(row.average) || 0, samples: Number(row.samples) || 0 })),
+      errorSummary: errorSummaryResult.rows.map(row => ({ source: row.source, level: row.level, groups: Number(row.groups) || 0, occurrences: Number(row.occurrences) || 0 }))
+    });
+  })
+);
 
 app.get(
   "/api/admin/system-health",
@@ -7794,7 +8615,7 @@ app.patch(
       const event = eventResult.rows[0];
       if (decision === 'approve') {
         const productResult = await client.query(
-          `SELECT id, owner_id, category, specifications, moderation_target_status
+          `SELECT id, owner_id, category, subcategory_id, specifications, moderation_target_status
            FROM products WHERE id = $1 FOR UPDATE`,
           [event.product_id]
         );
@@ -7811,7 +8632,8 @@ app.patch(
           const listingFeeRequirement = await getListingFeeRequirement(
             client,
             product.category,
-            product.specifications || {}
+            product.specifications || {},
+            product.subcategory_id || ""
           );
           const listingFeePaid = listingFeeRequirement.required
             ? await hasSuccessfulListingPayment(
@@ -8257,7 +9079,19 @@ app.use((error, req, res, next) => {
 
   if (String(req.path || "").startsWith("/api/")) {
     console.error("Unhandled API error:", error);
-    return res.status(500).json({ ok: false, error: "Внутренняя ошибка сервера" });
+    recordErrorEvent({
+      source: "server",
+      level: "error",
+      message: error?.message || "Unhandled API error",
+      stack: error?.stack || "",
+      route: req.path,
+      method: req.method,
+      requestId: req.requestId,
+      userId: req.telegramUser?.id || "",
+      platform: req.headers["user-agent"] || "",
+      context: { code: error?.code || "", status: error?.status || 500 }
+    }).catch(() => {});
+    return res.status(500).json({ ok: false, error: "Внутренняя ошибка сервера", requestId: req.requestId });
   }
 
   return next(error);
@@ -8353,6 +9187,9 @@ async function runProductLifecycleMaintenance() {
     );
 
     await pool.query(`DELETE FROM security_events WHERE created_at < NOW() - ($1::int * INTERVAL '1 day')`, [SECURITY_EVENT_RETENTION_DAYS]);
+    await pool.query(`DELETE FROM error_events WHERE last_seen_at < NOW() - INTERVAL '90 days'`);
+    await pool.query(`DELETE FROM web_vital_events WHERE created_at < NOW() - INTERVAL '90 days'`);
+    await pool.query(`DELETE FROM image_moderation_cache WHERE updated_at < NOW() - INTERVAL '180 days'`);
     await pool.query(`UPDATE payment_orders SET status='failed', updated_at=NOW() WHERE status='creating' AND created_at < NOW() - INTERVAL '15 minutes'`);
 
     if (archived.rowCount || soldCleanup.rowCount || purged.rowCount) {

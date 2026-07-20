@@ -158,9 +158,16 @@ const MAX_PRICE = 100000000;
 const MAX_AD_IMAGE_FILE_BYTES = 15 * 1024 * 1024;
 const MAX_AD_IMAGE_DATA_LENGTH = 8_000_000;
 const CATALOG_PAGE_SIZE = 12;
+const CATALOG_DOM_WINDOW_SIZE = 60;
+const CATALOG_WINDOW_STEP = 12;
 const FEATURE_REQUEST_COLOR = "green";
 const DATA_CACHE_TTL_MS = 30_000;
 const PRODUCT_DETAILS_CACHE_TTL_MS = 60_000;
+const SEARCH_SUGGESTION_DELAY_MS = 180;
+const SEARCH_SUGGESTION_CACHE_TTL_MS = 5 * 60_000;
+const SEARCH_RECENTS_KEY = "alaniaMarketRecentSearches";
+const SELLER_PROFILE_PAGE_SIZE = 12;
+const WEB_VITAL_SAMPLE_RATE = 0.2;
 
 const OTHER_OPTION_VALUE = "__other__";
 const STRUCTURED_SPECIFICATION_KEYS = new Set([
@@ -310,6 +317,12 @@ let productSearchTimer = null;
 let productsRequestSequence = 0;
 let myProductsRequestSequence = 0;
 let catalogAppendStart = null;
+let catalogLoadObserver = null;
+let searchSuggestionTimer = null;
+let searchSuggestionAbortController = null;
+let searchSuggestionIndex = -1;
+const searchSuggestionCache = new Map();
+let telemetrySending = false;
 const featureRequestInFlight = new Set();
 let highlightRequestProductId = "";
 let fallbackAdClientKey = `client-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
@@ -359,6 +372,8 @@ const state = {
     maxPrice: "",
     city: "",
     district: "",
+    subcategoryId: "",
+    attributes: {},
     itemType: "",
     brand: "",
     model: "",
@@ -368,6 +383,7 @@ const state = {
   openedProductId: null,
   telegramUser: null,
   products: [],
+  catalogWindowStart: 0,
   catalogPagination: { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE, hasMore: true },
   productsCacheKey: "",
   productsLoadedAt: 0,
@@ -379,6 +395,12 @@ const state = {
   sellerProducts: [],
   sellerSoldProducts: [],
   openedSeller: null,
+  sellerProfileTab: "active",
+  sellerProfilePagination: {
+    active: { page: 0, pages: 1, total: 0, hasMore: true, loading: false, loaded: false },
+    sold: { page: 0, pages: 1, total: 0, hasMore: true, loading: false, loaded: false },
+    reviews: { page: 0, pages: 1, total: 0, hasMore: true, loading: false, loaded: false }
+  },
   favoriteProducts: [],
   favorites: [],
   savedSearches: [],
@@ -427,6 +449,9 @@ const state = {
     paidListingPrices: { automobile: 199, vacancy: 99, apartment: 299, house: 299, land: 199 },
     advertisingRates: { flat: 0, cpm: 0, cpc: 0 },
     pricingVersion: 1,
+    taxonomyVersion: 1,
+    taxonomy: {},
+    telemetryEnabled: true,
     aiListingAssistantEnabled: true,
     aiModerationEnabled: true,
     aiProviderConfigured: false,
@@ -492,6 +517,7 @@ async function apiRequest(url, options = {}) {
       }
     });
 
+    const responseRequestId = String(response.headers.get("X-Request-Id") || "");
     let data;
     try {
       data = await response.json();
@@ -504,6 +530,7 @@ async function apiRequest(url, options = {}) {
       apiError.status = response.status;
       apiError.code = data.code || "";
       apiError.details = data;
+      apiError.requestId = responseRequestId || data.requestId || "";
       if (data.code === "ADMIN_SECOND_FACTOR_REQUIRED" && url.startsWith("/api/admin") && !options.__adminRetry) {
         const code = window.prompt("Введите дополнительный код администратора");
         if (code) {
@@ -543,6 +570,10 @@ async function loadConfig() {
     state.config.paidListingPrices = { ...state.config.paidListingPrices, ...(data.paidListingPrices || {}) };
     state.config.advertisingRates = { ...state.config.advertisingRates, ...(data.advertisingRates || {}) };
     state.config.pricingVersion = Math.max(1, Number(data.pricingVersion) || 1);
+    state.config.taxonomyVersion = Math.max(1, Number(data.taxonomyVersion) || 1);
+    state.config.taxonomy = data.taxonomy && typeof data.taxonomy === "object" ? data.taxonomy : {};
+    state.config.telemetryEnabled = data.telemetryEnabled !== false;
+    refreshAdTaxonomyFields();
     state.config.aiListingAssistantEnabled = data.aiListingAssistantEnabled !== false;
     state.config.aiModerationEnabled = data.aiModerationEnabled !== false;
     state.config.aiProviderConfigured = Boolean(data.aiProviderConfigured);
@@ -554,6 +585,118 @@ async function loadConfig() {
   } catch (error) {
     console.error("Не удалось загрузить конфигурацию:", error);
   }
+}
+
+function sanitizeClientTelemetry(value, maxLength = 1600) {
+  return String(value || "")
+    .replace(/tma\s+[A-Za-z0-9_%.-]+/gi, "tma [redacted]")
+    .replace(/(?:authorization|cookie|initdata|token|secret|password|phone)\s*[:=]\s*[^\s,;]+/gi, "$1=[redacted]")
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[email]")
+    .replace(/(?:\+?7|8)[\s()\-]*\d{3}[\s()\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}/g, "[phone]")
+    .replace(/data:image\/[^;]+;base64,[A-Za-z0-9+/=]+/gi, "[image-data]")
+    .slice(0, maxLength);
+}
+
+function sendClientTelemetry(path, payload) {
+  if (telemetrySending || state.config.telemetryEnabled === false) return;
+  telemetrySending = true;
+  const body = JSON.stringify(payload);
+  try {
+    if (navigator.sendBeacon) {
+      const blob = new Blob([body], { type: "application/json" });
+      if (navigator.sendBeacon(path, blob)) return;
+    }
+    fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...getTelegramAuthHeaders() },
+      body,
+      keepalive: true
+    }).catch(() => {});
+  } catch {}
+  finally { telemetrySending = false; }
+}
+
+function reportClientError(error, context = {}) {
+  if (!error || telemetrySending) return;
+  const normalized = error instanceof Error ? error : new Error(String(error));
+  sendClientTelemetry("/api/telemetry/errors", {
+    source: "frontend",
+    level: "error",
+    message: sanitizeClientTelemetry(normalized.message || "JavaScript error"),
+    stack: sanitizeClientTelemetry(normalized.stack || "", 8000),
+    route: location.pathname,
+    requestId: sanitizeClientTelemetry(normalized.requestId || "", 80),
+    platform: sanitizeClientTelemetry(tg?.platform || navigator.platform || "", 80),
+    context: {
+      page: state.page,
+      category: state.category,
+      action: sanitizeClientTelemetry(context.action || "", 80),
+      productId: sanitizeClientTelemetry(context.productId || state.openedProductId || "", 80),
+      online: navigator.onLine
+    }
+  });
+}
+
+function initClientMonitoring() {
+  window.addEventListener("error", event => {
+    reportClientError(event.error || new Error(event.message || "Window error"), { action: "window.error" });
+  });
+  window.addEventListener("unhandledrejection", event => {
+    reportClientError(event.reason || new Error("Unhandled promise rejection"), { action: "unhandledrejection" });
+  });
+}
+
+function estimateInp(interactions) {
+  const values = [...interactions.values()].filter(value => value > 0).sort((a, b) => a - b);
+  if (!values.length) return 0;
+  if (values.length <= 50) return values[values.length - 1];
+  return values[Math.max(0, Math.ceil(values.length * 0.98) - 1)] || values[values.length - 1];
+}
+
+function initWebVitalsCollection() {
+  if (!("PerformanceObserver" in window) || Math.random() > WEB_VITAL_SAMPLE_RATE) return;
+  const metrics = { CLS: 0, INP: 0, LCP: 0 };
+  const interactions = new Map();
+  let sent = false;
+  const send = () => {
+    if (sent) return;
+    sent = true;
+    Object.entries(metrics).forEach(([name, value]) => {
+      if (!(value > 0) && name !== "CLS") return;
+      sendClientTelemetry("/api/telemetry/web-vitals", {
+        name, value: Math.round(value * 1000) / 1000,
+        rating: name === "LCP" ? (value <= 2500 ? "good" : value <= 4000 ? "needs-improvement" : "poor")
+          : name === "INP" ? (value <= 200 ? "good" : value <= 500 ? "needs-improvement" : "poor")
+          : (value <= 0.1 ? "good" : value <= 0.25 ? "needs-improvement" : "poor"),
+        page: state.page,
+        platform: tg?.platform || navigator.platform || "",
+        connectionType: navigator.connection?.effectiveType || ""
+      });
+    });
+  };
+  try {
+    new PerformanceObserver(list => {
+      const last = list.getEntries().at(-1);
+      if (last) metrics.LCP = last.startTime;
+    }).observe({ type: "largest-contentful-paint", buffered: true });
+  } catch {}
+  try {
+    new PerformanceObserver(list => {
+      list.getEntries().forEach(entry => { if (!entry.hadRecentInput) metrics.CLS += entry.value; });
+    }).observe({ type: "layout-shift", buffered: true });
+  } catch {}
+  try {
+    new PerformanceObserver(list => {
+      list.getEntries().forEach(entry => {
+        if (!(entry.duration > 0)) return;
+        const key = entry.interactionId || `${entry.name}:${Math.round(entry.startTime)}`;
+        interactions.set(key, Math.max(interactions.get(key) || 0, entry.duration));
+      });
+      metrics.INP = estimateInp(interactions);
+    }).observe({ type: "event", buffered: true, durationThreshold: 40 });
+  } catch {}
+  window.addEventListener("pagehide", send, { once: true });
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") send(); });
 }
 
 function getAdClientKey() {
@@ -701,19 +844,26 @@ function isRealEstateCategory(category = "") {
   return String(category || "").trim() === "Недвижимость";
 }
 
-function getPaidListingFeeInfo(category = "", itemType = "") {
+function getPaidListingFeeInfo(category = "", subcategoryValue = "") {
   const enabled = state.config.paidListingEnabled || {};
   const prices = state.config.paidListingPrices || {};
   const cleanCategory = String(category || "").trim();
-  const cleanType = String(itemType || "").trim().toLowerCase();
-  if (cleanCategory === "Вакансии" && enabled.vacancy) return { key: "vacancy", priceRub: Number(prices.vacancy) || 0 };
-  if (cleanCategory === "Авто" && cleanType !== "автозапчасть" && enabled.automobile) return { key: "automobile", priceRub: Number(prices.automobile) || 0 };
-  if (cleanCategory === "Недвижимость") {
-    if (cleanType.includes("квартир") && enabled.apartment) return { key: "apartment", priceRub: Number(prices.apartment) || 0 };
-    if ((cleanType.includes("дом") || cleanType.includes("коттедж")) && enabled.house) return { key: "house", priceRub: Number(prices.house) || 0 };
-    if (cleanType.includes("участ") && enabled.land) return { key: "land", priceRub: Number(prices.land) || 0 };
+  const cleanValue = String(subcategoryValue || "").trim();
+  const taxonomySubcategory = getMarketSubcategory(cleanCategory, cleanValue);
+  let feeType = taxonomySubcategory?.feeType || "";
+
+  if (!feeType && cleanCategory === "Вакансии") feeType = "vacancy";
+  if (!feeType && cleanCategory === "Авто" && !cleanValue.toLowerCase().includes("запчаст")) feeType = "automobile";
+  if (!feeType && cleanCategory === "Недвижимость") {
+    const lower = cleanValue.toLowerCase();
+    if (lower.includes("квартир")) feeType = "apartment";
+    else if (lower.includes("дом") || lower.includes("коттедж")) feeType = "house";
+    else if (lower.includes("участ")) feeType = "land";
   }
-  return null;
+
+  return feeType && enabled[feeType]
+    ? { key: feeType, priceRub: Number(prices[feeType]) || 0 }
+    : null;
 }
 
 function updateAdPublicationFeeHint(category = "", itemType = "") {
@@ -864,10 +1014,62 @@ function getDistrictOptions(city = "") {
   return uniqueSorted(CITY_DISTRICTS[city] || []);
 }
 
+const RANGE_TAXONOMY_FILTER_KEYS = new Set(["areaM2", "landArea", "mileageKm", "ageMonths", "storageGb", "year"]);
+
+function readCatalogTaxonomyAttributeFilters() {
+  const result = {};
+  document.querySelectorAll("#filterTaxonomyAttributesGrid [data-filter-attribute]").forEach(input => {
+    const key = input.dataset.filterAttribute;
+    const mode = input.dataset.filterMode || "exact";
+    const value = String(input.value || "").trim();
+    if (!key || !value) return;
+    if (!result[key]) result[key] = {};
+    result[key][mode] = value;
+  });
+  return result;
+}
+
+function refreshCatalogTaxonomyAttributeFilters(values = {}) {
+  const root = document.getElementById("filterTaxonomyAttributes");
+  const grid = document.getElementById("filterTaxonomyAttributesGrid");
+  if (!root || !grid) return;
+  const subcategory = getMarketSubcategory(state.category, document.getElementById("filterSubcategory")?.value || "");
+  const fields = subcategory?.fields || [];
+  root.hidden = fields.length === 0;
+  if (!fields.length) { grid.innerHTML = ""; return; }
+  const saved = values && typeof values === "object" ? values : {};
+  grid.innerHTML = fields.map(field => {
+    const filter = saved[field.key] && typeof saved[field.key] === "object" ? saved[field.key] : {};
+    if (field.type === "select") {
+      return `<label><span>${escapeHTML(field.label)}</span><select data-filter-attribute="${escapeHTML(field.key)}" data-filter-mode="exact"><option value="">Любое значение</option>${(field.options || []).map(option => `<option${String(option) === String(filter.exact || "") ? " selected" : ""}>${escapeHTML(option)}</option>`).join("")}</select></label>`;
+    }
+    if (field.type === "number" && RANGE_TAXONOMY_FILTER_KEYS.has(field.key)) {
+      return `<fieldset class="taxonomy-range-filter"><legend>${escapeHTML(field.label)}</legend><input type="number" inputmode="decimal" step="any" placeholder="От" data-filter-attribute="${escapeHTML(field.key)}" data-filter-mode="min" value="${escapeHTML(filter.min || "")}"><input type="number" inputmode="decimal" step="any" placeholder="До" data-filter-attribute="${escapeHTML(field.key)}" data-filter-mode="max" value="${escapeHTML(filter.max || "")}"></fieldset>`;
+    }
+    const type = field.type === "number" ? "number" : "text";
+    return `<label><span>${escapeHTML(field.label)}</span><input type="${type}" ${type === "number" ? 'inputmode="decimal" step="any"' : 'maxlength="100"'} placeholder="Любое значение" data-filter-attribute="${escapeHTML(field.key)}" data-filter-mode="exact" value="${escapeHTML(filter.exact || "")}"></label>`;
+  }).join("");
+}
+
+function serializeCatalogAttributeFilters(filters = {}) {
+  return JSON.stringify(Object.keys(filters || {}).sort().map(key => [key, filters[key]]));
+}
+
 function refreshCatalogFilterOptions(values = {}) {
   const city = values.city ?? document.getElementById("filterCity")?.value ?? "";
   const itemType = values.itemType ?? document.getElementById("filterItemType")?.value ?? "";
   const brand = values.brand ?? document.getElementById("filterBrand")?.value ?? "";
+  const subcategoryField = document.getElementById("filterSubcategoryField");
+  const subcategorySelect = document.getElementById("filterSubcategory");
+  const taxonomySubcategories = state.category === "Все" ? [] : (getMarketTaxonomyCategory(state.category)?.subcategories || []);
+  const selectedSubcategory = String(values.subcategoryId ?? subcategorySelect?.value ?? "");
+  if (subcategoryField) subcategoryField.hidden = taxonomySubcategories.length === 0;
+  if (subcategorySelect) {
+    subcategorySelect.innerHTML = '<option value="">Все подкатегории</option>' + taxonomySubcategories.map(item =>
+      `<option value="${escapeHTML(item.id)}"${String(item.id) === selectedSubcategory ? " selected" : ""}>${escapeHTML(item.name)}</option>`
+    ).join("");
+  }
+  refreshCatalogTaxonomyAttributeFilters(values.attributes || {});
   const labels = getStructuredFieldLabels(state.category);
   setTextContent("filterItemTypeLabel", labels.itemType);
   setTextContent("filterBrandLabel", labels.brand);
@@ -911,14 +1113,119 @@ function refreshAdDistrictOptions(selected = "") {
   updateCustomSelectInput("adDistrict", "adDistrictCustom");
 }
 
+function getMarketTaxonomyCategory(category = "") {
+  return state.config.taxonomy?.[category] || null;
+}
+
+function getMarketSubcategory(category = "", subcategoryId = "") {
+  const items = getMarketTaxonomyCategory(category)?.subcategories || [];
+  const normalized = String(subcategoryId || "").toLowerCase();
+  return items.find(item => String(item.id || "").toLowerCase() === normalized || String(item.name || "").toLowerCase() === normalized) || null;
+}
+
+function inferClientSubcategory(category = "", explicit = "", specifications = {}) {
+  const direct = getMarketSubcategory(category, explicit);
+  if (direct) return direct.id;
+  const candidates = [
+    explicit,
+    getSpecificationValue(specifications, ["Подкатегория", "Тип товара", "Тип недвижимости", "Сфера работы", "Тип"])
+  ].map(value => String(value || "").trim().toLowerCase()).filter(Boolean);
+  const subcategories = getMarketTaxonomyCategory(category)?.subcategories || [];
+  for (const candidate of candidates) {
+    const matched = subcategories.find(item => [item.id, item.name, ...(item.aliases || [])]
+      .some(value => String(value || "").trim().toLowerCase() === candidate));
+    if (matched) return matched.id;
+  }
+  return "";
+}
+
+function getProductTaxonomyAttributes(product = {}, subcategoryId = "") {
+  const attributes = product.attributes && typeof product.attributes === "object" ? { ...product.attributes } : {};
+  const subcategory = getMarketSubcategory(product.category, subcategoryId);
+  for (const field of subcategory?.fields || []) {
+    if (attributes[field.key] !== undefined && attributes[field.key] !== "") continue;
+    const legacy = getSpecificationValue(product.specifications, [
+      field.label,
+      field.key,
+      field.key === "brand" ? "Марка / бренд" : "",
+      field.key === "year" ? "Год выпуска" : "",
+      field.key === "employmentType" ? "Тип занятости" : "",
+      field.key === "schedule" ? "График работы" : "",
+      field.key === "experience" ? "Опыт работы" : ""
+    ].filter(Boolean));
+    if (legacy) attributes[field.key] = field.type === "number" && Number.isFinite(Number(legacy)) ? Number(legacy) : legacy;
+  }
+  return attributes;
+}
+
+function readAdTaxonomyAttributes() {
+  const result = {};
+  document.querySelectorAll("#adTaxonomyAttributesGrid [data-taxonomy-key]").forEach(input => {
+    const key = input.dataset.taxonomyKey;
+    const value = String(input.value || "").trim();
+    if (!key || !value) return;
+    result[key] = input.type === "number" ? Number(value.replace(",", ".")) : value;
+  });
+  return result;
+}
+
+function refreshAdTaxonomyFields(values = {}) {
+  const category = document.getElementById("adCategory")?.value || "";
+  const fieldRoot = document.getElementById("adSubcategoryField");
+  const select = document.getElementById("adSubcategory");
+  const card = document.getElementById("adTaxonomyAttributes");
+  const grid = document.getElementById("adTaxonomyAttributesGrid");
+  if (!fieldRoot || !select || !card || !grid) return;
+  const subcategories = getMarketTaxonomyCategory(category)?.subcategories || [];
+  const selected = values.subcategoryId ?? select.value ?? "";
+  fieldRoot.hidden = subcategories.length === 0;
+  if (subcategories.length) {
+    const wanted = String(selected || "");
+    select.innerHTML = '<option value="">Выберите подкатегорию</option>' + subcategories.map(item =>
+      `<option value="${escapeHTML(item.id)}"${item.id === wanted ? " selected" : ""}>${escapeHTML(item.name)}</option>`
+    ).join("");
+  } else {
+    select.innerHTML = '<option value="">Выберите подкатегорию</option>';
+  }
+  const subcategory = getMarketSubcategory(category, select.value);
+  const attributes = values.attributes && typeof values.attributes === "object" ? values.attributes : readAdTaxonomyAttributes();
+  const fields = subcategory?.fields || [];
+  card.hidden = fields.length === 0;
+  grid.innerHTML = fields.map(field => {
+    const value = attributes[field.key] ?? "";
+    const required = field.required ? " required" : "";
+    const star = field.required ? " *" : "";
+    if (field.type === "select") {
+      return `<label><span>${escapeHTML(field.label)}${star}</span><select data-taxonomy-key="${escapeHTML(field.key)}"${required}><option value="">Выберите</option>${(field.options || []).map(option => `<option${String(option) === String(value) ? " selected" : ""}>${escapeHTML(option)}</option>`).join("")}</select></label>`;
+    }
+    const numberAttrs = field.type === "number"
+      ? ` type="number" inputmode="decimal"${field.min !== undefined ? ` min="${Number(field.min)}"` : ""}${field.max !== undefined ? ` max="${Number(field.max)}"` : ""} step="any"`
+      : ' type="text" maxlength="160"';
+    return `<label><span>${escapeHTML(field.label)}${star}</span><input data-taxonomy-key="${escapeHTML(field.key)}"${numberAttrs} value="${escapeHTML(value)}"${required}></label>`;
+  }).join("");
+  updateAdPublicationFeeHint(category, subcategory?.name || "");
+}
+
+function getTaxonomyValidationError(ad) {
+  const taxonomy = getMarketTaxonomyCategory(ad.category);
+  if (!taxonomy) return "";
+  if (!ad.subcategoryId) return "Выберите подкатегорию объявления";
+  const subcategory = getMarketSubcategory(ad.category, ad.subcategoryId);
+  if (!subcategory) return "Выберите корректную подкатегорию";
+  const missing = (subcategory.fields || []).filter(field => field.required && (ad.attributes?.[field.key] === undefined || ad.attributes?.[field.key] === "")).map(field => field.label);
+  return missing.length ? `Заполните обязательные поля: ${missing.join(", ")}` : "";
+}
+
 function refreshAdStructuredFields(values = {}) {
   const category = document.getElementById("adCategory")?.value || "";
   const root = document.getElementById("adStructuredFields");
   const enabled = Boolean(PRODUCT_TAXONOMY[category]);
+  const selectedSubcategory = getMarketSubcategory(category, document.getElementById("adSubcategory")?.value || "");
+  const taxonomyManaged = Boolean(selectedSubcategory?.fields?.length);
   updateCategorySpecificUI(category);
   const labels = getStructuredFieldLabels(category);
-  if (root) root.hidden = !enabled;
-  if (!enabled) { updateAdPublicationFeeHint(category, ""); return; }
+  if (root) root.hidden = !enabled || taxonomyManaged;
+  if (!enabled || taxonomyManaged) { updateAdPublicationFeeHint(category, selectedSubcategory?.name || ""); return; }
   setTextContent("adItemTypeLabel", labels.itemType);
   setTextContent("adBrandLabel", labels.brand);
   setTextContent("adModelLabel", labels.model);
@@ -971,7 +1278,8 @@ function getSpecificationValue(specifications, aliases = []) {
 
 function getStructuredAdValues() {
   const category = document.getElementById("adCategory")?.value || "";
-  if (!PRODUCT_TAXONOMY[category]) return { itemType: "", brand: "", model: "", year: "" };
+  const root = document.getElementById("adStructuredFields");
+  if (!PRODUCT_TAXONOMY[category] || root?.hidden) return { itemType: "", brand: "", model: "", year: "" };
   return {
     itemType: document.getElementById("adItemType")?.value || "",
     brand: readSelectWithCustom("adBrand", "adBrandCustom"),
@@ -981,14 +1289,15 @@ function getStructuredAdValues() {
 }
 
 function getStructuredAdValidationError(ad) {
-  // Поля точных характеристик улучшают фильтры, но не являются обязательными.
-  return "";
+  return getTaxonomyValidationError(ad);
 }
 
 function getActiveCatalogFilterCount() {
   const filters = state.filters || {};
-  return [filters.minPrice, filters.maxPrice, filters.city, filters.district, filters.itemType, filters.brand, filters.model, filters.year]
-    .filter(value => String(value || "").trim()).length + (filters.sort && filters.sort !== "newest" ? 1 : 0);
+  const attributeCount = Object.values(filters.attributes || {}).reduce((count, item) =>
+    count + Object.values(item && typeof item === "object" ? item : {}).filter(value => String(value || "").trim()).length, 0);
+  return [filters.minPrice, filters.maxPrice, filters.city, filters.district, filters.subcategoryId, filters.itemType, filters.brand, filters.model, filters.year]
+    .filter(value => String(value || "").trim()).length + attributeCount + (filters.sort && filters.sort !== "newest" ? 1 : 0);
 }
 
 function updateCatalogFilterBadge() {
@@ -1062,6 +1371,8 @@ function getProductsCacheKey() {
     filters.maxPrice,
     String(filters.city || "").toLowerCase(),
     String(filters.district || "").toLowerCase(),
+    String(filters.subcategoryId || "").toLowerCase(),
+    serializeCatalogAttributeFilters(filters.attributes || {}),
     String(filters.itemType || "").toLowerCase(),
     String(filters.brand || "").toLowerCase(),
     String(filters.model || "").toLowerCase(),
@@ -1106,11 +1417,21 @@ function applyCatalogFiltersFromUI() {
     return false;
   }
 
+  const taxonomyAttributes = readCatalogTaxonomyAttributeFilters();
+  for (const filter of Object.values(taxonomyAttributes)) {
+    if (filter?.min !== undefined && filter?.max !== undefined && Number(filter.min) > Number(filter.max)) {
+      alert("Минимальное значение характеристики не может быть выше максимального");
+      return false;
+    }
+  }
+
   state.filters = {
     minPrice,
     maxPrice,
     city: value("filterCity"),
     district: value("filterDistrict"),
+    subcategoryId: value("filterSubcategory"),
+    attributes: taxonomyAttributes,
     itemType: value("filterItemType"),
     brand: value("filterBrand"),
     model: value("filterModel"),
@@ -1126,7 +1447,7 @@ function applyCatalogFiltersFromUI() {
 }
 
 function resetCatalogFilters() {
-  state.filters = { minPrice: "", maxPrice: "", city: "", district: "", itemType: "", brand: "", model: "", year: "", sort: "newest" };
+  state.filters = { minPrice: "", maxPrice: "", city: "", district: "", subcategoryId: "", attributes: {}, itemType: "", brand: "", model: "", year: "", sort: "newest" };
   syncCatalogFiltersUI();
   state.catalogPagination = { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE, hasMore: true };
   loadProducts({ force: true });
@@ -1135,6 +1456,21 @@ function resetCatalogFilters() {
 
 function isFresh(timestamp, ttl = DATA_CACHE_TTL_MS) {
   return Number(timestamp) > 0 && Date.now() - Number(timestamp) < ttl;
+}
+
+function preloadCatalogLeadImage(product) {
+  const source = safeImageUrl(product?.thumbnail || getProductImages(product || {})[0] || "");
+  if (!source || source === DEFAULT_IMAGE || source.startsWith("data:")) return;
+  let link = document.getElementById("catalogLeadImagePreload");
+  if (!link) {
+    link = document.createElement("link");
+    link.id = "catalogLeadImagePreload";
+    link.rel = "preload";
+    link.as = "image";
+    link.setAttribute("fetchpriority", "high");
+    document.head.appendChild(link);
+  }
+  if (link.href !== new URL(source, location.href).href) link.href = source;
 }
 
 async function loadProducts({ force = false, append = false } = {}) {
@@ -1148,6 +1484,7 @@ async function loadProducts({ force = false, append = false } = {}) {
   }
 
   const nextPage = append ? Number(state.catalogPagination.page || 0) + 1 : 1;
+  if (!append) state.catalogWindowStart = 0;
   if (append && state.catalogPagination.hasMore === false) return;
 
   const requestSequence = ++productsRequestSequence;
@@ -1176,6 +1513,13 @@ async function loadProducts({ force = false, append = false } = {}) {
   if (filters.maxPrice) params.set("maxPrice", filters.maxPrice);
   if (filters.city) params.set("city", filters.city);
   if (filters.district) params.set("district", filters.district);
+  if (filters.subcategoryId) params.set("subcategoryId", filters.subcategoryId);
+  for (const [key, filter] of Object.entries(filters.attributes || {})) {
+    if (!filter || typeof filter !== "object") continue;
+    if (filter.exact) params.set(`attr_${key}`, filter.exact);
+    if (filter.min) params.set(`attr_${key}_min`, filter.min);
+    if (filter.max) params.set(`attr_${key}_max`, filter.max);
+  }
   if (filters.itemType) params.set("itemType", filters.itemType);
   if (filters.brand) params.set("brand", filters.brand);
   if (filters.model) params.set("model", filters.model);
@@ -1190,6 +1534,7 @@ async function loadProducts({ force = false, append = false } = {}) {
     if (requestSequence !== productsRequestSequence) return;
 
     const incoming = data.products || [];
+    if (!append && incoming[0]) preloadCatalogLeadImage(incoming[0]);
     if (append) {
       const knownIds = new Set(state.products.map(item => item.id));
       const newProducts = incoming.filter(item => !knownIds.has(item.id));
@@ -1224,8 +1569,42 @@ async function loadProducts({ force = false, append = false } = {}) {
   }
 }
 
+function shiftCatalogWindow(nextStart) {
+  const products = getFiltered();
+  const maxStart = Math.max(0, products.length - Math.min(CATALOG_DOM_WINDOW_SIZE, products.length));
+  const clampedStart = Math.max(0, Math.min(Number(nextStart) || 0, maxStart));
+  if (clampedStart === Number(state.catalogWindowStart || 0)) return;
+
+  const movingForward = clampedStart > Number(state.catalogWindowStart || 0);
+  const anchorIndex = movingForward ? clampedStart : Number(state.catalogWindowStart || 0);
+  const anchorId = products[anchorIndex]?.id || "";
+  const safeAnchorId = String(anchorId).replace(/["\\]/g, "\\$&");
+  const anchorSelector = anchorId ? `[data-product-id="${safeAnchorId}"]` : "";
+  const previousTop = anchorSelector ? document.querySelector(anchorSelector)?.getBoundingClientRect().top : null;
+
+  state.catalogWindowStart = clampedStart;
+  renderProducts();
+
+  if (anchorSelector && Number.isFinite(previousTop)) {
+    requestAnimationFrame(() => {
+      const nextTop = document.querySelector(anchorSelector)?.getBoundingClientRect().top;
+      if (Number.isFinite(nextTop)) window.scrollBy({ top: nextTop - previousTop, behavior: "auto" });
+    });
+  }
+}
+
+function showPreviousCatalogProducts() {
+  shiftCatalogWindow(Math.max(0, Number(state.catalogWindowStart || 0) - CATALOG_WINDOW_STEP));
+}
+
 function loadMoreProducts() {
   if (state.productsLoading) return;
+  const products = getFiltered();
+  const currentStart = Number(state.catalogWindowStart || 0);
+  if (currentStart + CATALOG_DOM_WINDOW_SIZE < products.length) {
+    shiftCatalogWindow(currentStart + CATALOG_WINDOW_STEP);
+    return;
+  }
   loadProducts({ append: true });
 }
 
@@ -2358,9 +2737,19 @@ function renderProducts() {
   }
 
   const feedAds = getAdsByPlacement("catalog_feed");
+  const maxWindowStart = Math.max(0, products.length - Math.min(CATALOG_DOM_WINDOW_SIZE, products.length));
+  state.catalogWindowStart = Math.max(0, Math.min(Number(state.catalogWindowStart || 0), maxWindowStart));
+  const windowStart = Number(state.catalogWindowStart || 0);
+  const visibleProducts = products.slice(windowStart, windowStart + CATALOG_DOM_WINDOW_SIZE);
+  const hasHiddenPrevious = windowStart > 0;
+  const hasHiddenNext = windowStart + visibleProducts.length < products.length;
+  const hasServerMore = typeof state.catalogPagination.hasMore === "boolean"
+    ? state.catalogPagination.hasMore
+    : Number(state.catalogPagination.page || 0) < Number(state.catalogPagination.pages || 1);
   const renderSignature = [
     state.productsCacheKey,
-    ...products.map(product => [
+    windowStart,
+    ...visibleProducts.map(product => [
       product.id,
       product.updatedAt || 0,
       state.favorites.includes(product.id) ? 1 : 0,
@@ -2370,24 +2759,14 @@ function renderProducts() {
     ...feedAds.map(ad => `${ad.id}:${ad.updatedAt || 0}`)
   ].join("|");
 
-  const appendFrom = Number.isInteger(catalogAppendStart) ? catalogAppendStart : null;
-  const canAppendWithoutRerender =
-    appendFrom !== null &&
-    appendFrom > 0 &&
-    appendFrom <= products.length &&
-    productList.dataset.catalogCacheKey === state.productsCacheKey &&
-    productList.children.length > 0;
-
-  if (canAppendWithoutRerender) {
-    const newMarkup = buildCatalogFeedMarkup(products, feedAds, appendFrom);
-    if (newMarkup) {
-      const template = document.createElement("template");
-      template.innerHTML = newMarkup;
-      productList.appendChild(template.content);
-    }
-    productList.dataset.renderSignature = renderSignature;
-  } else if (productList.dataset.renderSignature !== renderSignature) {
-    productList.innerHTML = buildCatalogFeedMarkup(products, feedAds, 0);
+  if (productList.dataset.renderSignature !== renderSignature) {
+    const previousNavigation = hasHiddenPrevious
+      ? `<button class="catalog-window-nav" type="button" onclick="showPreviousCatalogProducts()">↑ Показать предыдущие объявления</button>`
+      : "";
+    productList.innerHTML = previousNavigation;
+    const template = document.createElement("template");
+    template.innerHTML = buildCatalogFeedMarkup(visibleProducts, feedAds, 0);
+    productList.appendChild(template.content);
     productList.dataset.renderSignature = renderSignature;
     productList.dataset.catalogCacheKey = state.productsCacheKey;
   }
@@ -2395,13 +2774,13 @@ function renderProducts() {
   catalogAppendStart = null;
 
   if (loadMoreButton) {
-    const hasMore = typeof state.catalogPagination.hasMore === "boolean"
-      ? state.catalogPagination.hasMore
-      : Number(state.catalogPagination.page || 0) < Number(state.catalogPagination.pages || 1);
-    loadMoreButton.hidden = !hasMore;
+    loadMoreButton.hidden = !hasHiddenNext && !hasServerMore;
     loadMoreButton.disabled = state.productsLoading;
-    loadMoreButton.textContent = state.productsLoading ? "Загружаем…" : "Показать ещё";
+    loadMoreButton.textContent = state.productsLoading
+      ? "Загружаем…"
+      : hasHiddenNext ? "Показать следующие объявления" : "Показать ещё";
   }
+
 }
 
 function getProductStatusLabel(status, product = null) {
@@ -2494,8 +2873,8 @@ function getProductCard(product, options = {}) {
   const historyTime = product.soldAt || product.updatedAt || product.createdAt;
 
   return `
-    <div class="product-card ${options.ownerActions ? "owner-product-card" : ""} ${isVacancyCard ? "is-vacancy-card" : ""} ${status !== "active" ? "is-inactive" : ""} ${isSoldHistory ? "sold-history-card is-noninteractive" : ""} ${featuredClass}" ${interactionAttributes}>
-      <img src="${image}" alt="${name}" loading="${options.priority ? "eager" : "lazy"}" decoding="async" fetchpriority="${options.priority ? "high" : "low"}" onerror="handleImageError(this)">
+    <div class="product-card ${options.ownerActions ? "owner-product-card" : ""} ${isVacancyCard ? "is-vacancy-card" : ""} ${status !== "active" ? "is-inactive" : ""} ${isSoldHistory ? "sold-history-card is-noninteractive" : ""} ${featuredClass}" data-product-id="${productId}" ${interactionAttributes}>
+      <img src="${image}" alt="${name}" width="480" height="360" loading="${options.priority ? "eager" : "lazy"}" decoding="async" fetchpriority="${options.priority ? "high" : "low"}" onerror="handleImageError(this)">
       <div class="${options.ownerActions ? "product-card-info" : ""}">
         ${featuredBadge}
         ${featureRequestBadge}
@@ -2716,8 +3095,9 @@ function applySavedSearch(id) {
   state.search = saved.search || "";
   state.category = saved.category || "Все";
   state.filters = {
-    minPrice: "", maxPrice: "", city: "", district: "", itemType: "", brand: "", model: "", year: "", sort: "newest",
-    ...(saved.filters || {})
+    minPrice: "", maxPrice: "", city: "", district: "", subcategoryId: "", attributes: {}, itemType: "", brand: "", model: "", year: "", sort: "newest",
+    ...(saved.filters || {}),
+    attributes: saved.filters?.attributes && typeof saved.filters.attributes === "object" ? saved.filters.attributes : {}
   };
   const searchInput = document.getElementById("searchInput");
   if (searchInput) searchInput.value = state.search;
@@ -3882,6 +4262,14 @@ function getAdFormData() {
   const specifications = parseSpecificationsText(specificationsText);
   const structured = getStructuredAdValues();
   const category = document.getElementById("adCategory")?.value || "";
+  const subcategoryId = document.getElementById("adSubcategory")?.value || "";
+  const attributes = readAdTaxonomyAttributes();
+  const subcategory = getMarketSubcategory(category, subcategoryId);
+  if (subcategory?.name) specifications["Подкатегория"] = subcategory.name;
+  for (const field of subcategory?.fields || []) {
+    const value = attributes[field.key];
+    if (value !== undefined && value !== "") specifications[field.label] = value;
+  }
   if (isVacancyCategory(category)) {
     if (structured.itemType) specifications["Сфера работы"] = structured.itemType;
     if (structured.brand) specifications["График работы"] = structured.brand;
@@ -3904,6 +4292,8 @@ function getAdFormData() {
     discountPrice: discount.discountPrice,
     discountEnabled: discount.enabled,
     category,
+    subcategoryId,
+    attributes,
     condition: document.getElementById("adCondition")?.value || "used",
     desc: document.getElementById("adDesc")?.value.trim() || "",
     location: document.getElementById("adLocation")?.value || "Владикавказ",
@@ -4466,6 +4856,8 @@ async function publishAd(status = "active") {
         discountEnabled: ad.discountEnabled,
         originalPrice: ad.discountEnabled ? formatPrice(getPriceNumber(ad.originalPrice)) : "",
         category: ad.category,
+        subcategoryId: ad.subcategoryId,
+        attributes: ad.attributes,
         desc: ad.desc,
         image: mainImage,
         thumbnail,
@@ -4598,6 +4990,7 @@ function clearCreateForm() {
   const discountEditor = document.getElementById("adDiscountEditor");
   const desc = document.getElementById("adDesc");
   const category = document.getElementById("adCategory");
+  const subcategory = document.getElementById("adSubcategory");
   const condition = document.getElementById("adCondition");
   const location = document.getElementById("adLocation");
   const district = document.getElementById("adDistrict");
@@ -4625,6 +5018,8 @@ function clearCreateForm() {
   if (discountEditor) discountEditor.hidden = true;
   if (desc) desc.value = "";
   if (category) category.selectedIndex = 0;
+  if (subcategory) subcategory.value = "";
+  refreshAdTaxonomyFields({ subcategoryId: "", attributes: {} });
   if (condition) condition.value = "used";
   if (location) location.selectedIndex = 0;
   if (district) district.value = "";
@@ -4700,6 +5095,7 @@ async function editAd(id) {
   const discountEditor = document.getElementById("adDiscountEditor");
   const desc = document.getElementById("adDesc");
   const category = document.getElementById("adCategory");
+  const subcategory = document.getElementById("adSubcategory");
   const condition = document.getElementById("adCondition");
   const location = document.getElementById("adLocation");
   const district = document.getElementById("adDistrict");
@@ -4718,6 +5114,10 @@ async function editAd(id) {
   if (discountEditor) discountEditor.hidden = false;
   if (desc) desc.value = product.desc || "";
   if (category) category.value = product.category || "";
+  const inferredSubcategoryId = inferClientSubcategory(product.category, product.subcategoryId, product.specifications);
+  const taxonomyAttributes = getProductTaxonomyAttributes(product, inferredSubcategoryId);
+  refreshAdTaxonomyFields({ subcategoryId: inferredSubcategoryId, attributes: taxonomyAttributes });
+  if (subcategory && inferredSubcategoryId) subcategory.value = inferredSubcategoryId;
   if (condition) condition.value = product.condition || "used";
   if (location) {
     const hasLocation = Array.from(location.options).some(
@@ -5045,6 +5445,119 @@ async function deleteAd(id) {
    EVENTS
 ======================= */
 
+function getRecentSearches() {
+  try { return JSON.parse(readBrowserStorage("localStorage", SEARCH_RECENTS_KEY) || "[]").filter(Boolean).slice(0, 6); }
+  catch { return []; }
+}
+
+function rememberSearch(query) {
+  const clean = String(query || "").trim();
+  if (clean.length < 2) return;
+  const recent = [clean, ...getRecentSearches().filter(item => item.toLowerCase() !== clean.toLowerCase())].slice(0, 6);
+  writeBrowserStorage("localStorage", SEARCH_RECENTS_KEY, JSON.stringify(recent));
+}
+
+function closeSearchSuggestions() {
+  const root = document.getElementById("searchSuggestions");
+  const input = document.getElementById("searchInput");
+  if (root) { root.hidden = true; root.innerHTML = ""; }
+  input?.setAttribute("aria-expanded", "false");
+  input?.removeAttribute("aria-activedescendant");
+  searchSuggestionIndex = -1;
+}
+
+function renderSearchSuggestions(items = [], query = "") {
+  const root = document.getElementById("searchSuggestions");
+  const input = document.getElementById("searchInput");
+  if (!root || !input || document.activeElement !== input) return;
+  const normalizedItems = items.length ? items : (!query ? getRecentSearches().map(value => ({ type: "query", title: value, subtitle: "Недавний поиск", query: value })) : []);
+  if (!normalizedItems.length) { closeSearchSuggestions(); return; }
+  root.innerHTML = normalizedItems.slice(0, 10).map((item, index) => {
+    const icon = item.type === "product" ? "📦" : item.type === "category" ? "▦" : "⌕";
+    const subtitle = item.subtitle || (item.type === "category" ? "Категория" : item.type === "product" ? "Объявление" : "Поиск");
+    const image = item.image ? `<img src="${escapeHTML(safeImageUrl(item.image))}" width="44" height="44" alt="" loading="lazy">` : `<span class="search-suggestion-icon">${icon}</span>`;
+    return `<button id="searchSuggestion${index}" class="search-suggestion-item" type="button" role="option" aria-selected="false" data-index="${index}" data-suggestion="${escapeHTML(encodeURIComponent(JSON.stringify(item)))}">${image}<span><b>${escapeHTML(item.title || item.query || "")}</b><small>${escapeHTML(subtitle)}</small></span><em>›</em></button>`;
+  }).join("");
+  root.hidden = false;
+  input.setAttribute("aria-expanded", "true");
+  searchSuggestionIndex = -1;
+}
+
+async function loadSearchSuggestions(query, { immediate = false } = {}) {
+  const clean = String(query || "").trim();
+  clearTimeout(searchSuggestionTimer);
+  if (!clean) { renderSearchSuggestions([], ""); return; }
+  if (clean.length < 2) { closeSearchSuggestions(); return; }
+  const run = async () => {
+    const key = clean.toLowerCase();
+    const cached = searchSuggestionCache.get(key);
+    if (cached && Date.now() - cached.savedAt < SEARCH_SUGGESTION_CACHE_TTL_MS) {
+      renderSearchSuggestions(cached.items, clean);
+      return;
+    }
+    searchSuggestionAbortController?.abort();
+    searchSuggestionAbortController = new AbortController();
+    try {
+      const data = await apiRequest(`/api/search/suggestions?q=${encodeURIComponent(clean)}&limit=10`, { signal: searchSuggestionAbortController.signal, timeoutMs: 6000 });
+      const items = Array.isArray(data.suggestions) ? data.suggestions : [];
+      searchSuggestionCache.set(key, { savedAt: Date.now(), items });
+      renderSearchSuggestions(items, clean);
+    } catch (error) {
+      if (error?.name !== "AbortError") console.warn("Search suggestions unavailable:", error.message);
+    }
+  };
+  if (immediate) return run();
+  searchSuggestionTimer = window.setTimeout(run, SEARCH_SUGGESTION_DELAY_MS);
+}
+
+function activateSearchSuggestion(index) {
+  const root = document.getElementById("searchSuggestions");
+  const options = Array.from(root?.querySelectorAll(".search-suggestion-item") || []);
+  if (!options.length) return;
+  searchSuggestionIndex = (index + options.length) % options.length;
+  options.forEach((option, idx) => option.setAttribute("aria-selected", String(idx === searchSuggestionIndex)));
+  const active = options[searchSuggestionIndex];
+  document.getElementById("searchInput")?.setAttribute("aria-activedescendant", active.id);
+  active.scrollIntoView({ block: "nearest" });
+}
+
+function selectSearchSuggestion(item) {
+  const input = document.getElementById("searchInput");
+  closeSearchSuggestions();
+  if (item.type === "product" && item.productId) {
+    openProduct(item.productId);
+    return;
+  }
+  const query = String(item.query || item.title || "").trim();
+  if (item.type === "category" && item.category) {
+    state.category = item.category;
+    state.filters.subcategoryId = item.subcategoryId || "";
+    state.filters.attributes = {};
+    document.querySelectorAll(".categories button[data-category]").forEach(button => {
+      const selected = button.dataset.category === state.category;
+      button.classList.toggle("active", selected);
+      button.setAttribute("aria-pressed", String(selected));
+    });
+    syncCatalogFiltersUI();
+  }
+  state.search = item.type === "category" ? "" : query;
+  if (input) input.value = state.search;
+  if (query) rememberSearch(query);
+  state.catalogPagination = { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE, hasMore: true };
+  hideKeyboard();
+  loadProducts({ force: true });
+}
+
+function initCatalogLoadObserver() {
+  catalogLoadObserver?.disconnect();
+  const button = document.getElementById("catalogLoadMore");
+  if (!button || !("IntersectionObserver" in window)) return;
+  catalogLoadObserver = new IntersectionObserver(entries => {
+    if (entries.some(entry => entry.isIntersecting) && !button.hidden && state.page === "catalog" && !state.productsLoading) loadMoreProducts();
+  }, { rootMargin: "500px 0px" });
+  catalogLoadObserver.observe(button);
+}
+
 function initEvents() {
   const searchForm = document.getElementById("searchForm");
   const searchInput =
@@ -5060,6 +5573,7 @@ function initEvents() {
     state.productsLoadError = "";
     state.catalogPagination = { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE, hasMore: true };
     updateSearchStatus();
+    loadSearchSuggestions(state.search);
 
     clearTimeout(productSearchTimer);
     productSearchTimer = setTimeout(() => {
@@ -5067,11 +5581,34 @@ function initEvents() {
     }, 280);
   });
 
-  searchInput?.addEventListener("keydown", hideKeyboardOnEnter);
+  searchInput?.addEventListener("keydown", event => {
+    const root = document.getElementById("searchSuggestions");
+    const options = Array.from(root?.querySelectorAll(".search-suggestion-item") || []);
+    if (!root?.hidden && options.length) {
+      if (event.key === "ArrowDown") { event.preventDefault(); activateSearchSuggestion(searchSuggestionIndex + 1); return; }
+      if (event.key === "ArrowUp") { event.preventDefault(); activateSearchSuggestion(searchSuggestionIndex - 1); return; }
+      if (event.key === "Enter" && searchSuggestionIndex >= 0) { event.preventDefault(); options[searchSuggestionIndex]?.click(); return; }
+      if (event.key === "Escape") { closeSearchSuggestions(); return; }
+    }
+    hideKeyboardOnEnter(event);
+  });
+  searchInput?.addEventListener("focus", () => loadSearchSuggestions(searchInput.value, { immediate: true }));
+  document.getElementById("searchSuggestions")?.addEventListener("click", event => {
+    const button = event.target.closest("[data-suggestion]");
+    if (!button) return;
+    try { selectSearchSuggestion(JSON.parse(decodeURIComponent(button.dataset.suggestion))); } catch {}
+  });
+  document.addEventListener("pointerdown", event => {
+    if (!event.target.closest(".search-autocomplete-shell")) closeSearchSuggestions();
+  });
 
   searchInput?.addEventListener("search", () => {
+    state.search = searchInput.value || "";
     syncSearchClearButton();
+    closeSearchSuggestions();
     hideKeyboard();
+    clearTimeout(productSearchTimer);
+    loadProducts({ force: true });
   });
 
   searchClearButton?.addEventListener("click", () => {
@@ -5082,16 +5619,20 @@ function initEvents() {
     state.catalogPagination = { page: 0, pages: 1, total: 0, limit: CATALOG_PAGE_SIZE, hasMore: true };
     syncSearchClearButton();
     clearTimeout(productSearchTimer);
+    closeSearchSuggestions();
     hideKeyboard();
     loadProducts({ force: true });
     searchInput.focus({ preventScroll: true });
   });
 
   syncSearchClearButton();
+  initCatalogLoadObserver();
 
   searchForm?.addEventListener("submit", event => {
     event.preventDefault();
     hideKeyboard();
+    closeSearchSuggestions();
+    rememberSearch(state.search);
     clearTimeout(productSearchTimer);
     loadProducts({ force: true });
   });
@@ -5112,6 +5653,11 @@ function initEvents() {
     });
   });
   document.getElementById("filterCity")?.addEventListener("change", () => refreshCatalogFilterOptions({ district: "" }));
+  document.getElementById("filterSubcategory")?.addEventListener("change", () => {
+    state.filters.subcategoryId = document.getElementById("filterSubcategory")?.value || "";
+    state.filters.attributes = {};
+    refreshCatalogTaxonomyAttributeFilters({});
+  });
   document.getElementById("filterItemType")?.addEventListener("change", () => refreshCatalogFilterOptions({ brand: "", model: "" }));
   document.getElementById("filterBrand")?.addEventListener("change", () => refreshCatalogFilterOptions({ model: "" }));
 
@@ -5197,6 +5743,8 @@ function initEvents() {
 
     state.category = button.dataset.category || "Все";
     updateSaveSearchButton();
+    state.filters.subcategoryId = "";
+    state.filters.attributes = {};
     state.filters.itemType = "";
     state.filters.brand = "";
     state.filters.model = "";
@@ -5266,8 +5814,17 @@ function initEvents() {
   });
 
   document.getElementById("adCategory")?.addEventListener("change", () => {
+    refreshAdTaxonomyFields({ subcategoryId: "", attributes: {} });
     refreshAdStructuredFields({ itemType: "", brand: "", model: "", year: "" });
   });
+  document.getElementById("adSubcategory")?.addEventListener("change", () => {
+    refreshAdTaxonomyFields({ subcategoryId: document.getElementById("adSubcategory")?.value || "", attributes: {} });
+    refreshAdStructuredFields({ itemType: "", brand: "", model: "", year: "" });
+    updatePreviewCard();
+    updateCreateButtons();
+  });
+  document.getElementById("adTaxonomyAttributesGrid")?.addEventListener("input", () => { updatePreviewCard(); updateCreateButtons(); });
+  document.getElementById("adTaxonomyAttributesGrid")?.addEventListener("change", () => { updatePreviewCard(); updateCreateButtons(); });
   document.getElementById("adItemType")?.addEventListener("change", () => {
     refreshAdStructuredFields({ brand: "", model: "" });
   });
@@ -5303,6 +5860,7 @@ function initEvents() {
     "adDiscountPrice",
     "adDesc",
     "adCategory",
+    "adSubcategory",
     "adItemType",
     "adBrand",
     "adBrandCustom",
@@ -6082,6 +6640,8 @@ async function initApp() {
   initSwipeBack();
   initKeyboardAutoHide();
   initKeyboardViewportGuard();
+  initClientMonitoring();
+  initWebVitalsCollection();
   initEvents();
   syncCatalogFiltersUI();
   const adsPromise = loadAds();
@@ -6135,243 +6695,187 @@ function openTelegramSellerChat(user) {
   alert("Продавец не указал Telegram для связи");
 }
 
-async function openSellerProfile(userId) {
-  const sellerName = document.getElementById("sellerProfileName");
-  const sellerUsername = document.getElementById("sellerProfileUsername");
-  const sellerDescription = document.getElementById("sellerProfileDescription");
-  const sellerBusinessBadge = document.getElementById("sellerBusinessBadge");
-  const sellerBusinessBlock = document.getElementById("sellerBusinessBlock");
-  const sellerStorefront = document.getElementById("sellerStorefront");
-  const sellerStorefrontSubtitle = document.getElementById("sellerStorefrontSubtitle");
-  const sellerStoreCategories = document.getElementById("sellerStoreCategories");
-  const sellerContacts = document.getElementById("sellerProfileContacts");
-  const sellerCount = document.getElementById("sellerProfileCount");
-  const sellerSoldCount = document.getElementById("sellerSoldCount");
-  const sellerProducts = document.getElementById("sellerProducts");
-  const sellerSoldProducts = document.getElementById("sellerSoldProducts");
-  const sellerSoldSection = document.getElementById("sellerSoldSection");
-  const sellerAvatar = document.getElementById("sellerAvatar");
-  const sellerStatus = document.getElementById("sellerStatus");
-  const sellerStatusLabel = document.getElementById("sellerStatusLabel");
-  const messageButton = document.getElementById("sellerMessageButton");
-  const trustCard = document.getElementById("sellerTrustCard");
-  const reviewsList = document.getElementById("sellerReviewsList");
-  const reviewsCount = document.getElementById("sellerReviewsCount");
-  const reviewComposer = document.getElementById("sellerReviewComposer");
-  const reviewComment = document.getElementById("sellerReviewComment");
-  const reviewRating = document.getElementById("sellerReviewRating");
+function resetSellerProfilePagination() {
+  state.sellerProfilePagination = {
+    active: { page: 0, pages: 1, total: 0, hasMore: true, loading: false, loaded: false },
+    sold: { page: 0, pages: 1, total: 0, hasMore: true, loading: false, loaded: false },
+    reviews: { page: 0, pages: 1, total: 0, hasMore: true, loading: false, loaded: false }
+  };
+  state.sellerProducts = [];
+  state.sellerSoldProducts = [];
+  state.sellerReviews = [];
+}
 
-  showPage("sellerProfile");
+function renderSellerProductCards(products = []) {
+  if (!products.length) return `<div class="empty-state compact-empty-state"><h3>Нет объявлений</h3><p class="muted">Здесь пока пусто.</p></div>`;
+  return products.map(product => {
+    const productId = escapeHTML(product.id || "");
+    const image = escapeHTML(safeImageUrl(product.thumbnail || getProductImages(product)[0]));
+    const name = escapeHTML(product.name || "Без названия");
+    const price = escapeHTML(formatPrice(product.price) || product.price || "Цена не указана");
+    const previousPrice = escapeHTML(formatPrice(product.previousPrice) || product.previousPrice || "");
+    const priceMarkup = product.priceDropped && previousPrice ? `<span class="seller-product-discount"><s>${previousPrice}</s><strong>${price}</strong><em>Скидка</em></span>` : price;
+    const location = escapeHTML([product.location || "Владикавказ", product.district].filter(Boolean).join(", "));
+    return `<button class="seller-product-card" type="button" onclick="openProduct('${productId}')"><img src="${image}" class="seller-product-image" width="240" height="180" alt="${name}" loading="lazy" decoding="async" onerror="handleImageError(this)"><span class="seller-product-info"><span class="seller-product-name">${name}</span><span class="seller-product-price">${priceMarkup}</span><span class="seller-product-city">📍 ${location}</span></span></button>`;
+  }).join("");
+}
 
-  if (!sellerProducts || !sellerName || !sellerUsername || !sellerCount || !sellerAvatar) return;
+function renderSellerSoldCards(products = []) {
+  if (!products.length) return '<div class="seller-reviews-empty">Проданных товаров пока нет.</div>';
+  return products.map(product => `<div class="seller-sold-card" aria-disabled="true"><span class="seller-sold-icon">✓</span><span><b>${escapeHTML(product.name || "Проданный товар")}</b><small>${escapeHTML(formatPrice(product.price) || product.price || "Цена не указана")} · ${escapeHTML(product.location || "Город не указан")}</small><em>Продано ${escapeHTML(formatProductDate(product.soldAt || product.updatedAt || product.createdAt))}</em></span></div>`).join("");
+}
 
-  sellerName.textContent = "Продавец";
-  sellerUsername.textContent = "";
-  if (sellerDescription) sellerDescription.hidden = true;
-  if (sellerBusinessBadge) sellerBusinessBadge.hidden = true;
-  if (sellerBusinessBlock) {
-    sellerBusinessBlock.hidden = true;
-    sellerBusinessBlock.innerHTML = "";
-  }
-  if (sellerStorefront) sellerStorefront.hidden = true;
-  if (sellerStorefrontSubtitle) sellerStorefrontSubtitle.textContent = "";
-  if (sellerStoreCategories) sellerStoreCategories.innerHTML = "";
-  if (sellerContacts) sellerContacts.innerHTML = "";
-  sellerCount.textContent = "📦 …";
-  if (sellerSoldCount) sellerSoldCount.textContent = "✓ …";
-  sellerAvatar.replaceChildren();
-  sellerAvatar.textContent = "👤";
-  sellerProducts.innerHTML = '<div class="empty-state">Загрузка объявлений...</div>';
-  if (sellerSoldProducts) sellerSoldProducts.innerHTML = "";
-  if (sellerSoldSection) sellerSoldSection.hidden = true;
-  if (messageButton) messageButton.disabled = true;
-  if (trustCard) trustCard.innerHTML = '<div class="seller-trust-loading">Считаем доверие…</div>';
-  if (reviewsList) reviewsList.innerHTML = '<div class="seller-reviews-empty">Загрузка отзывов…</div>';
-  if (reviewsCount) reviewsCount.textContent = "0";
-  if (reviewComposer) reviewComposer.hidden = true;
-  if (reviewComment) reviewComment.value = "";
-  if (reviewRating) reviewRating.value = "5";
+function renderSellerReviewCards(reviews = []) {
+  if (!reviews.length) return '<div class="seller-reviews-empty">Отзывов пока нет. Будьте первым.</div>';
+  return reviews.map(review => `<article class="seller-review-card"><div><b>${escapeHTML(review.reviewerName || "Покупатель")}</b><span>${"★".repeat(Number(review.rating) || 0)}${"☆".repeat(Math.max(0, 5 - (Number(review.rating) || 0)))}</span></div>${review.comment ? `<p>${escapeHTML(review.comment)}</p>` : ""}<small>${escapeHTML(formatProductDate(review.updatedAt || review.createdAt))}</small></article>`).join("");
+}
 
-  if (!userId) {
-    sellerCount.textContent = "📦 0";
-    if (sellerSoldCount) sellerSoldCount.textContent = "✓ 0";
-    sellerProducts.innerHTML = '<div class="empty-state">Ошибка: продавец не найден</div>';
-    return;
-  }
+function updateSellerProfileTabUI() {
+  ["active", "sold", "reviews"].forEach(tab => {
+    const button = document.getElementById(`sellerTab${tab[0].toUpperCase()}${tab.slice(1)}`);
+    const panel = document.getElementById(`seller${tab[0].toUpperCase()}${tab.slice(1)}Panel`);
+    const active = state.sellerProfileTab === tab;
+    button?.classList.toggle("active", active);
+    button?.setAttribute("aria-selected", String(active));
+    if (panel) panel.hidden = !active;
+  });
+}
 
+async function setSellerProfileTab(tab = "active") {
+  if (!["active", "sold", "reviews"].includes(tab)) tab = "active";
+  state.sellerProfileTab = tab;
+  updateSellerProfileTabUI();
+  await loadSellerProfileTab(tab);
+}
+
+async function loadSellerProfileTab(tab, { append = false, force = false } = {}) {
+  const sellerId = String(state.openedSeller?.id || "");
+  const pager = state.sellerProfilePagination[tab];
+  if (!sellerId || !pager || pager.loading || (!append && pager.loaded && !force) || (append && !pager.hasMore)) return;
+  pager.loading = true;
+  const nextPage = append ? pager.page + 1 : 1;
+  const root = document.getElementById(tab === "active" ? "sellerProducts" : tab === "sold" ? "sellerSoldProducts" : "sellerReviewsList");
+  if (!append && root) root.innerHTML = '<div class="seller-reviews-empty">Загрузка…</div>';
   try {
-    const [profileData, productsData, reviewsData, storeData] = await Promise.all([
+    const endpoint = tab === "reviews"
+      ? `/api/users/${encodeURIComponent(sellerId)}/reviews?page=${nextPage}&limit=10`
+      : `/api/users/${encodeURIComponent(sellerId)}/products?status=${tab}&page=${nextPage}&limit=${SELLER_PROFILE_PAGE_SIZE}`;
+    const data = await apiRequest(endpoint);
+    const incoming = tab === "reviews"
+      ? (data.reviews || [])
+      : tab === "sold" ? (data.soldProducts || []) : (data.products || []);
+    let target;
+    if (tab === "active") {
+      const products = append ? state.sellerProducts : [];
+      state.sellerProducts = products;
+      target = products;
+    } else if (tab === "sold") {
+      const soldProducts = append ? state.sellerSoldProducts : [];
+      state.sellerSoldProducts = soldProducts;
+      target = soldProducts;
+    } else {
+      const reviews = append ? state.sellerReviews : [];
+      state.sellerReviews = reviews;
+      target = reviews;
+    }
+    const known = new Set(target.map(item => item.id));
+    incoming.forEach(item => { if (!known.has(item.id)) target.push(item); });
+    const pagination = data.pagination || {};
+    pager.page = Number(pagination.page) || nextPage;
+    pager.pages = Number(pagination.pages) || pager.page;
+    pager.total = Number(pagination.total ?? data.counts?.[tab] ?? target.length) || 0;
+    pager.hasMore = typeof pagination.hasMore === "boolean" ? pagination.hasMore : pager.page < pager.pages;
+    pager.loaded = true;
+    if (data.counts) {
+      state.sellerProfilePagination.active.total = Number(data.counts.active) || 0;
+      state.sellerProfilePagination.sold.total = Number(data.counts.sold) || 0;
+    }
+    if (tab === "reviews") {
+      state.sellerTrust = data.trust || state.sellerTrust;
+      const trustCard = document.getElementById("sellerTrustCard");
+      if (trustCard && state.sellerTrust) trustCard.innerHTML = getSellerTrustMarkup(state.sellerTrust);
+    }
+    if (root) root.innerHTML = tab === "active" ? renderSellerProductCards(state.sellerProducts) : tab === "sold" ? renderSellerSoldCards(state.sellerSoldProducts) : renderSellerReviewCards(state.sellerReviews);
+  } catch (error) {
+    console.error(`Seller ${tab} load error:`, error);
+    if (root) root.innerHTML = `<div class="seller-reviews-empty">${escapeHTML(error.message || "Не удалось загрузить раздел")}</div>`;
+  } finally {
+    pager.loading = false;
+    const loadMore = document.getElementById(tab === "active" ? "sellerActiveLoadMore" : tab === "sold" ? "sellerSoldLoadMore" : "sellerReviewsLoadMore");
+    if (loadMore) { loadMore.hidden = !pager.hasMore; loadMore.disabled = false; }
+    document.getElementById("sellerActiveTabCount").textContent = String(state.sellerProfilePagination.active.total || state.sellerProducts.length);
+    document.getElementById("sellerSoldTabCount").textContent = String(state.sellerProfilePagination.sold.total || state.sellerSoldProducts.length);
+    document.getElementById("sellerReviewTabCount").textContent = String(state.sellerProfilePagination.reviews.total || state.sellerReviews.length);
+    document.getElementById("sellerReviewsCount").textContent = String(state.sellerProfilePagination.reviews.total || state.sellerReviews.length);
+  }
+}
+
+function loadMoreSellerProfileTab(tab) { return loadSellerProfileTab(tab, { append: true }); }
+
+async function openSellerProfile(userId) {
+  showPage("sellerProfile");
+  resetSellerProfilePagination();
+  state.sellerProfileTab = "active";
+  updateSellerProfileTabUI();
+  const sellerProducts = document.getElementById("sellerProducts");
+  if (sellerProducts) sellerProducts.innerHTML = '<div class="empty-state">Загрузка профиля…</div>';
+  if (!userId) return;
+  try {
+    const [profileData, storeData] = await Promise.all([
       apiRequest(`/api/users/${encodeURIComponent(userId)}`),
-      apiRequest(`/api/users/${encodeURIComponent(userId)}/products`),
-      apiRequest(`/api/users/${encodeURIComponent(userId)}/reviews`),
       apiRequest(`/api/users/${encodeURIComponent(userId)}/store`).catch(() => ({ store: null }))
     ]);
-
     const user = profileData.user || {};
-    const store = storeData?.store || {};
-    const products = Array.isArray(productsData.products) ? productsData.products : [];
-    const soldProducts = Array.isArray(productsData.soldProducts) ? productsData.soldProducts : [];
-    const reviews = Array.isArray(reviewsData.reviews) ? reviewsData.reviews : [];
-    const trust = reviewsData.trust || user.trust || {};
-
-    state.sellerProducts = products;
-    state.sellerSoldProducts = soldProducts;
-    state.sellerReviews = reviews;
-    state.sellerTrust = trust;
-    state.openedSeller = { ...user, id: user.id || userId, trust };
-
-    for (const product of products) {
-      const index = state.products.findIndex(item => item.id === product.id);
-      if (index >= 0) state.products[index] = product;
-      else state.products.push(product);
+    const store = storeData.store || {};
+    state.openedSeller = { ...user, id: user.id || userId };
+    state.sellerTrust = user.trust || {};
+    state.sellerProfilePagination.active.total = Number(state.sellerTrust.activeListings) || 0;
+    state.sellerProfilePagination.sold.total = Number(state.sellerTrust.soldListings) || 0;
+    state.sellerProfilePagination.reviews.total = Number(state.sellerTrust.ratingCount) || 0;
+    const displayName = (user.isBusiness && user.businessName) || user.displayName || `${user.firstName || ""} ${user.lastName || ""}`.trim() || "Продавец";
+    const username = String(user.contactUsername || user.username || "").replace(/^@/, "");
+    setTextContent("sellerProfileName", displayName);
+    setTextContent("sellerProfileUsername", username ? `@${username}` : "Telegram не указан");
+    const description = document.getElementById("sellerProfileDescription");
+    if (description) { description.hidden = !user.description; description.textContent = user.description || ""; }
+    const badge = document.getElementById("sellerBusinessBadge");
+    if (badge) { badge.hidden = !user.isBusiness; badge.textContent = user.isBusiness ? "🏪 Профессиональный продавец" : ""; }
+    const businessBlock = document.getElementById("sellerBusinessBlock");
+    if (businessBlock) {
+      const rows = [];
+      if (user.businessCategory) rows.push(`<span><small>Сфера</small><b>${escapeHTML(user.businessCategory)}</b></span>`);
+      if (user.businessAddress) rows.push(`<span><small>Адрес</small><b>📍 ${escapeHTML(user.businessAddress)}</b></span>`);
+      if (user.businessHours) rows.push(`<span><small>График</small><b>🕒 ${escapeHTML(user.businessHours)}</b></span>`);
+      businessBlock.hidden = !user.isBusiness || !rows.length; businessBlock.innerHTML = rows.join("");
     }
-
-    const fallbackSeller = products[0] || soldProducts[0] || {};
-    const displayName = (user.isBusiness && user.businessName) || user.displayName || `${user.firstName || ""} ${user.lastName || ""}`.trim() || fallbackSeller.ownerBusinessName || fallbackSeller.ownerName || "Продавец";
-    const username = user.contactUsername || user.username || fallbackSeller.ownerUsername || "";
-
-    sellerName.textContent = displayName;
-    sellerUsername.textContent = username ? `@${username}` : "Telegram не указан";
-    sellerCount.textContent = `📦 ${products.length}`;
-    if (sellerSoldCount) sellerSoldCount.textContent = `✓ ${soldProducts.length}`;
-
-    if (sellerDescription) {
-      sellerDescription.hidden = !user.description;
-      sellerDescription.textContent = user.description || "";
-    }
-
-    if (sellerBusinessBadge) {
-      sellerBusinessBadge.hidden = !user.isBusiness;
-      sellerBusinessBadge.textContent = user.isBusiness
-        ? `🏪 Профессиональный продавец`
-        : "";
-    }
-
-    if (sellerBusinessBlock) {
-      const businessRows = [];
-      if (user.businessCategory) businessRows.push(`<span><small>Сфера</small><b>${escapeHTML(user.businessCategory)}</b></span>`);
-      if (user.businessAddress) businessRows.push(`<span><small>Адрес</small><b>📍 ${escapeHTML(user.businessAddress)}</b></span>`);
-      if (user.businessHours) businessRows.push(`<span><small>График</small><b>🕒 ${escapeHTML(user.businessHours)}</b></span>`);
-      sellerBusinessBlock.hidden = !user.isBusiness || businessRows.length === 0;
-      sellerBusinessBlock.innerHTML = businessRows.join("");
-    }
-
-    if (sellerStorefront) {
-      const categories = Array.isArray(store.categories) ? store.categories : [];
-      sellerStorefront.hidden = !user.isBusiness;
-      if (sellerStorefrontSubtitle) sellerStorefrontSubtitle.textContent = `${products.length} активных · ${trust.totalViews || 0} просмотров`;
-      if (sellerStoreCategories) sellerStoreCategories.innerHTML = categories.length
-        ? categories.map(item => `<span>${escapeHTML(item.name)} <b>${Number(item.count) || 0}</b></span>`).join("")
-        : '<span>Все товары магазина</span>';
-    }
-
-    if (sellerContacts) {
-      const contactRows = [];
-      if (user.city) contactRows.push(`<span>📍 ${escapeHTML(user.city)}</span>`);
-      if (user.phone) contactRows.push(`<button type="button" class="profile-phone-copy" aria-label="Скопировать номер ${escapeHTML(user.phone)}" title="Нажмите, чтобы скопировать номер" onclick="copyPhoneNumber(decodeURIComponent('${escapeHTML(encodeURIComponent(user.phone))}'))">📞 ${escapeHTML(user.phone)}</button>`);
-      if (username) contactRows.push(`<span>✈️ @${escapeHTML(username)}</span>`);
-      sellerContacts.innerHTML = contactRows.join("");
-    }
-
+    const storefront = document.getElementById("sellerStorefront");
+    if (storefront) storefront.hidden = !user.isBusiness;
+    setTextContent("sellerStorefrontSubtitle", user.isBusiness ? `${Number(state.sellerTrust.activeListings || store.featuredProducts?.length || 0)} активных` : "");
+    const categoryRoot = document.getElementById("sellerStoreCategories");
+    if (categoryRoot) categoryRoot.innerHTML = (store.categories || []).map(item => `<span>${escapeHTML(item.name)} <b>${Number(item.count) || 0}</b></span>`).join("");
+    const contacts = document.getElementById("sellerProfileContacts");
+    if (contacts) contacts.innerHTML = [user.city ? `<span>📍 ${escapeHTML(user.city)}</span>` : "", user.phone ? `<button type="button" class="profile-phone-copy" onclick="copyPhoneNumber(decodeURIComponent('${escapeHTML(encodeURIComponent(user.phone))}'))">📞 ${escapeHTML(user.phone)}</button>` : "", username ? `<span>✈️ @${escapeHTML(username)}</span>` : ""].join("");
+    const avatar = document.getElementById("sellerAvatar");
+    if (avatar) { avatar.replaceChildren(); if (user.avatar) { const img = document.createElement("img"); img.src = safeImageUrl(user.avatar); img.alt = displayName; avatar.appendChild(img); } else avatar.textContent = displayName[0]?.toUpperCase() || "👤"; }
     const status = getSellerStatus(user.lastSeen);
-    if (sellerStatus) sellerStatus.textContent = status.icon;
-    if (sellerStatusLabel) sellerStatusLabel.textContent = status.label;
-
-    sellerAvatar.replaceChildren();
-    if (user.avatar) {
-      const image = document.createElement("img");
-      image.src = safeImageUrl(user.avatar);
-      image.alt = displayName;
-      sellerAvatar.appendChild(image);
-    } else {
-      sellerAvatar.textContent = displayName[0]?.toUpperCase() || "👤";
-    }
-
-    if (messageButton) {
-      const isOwnProfile = String(user.id || userId) === String(state.telegramUser?.id || "");
-      messageButton.disabled = isOwnProfile || (!username && !user.id);
-      messageButton.textContent = isOwnProfile ? "Это ваш профиль" : "💬 Написать продавцу";
-      messageButton.onclick = () => openTelegramSellerChat(user);
-    }
-
-    if (trustCard) trustCard.innerHTML = getSellerTrustMarkup(trust);
-    if (reviewsCount) reviewsCount.textContent = String(reviews.length);
-    if (reviewsList) {
-      reviewsList.innerHTML = reviews.length ? reviews.map(review => `
-        <article class="seller-review-card">
-          <div><b>${escapeHTML(review.reviewerName || "Покупатель")}</b><span>${"★".repeat(Number(review.rating) || 0)}${"☆".repeat(Math.max(0, 5 - (Number(review.rating) || 0)))}</span></div>
-          ${review.comment ? `<p>${escapeHTML(review.comment)}</p>` : ""}
-          <small>${escapeHTML(formatProductDate(review.updatedAt || review.createdAt))}</small>
-        </article>
-      `).join("") : '<div class="seller-reviews-empty">Отзывов пока нет. Будьте первым.</div>';
-    }
-    if (reviewComposer) {
-      const isOwnProfile = String(user.id || userId) === String(state.telegramUser?.id || "");
-      reviewComposer.hidden = isOwnProfile || !state.telegramUser?.id;
-    }
-
-    if (products.length === 0) {
-      sellerProducts.innerHTML = `
-        <div class="empty-state compact-empty-state">
-          <h3>Нет активных объявлений</h3>
-          <p class="muted">Новые товары появятся здесь.</p>
-        </div>`;
-    } else {
-      sellerProducts.innerHTML = products.map(product => {
-        const productId = escapeHTML(product.id || "");
-        const image = escapeHTML(safeImageUrl(getProductImages(product)[0]));
-        const name = escapeHTML(product.name || "Без названия");
-        const price = escapeHTML(formatPrice(product.price) || product.price || "Цена не указана");
-        const previousPrice = escapeHTML(formatPrice(product.previousPrice) || product.previousPrice || "");
-        const sellerPriceMarkup = product.priceDropped && previousPrice
-          ? `<span class="seller-product-discount"><s>${previousPrice}</s><strong>${price}</strong><em>Скидка${product.priceDropPercent ? ` −${Number(product.priceDropPercent)}%` : ""}</em></span>`
-          : price;
-        const location = escapeHTML([product.location || "Владикавказ", product.district].filter(Boolean).join(", "));
-        return `
-          <button class="seller-product-card" type="button" onclick="openProduct('${productId}')">
-            <img src="${image}" class="seller-product-image" alt="${name}" loading="lazy" decoding="async" onerror="handleImageError(this)">
-            <span class="seller-product-info">
-              <span class="seller-product-name">${name}</span>
-              <span class="seller-product-price">${sellerPriceMarkup}</span>
-              <span class="seller-product-city">📍 ${location}</span>
-            </span>
-          </button>`;
-      }).join("");
-    }
-
-    if (sellerSoldSection && sellerSoldProducts) {
-      sellerSoldSection.hidden = soldProducts.length === 0;
-      sellerSoldProducts.innerHTML = soldProducts.map(product => {
-        const name = escapeHTML(product.name || "Проданный товар");
-        const price = escapeHTML(formatPrice(product.price) || product.price || "Цена не указана");
-        const city = escapeHTML(product.location || "Город не указан");
-        const date = escapeHTML(formatProductDate(product.soldAt || product.updatedAt || product.createdAt));
-        return `
-          <div class="seller-sold-card" aria-disabled="true">
-            <span class="seller-sold-icon">✓</span>
-            <span>
-              <b>${name}</b>
-              <small>${price} · ${city}</small>
-              <em>Продано ${date}</em>
-            </span>
-          </div>`;
-      }).join("");
-    }
+    setTextContent("sellerStatus", status.icon); setTextContent("sellerStatusLabel", status.label);
+    const messageButton = document.getElementById("sellerMessageButton");
+    if (messageButton) { const own = String(user.id || userId) === String(state.telegramUser?.id || ""); messageButton.disabled = own || (!username && !user.id); messageButton.textContent = own ? "Это ваш профиль" : "💬 Написать продавцу"; messageButton.onclick = () => openTelegramSellerChat(user); }
+    const reviewComposer = document.getElementById("sellerReviewComposer");
+    if (reviewComposer) reviewComposer.hidden = String(user.id || userId) === String(state.telegramUser?.id || "") || !state.telegramUser?.id;
+    const trustCard = document.getElementById("sellerTrustCard");
+    if (trustCard) trustCard.innerHTML = getSellerTrustMarkup(state.sellerTrust || {});
+    setTextContent("sellerActiveTabCount", String(state.sellerProfilePagination.active.total));
+    setTextContent("sellerSoldTabCount", String(state.sellerProfilePagination.sold.total));
+    setTextContent("sellerReviewTabCount", String(state.sellerProfilePagination.reviews.total));
+    setTextContent("sellerReviewsCount", String(state.sellerProfilePagination.reviews.total));
+    await loadSellerProfileTab("active", { force: true });
+    setTextContent("sellerProfileCount", `📦 ${state.sellerProfilePagination.active.total || state.sellerProducts.length}`);
+    setTextContent("sellerSoldCount", `✓ ${state.sellerProfilePagination.sold.total || 0}`);
   } catch (error) {
     console.error("Seller profile error:", error);
     state.openedSeller = null;
-    state.sellerReviews = [];
-    state.sellerTrust = null;
-    if (trustCard) trustCard.innerHTML = '<div class="seller-reviews-empty">Данные доверия недоступны</div>';
-    if (reviewsList) reviewsList.innerHTML = '<div class="seller-reviews-empty">Отзывы не загрузились</div>';
-    if (reviewComposer) reviewComposer.hidden = true;
-    sellerCount.textContent = "📦 0";
-    if (sellerSoldCount) sellerSoldCount.textContent = "✓ 0";
-    sellerProducts.innerHTML = `
-      <div class="empty-state">
-        <h3>Не удалось открыть профиль</h3>
-        <p class="muted">${escapeHTML(error.message || "Попробуйте ещё раз")}</p>
-      </div>`;
+    if (sellerProducts) sellerProducts.innerHTML = `<div class="empty-state"><h3>Не удалось открыть профиль</h3><p class="muted">${escapeHTML(error.message || "Попробуйте ещё раз")}</p></div>`;
   }
 }
 
@@ -6398,7 +6902,8 @@ async function submitSellerReview() {
       body: JSON.stringify({ rating, comment })
     });
     showToast("Оценка сохранена");
-    await openSellerProfile(sellerId);
+    state.sellerProfilePagination.reviews.loaded = false;
+    await setSellerProfileTab("reviews");
   } catch (error) {
     console.error("Submit seller review error:", error);
     alert(error.message || "Не удалось сохранить оценку");
@@ -8065,6 +8570,24 @@ async function runAdminSearch() {
   }
 }
 
+async function loadAdminObservability() {
+  setAdminActiveTab("observability");
+  setAdminLoading("Загружаем ошибки и Core Web Vitals…");
+  try {
+    const data = await apiRequest("/api/admin/observability", { cache: "no-store" });
+    const root = document.getElementById("adminContent");
+    if (!root) return;
+    const vitals = Object.fromEntries((Array.isArray(data.vitals) ? data.vitals : []).map(item => [item.name, item]));
+    const errors = Array.isArray(data.errors) ? data.errors : [];
+    const vitalCard = (name, good, unit = "ms") => {
+      const value = Number(vitals[name]?.p75 || 0);
+      const healthy = name === "CLS" ? value <= good : value <= good;
+      return `<article class="observability-vital ${healthy ? "is-good" : "is-warning"}"><small>${name} · p75</small><b>${name === "CLS" ? value.toFixed(3) : Math.round(value)} ${unit}</b><span>${Number(vitals[name]?.samples || 0)} замеров</span></article>`;
+    };
+    root.innerHTML = `<section class="observability-grid">${vitalCard("LCP",2500)}${vitalCard("INP",200)}${vitalCard("CLS",0.1,"")}</section><div class="admin-section-heading"><div><small>Централизованный мониторинг</small><h3>Последние ошибки</h3></div><span>${errors.length}</span></div><div class="admin-list observability-errors">${errors.length ? errors.map(item => `<article class="admin-card observability-error-card"><div class="admin-card-main"><span class="admin-status-pill ${item.source === "frontend" || item.source === "browser" ? "warning" : "danger"}">${escapeHTML(item.source || "server")}</span><h3>${escapeHTML(item.message || "Ошибка")}</h3><p>${escapeHTML(item.route || "Без маршрута")} · ${escapeHTML(item.app_version || "")}</p><small>${escapeHTML(formatAdminDate(item.last_seen_at))} · повторов: ${Number(item.occurrences) || 1}${item.request_id ? ` · requestId ${escapeHTML(item.request_id)}` : ""}</small>${item.stack ? `<details><summary>Stack trace</summary><pre>${escapeHTML(item.stack)}</pre></details>` : ""}</div></article>`).join("") : '<div class="admin-state"><span>✅</span><b>Ошибок пока нет</b><small>Новые frontend/backend ошибки появятся здесь автоматически.</small></div>'}</div>`;
+  } catch (error) { console.error("Admin observability error:", error); setAdminError(error); }
+}
+
 function reloadCurrentAdminTab() {
   const input = document.getElementById("adminSearch");
   if (input && adminState.activeTab !== "search") input.value = "";
@@ -8079,6 +8602,7 @@ function reloadCurrentAdminTab() {
     users: loadAdminUsers,
     logs: loadAdminLogs,
     growth: loadAdminGrowth,
+    observability: loadAdminObservability,
     search: runAdminSearch
   };
 

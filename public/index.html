@@ -16,7 +16,7 @@
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
   <link rel="manifest" href="manifest.webmanifest?v=1.19.3" />
-  <link rel="stylesheet" href="style.css?v=1.20.0" />
+  <link rel="stylesheet" href="style.css?v=1.21.0" />
 </head>
 
 <body>
@@ -75,24 +75,30 @@
 
    <section id="catalog" class="page">
   <div class="catalog-search-row">
-    <form id="searchForm" class="search-form" action="javascript:void(0);">
-      <input
-        id="searchInput"
-        class="search"
-        type="search"
-        placeholder="Товар, вакансия, марка авто, модель телефона..."
-        enterkeyhint="search"
-        autocomplete="off"
-      />
-      <button
-        id="searchClearButton"
-        class="search-clear-button"
-        type="button"
-        aria-label="Очистить поисковый запрос"
-        title="Очистить поиск"
-        hidden
-      >×</button>
-    </form>
+    <div class="search-autocomplete-shell">
+      <form id="searchForm" class="search-form" action="javascript:void(0);" role="search">
+        <input
+          id="searchInput"
+          class="search"
+          type="search"
+          placeholder="Товар, вакансия, марка авто, модель телефона..."
+          enterkeyhint="search"
+          autocomplete="off"
+          aria-autocomplete="list"
+          aria-controls="searchSuggestions"
+          aria-expanded="false"
+        />
+        <button
+          id="searchClearButton"
+          class="search-clear-button"
+          type="button"
+          aria-label="Очистить поисковый запрос"
+          title="Очистить поиск"
+          hidden
+        >×</button>
+      </form>
+      <div id="searchSuggestions" class="search-suggestions" role="listbox" aria-label="Подсказки поиска" hidden></div>
+    </div>
     <button id="catalogFiltersToggle" class="catalog-filters-toggle" type="button" aria-expanded="false">
       ⚙️ <span>Фильтры</span><b id="catalogFilterCount" hidden>0</b>
     </button>
@@ -132,6 +138,20 @@
         </select>
       </label>
     </div>
+
+    <div id="filterSubcategoryField" class="filter-grid" hidden>
+      <label>
+        <span>Подкатегория</span>
+        <select id="filterSubcategory">
+          <option value="">Все подкатегории</option>
+        </select>
+      </label>
+    </div>
+
+    <section id="filterTaxonomyAttributes" class="catalog-taxonomy-filters" hidden>
+      <small>Характеристики подкатегории</small>
+      <div id="filterTaxonomyAttributesGrid" class="filter-grid two-columns"></div>
+    </section>
 
     <div class="filter-grid two-columns">
       <label>
@@ -336,6 +356,22 @@
         <option value="Вакансии">Вакансии</option>
       </select>
       <p id="adPublicationFeeHint" class="muted profile-edit-hint" hidden></p>
+
+      <div id="adSubcategoryField" hidden>
+        <label for="adSubcategory">Подкатегория</label>
+        <select id="adSubcategory">
+          <option value="">Выберите подкатегорию</option>
+        </select>
+        <p class="field-hint">Подкатегория обязательна для публикации и определяет характеристики и тариф.</p>
+      </div>
+
+      <section id="adTaxonomyAttributes" class="taxonomy-attributes-card" hidden>
+        <div class="structured-fields-heading">
+          <div><b>Параметры подкатегории</b><small>Обязательные поля отмечены звёздочкой.</small></div>
+          <span>Точно</span>
+        </div>
+        <div id="adTaxonomyAttributesGrid" class="taxonomy-attributes-grid"></div>
+      </section>
 
       <section id="adStructuredFields" class="structured-fields-card" hidden>
         <div class="structured-fields-heading">
@@ -727,41 +763,36 @@
         <div id="sellerTrustCard" class="seller-trust-card" aria-live="polite"></div>
       </div>
 
-      <section id="sellerReviewComposer" class="seller-review-composer" hidden>
-        <h3>Оценить продавца</h3>
-        <div class="seller-review-fields">
-          <label>
-            <span>Оценка</span>
-            <select id="sellerReviewRating">
-              <option value="5">5 — Отлично</option>
-              <option value="4">4 — Хорошо</option>
-              <option value="3">3 — Нормально</option>
-              <option value="2">2 — Плохо</option>
-              <option value="1">1 — Очень плохо</option>
-            </select>
-          </label>
-          <label>
-            <span>Комментарий <small>необязательно</small></span>
-            <textarea id="sellerReviewComment" maxlength="800" placeholder="Расскажите, как прошла сделка"></textarea>
-          </label>
-          <button id="submitSellerReviewButton" class="primary" type="button">Сохранить оценку</button>
-        </div>
+      <div class="seller-profile-tabs" role="tablist" aria-label="Разделы профиля продавца">
+        <button id="sellerTabActive" class="active" type="button" role="tab" aria-selected="true" onclick="setSellerProfileTab('active')">Объявления <b id="sellerActiveTabCount">0</b></button>
+        <button id="sellerTabSold" type="button" role="tab" aria-selected="false" onclick="setSellerProfileTab('sold')">Продано <b id="sellerSoldTabCount">0</b></button>
+        <button id="sellerTabReviews" type="button" role="tab" aria-selected="false" onclick="setSellerProfileTab('reviews')">Отзывы <b id="sellerReviewTabCount">0</b></button>
+      </div>
+
+      <section id="sellerActivePanel" class="seller-tab-panel">
+        <div id="sellerProducts" class="product-list"></div>
+        <button id="sellerActiveLoadMore" class="catalog-load-more" type="button" onclick="loadMoreSellerProfileTab('active')" hidden>Показать ещё</button>
       </section>
 
-      <section class="seller-reviews-section">
-        <div class="related-heading">
-          <h3>Отзывы</h3>
-          <small id="sellerReviewsCount">0</small>
-        </div>
-        <div id="sellerReviewsList" class="seller-reviews-list"></div>
-      </section>
-
-      <h3>Активные товары</h3>
-      <div id="sellerProducts" class="product-list"></div>
-
-      <section id="sellerSoldSection" class="seller-sold-section" hidden>
-        <h3>Проданные товары</h3>
+      <section id="sellerSoldPanel" class="seller-tab-panel" hidden>
         <div id="sellerSoldProducts" class="seller-sold-products"></div>
+        <button id="sellerSoldLoadMore" class="catalog-load-more" type="button" onclick="loadMoreSellerProfileTab('sold')" hidden>Показать ещё</button>
+      </section>
+
+      <section id="sellerReviewsPanel" class="seller-tab-panel" hidden>
+        <section id="sellerReviewComposer" class="seller-review-composer" hidden>
+          <h3>Оценить продавца</h3>
+          <div class="seller-review-fields">
+            <label><span>Оценка</span><select id="sellerReviewRating">
+              <option value="5">5 — Отлично</option><option value="4">4 — Хорошо</option><option value="3">3 — Нормально</option><option value="2">2 — Плохо</option><option value="1">1 — Очень плохо</option>
+            </select></label>
+            <label><span>Комментарий <small>необязательно</small></span><textarea id="sellerReviewComment" maxlength="800" placeholder="Расскажите, как прошла сделка"></textarea></label>
+            <button id="submitSellerReviewButton" class="primary" type="button">Сохранить оценку</button>
+          </div>
+        </section>
+        <div class="related-heading"><h3>Отзывы</h3><small id="sellerReviewsCount">0</small></div>
+        <div id="sellerReviewsList" class="seller-reviews-list"></div>
+        <button id="sellerReviewsLoadMore" class="catalog-load-more" type="button" onclick="loadMoreSellerProfileTab('reviews')" hidden>Показать ещё</button>
       </section>
     </section>
 
@@ -835,6 +866,7 @@
       <button data-admin-tab="users" onclick="loadAdminUsers()" type="button">👥 Пользователи</button>
       <button data-admin-tab="logs" onclick="loadAdminLogs()" type="button">📋 Журнал</button>
       <button data-admin-tab="growth" onclick="loadAdminGrowth()" type="button">📈 Аналитика</button>
+      <button data-admin-tab="observability" onclick="loadAdminObservability()" type="button">⚠ Ошибки</button>
     </div>
   </div>
 
@@ -1054,6 +1086,6 @@
   </div>
   <div id="swipeBackIndicator" class="swipe-back-indicator" aria-hidden="true">←</div>
 
-  <script src="script.js?v=1.19.3&hotfix=1.19.6&release=1.20.0"></script>
+  <script src="script.js?v=1.19.3&hotfix=1.19.6&release=1.21.0"></script>
 </body>
 </html>
