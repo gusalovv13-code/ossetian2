@@ -2902,6 +2902,7 @@ async function initDb(db = pool) {
   // Уникальный индекс здесь намеренно не создаём: recordLegalAcceptance()
   // использует UPDATE + conditional INSERT и не зависит от ON CONFLICT.
   const legalCompatibilityMigrations = [
+    `ALTER TABLE legal_acceptances ADD COLUMN IF NOT EXISTS document_key TEXT;`,
     `ALTER TABLE legal_acceptances ADD COLUMN IF NOT EXISTS document_version TEXT DEFAULT '1.0';`,
     `ALTER TABLE legal_acceptances ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;`,
     `ALTER TABLE legal_acceptances ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ DEFAULT NOW();`,
@@ -3921,30 +3922,125 @@ app.patch("/api/me/profile", requireTelegramAuth, syncTelegramUser, async (req, 
 
 
 
+async function resolveLegalAcceptanceStorage(database) {
+  const readColumns = async (tableName) => {
+    const result = await database.query(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = ANY (current_schemas(false))
+        AND table_name = $1
+    `, [tableName]);
+    return new Set(result.rows.map(row => String(row.column_name || "")));
+  };
+
+  let columns = await readColumns("legal_acceptances");
+  const requiredColumns = ["user_id", "document_key", "document_version", "metadata", "accepted_at"];
+
+  if (!requiredColumns.every(column => columns.has(column))) {
+    const repairMigrations = [
+      `ALTER TABLE legal_acceptances ADD COLUMN IF NOT EXISTS document_key TEXT;`,
+      `ALTER TABLE legal_acceptances ADD COLUMN IF NOT EXISTS document_version TEXT DEFAULT '1.0';`,
+      `ALTER TABLE legal_acceptances ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;`,
+      `ALTER TABLE legal_acceptances ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ DEFAULT NOW();`
+    ];
+    for (const migrationSql of repairMigrations) {
+      try {
+        await database.query(migrationSql);
+      } catch (error) {
+        if (isRetryableDatabaseError(error)) throw error;
+        console.warn(
+          `Runtime legal_acceptances repair skipped [${getDatabaseErrorCode(error) || "no-code"}]:`,
+          error?.message || error
+        );
+      }
+    }
+    columns = await readColumns("legal_acceptances");
+  }
+
+  if (requiredColumns.every(column => columns.has(column))) {
+    return { tableName: "legal_acceptances", columns };
+  }
+
+  // Последний безопасный fallback для production-БД со старой несовместимой
+  // таблицей legal_acceptances. Новая таблица не изменяет legacy-данные и
+  // позволяет записать согласие, не блокируя публикацию объявления.
+  await database.query(`
+    CREATE TABLE IF NOT EXISTS legal_acceptances_v2 (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      document_key TEXT NOT NULL,
+      document_version TEXT NOT NULL DEFAULT '1.0',
+      metadata JSONB DEFAULT '{}'::jsonb,
+      accepted_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  const fallbackColumns = await readColumns("legal_acceptances_v2");
+  return { tableName: "legal_acceptances_v2", columns: fallbackColumns };
+}
+
 async function recordLegalAcceptance(database, userId, documentKey, metadata = {}) {
   const normalizedUserId = String(userId);
   const normalizedDocumentKey = String(documentKey);
   const metadataJson = JSON.stringify(metadata || {});
+  const { tableName, columns } = await resolveLegalAcceptanceStorage(database);
 
-  // UPDATE + conditional INSERT работает и на старых БД, где уникальное
-  // ограничение legal_acceptances ещё не было создано. Это не даёт публикации
-  // объявления падать с SQLSTATE 42P10 во время сохранения согласий.
-  const updated = await database.query(`
-    UPDATE legal_acceptances
-    SET metadata = $4::jsonb, accepted_at = NOW()
-    WHERE user_id = $1 AND document_key = $2 AND document_version = $3
-  `, [normalizedUserId, normalizedDocumentKey, LEGAL_DOCUMENT_VERSION, metadataJson]);
+  if (!columns.has("user_id") || !columns.has("document_key")) {
+    throw Object.assign(new Error("Legal acceptance storage is incompatible"), { code: "LEGAL_SCHEMA_INCOMPATIBLE" });
+  }
 
-  if (updated.rowCount > 0) return;
+  const versionColumn = columns.has("document_version");
+  const metadataColumn = columns.has("metadata");
+  const acceptedAtColumn = columns.has("accepted_at");
 
-  await database.query(`
-    INSERT INTO legal_acceptances (id, user_id, document_key, document_version, metadata)
-    SELECT $1, $2, $3, $4, $5::jsonb
-    WHERE NOT EXISTS (
-      SELECT 1 FROM legal_acceptances
-      WHERE user_id = $2 AND document_key = $3 AND document_version = $4
-    )
-  `, [randomUUID(), normalizedUserId, normalizedDocumentKey, LEGAL_DOCUMENT_VERSION, metadataJson]);
+  const whereParts = ["user_id = $1", "document_key = $2"];
+  const whereValues = [normalizedUserId, normalizedDocumentKey];
+  if (versionColumn) {
+    whereValues.push(LEGAL_DOCUMENT_VERSION);
+    whereParts.push(`document_version = $${whereValues.length}`);
+  }
+
+  const existing = await database.query(
+    `SELECT 1 FROM ${tableName} WHERE ${whereParts.join(" AND ")} LIMIT 1`,
+    whereValues
+  );
+
+  if (existing.rows.length > 0) {
+    const setParts = [];
+    const updateValues = [...whereValues];
+    if (metadataColumn) {
+      updateValues.push(metadataJson);
+      setParts.push(`metadata = $${updateValues.length}::jsonb`);
+    }
+    if (acceptedAtColumn) setParts.push("accepted_at = NOW()");
+    if (setParts.length > 0) {
+      await database.query(
+        `UPDATE ${tableName} SET ${setParts.join(", ")} WHERE ${whereParts.join(" AND ")}`,
+        updateValues
+      );
+    }
+    return;
+  }
+
+  const insertColumns = [];
+  const insertValues = [];
+  const insertParams = [];
+  const pushInsert = (column, value, cast = "") => {
+    if (!columns.has(column)) return;
+    insertColumns.push(column);
+    insertValues.push(value);
+    insertParams.push(`$${insertValues.length}${cast}`);
+  };
+
+  pushInsert("id", randomUUID());
+  pushInsert("user_id", normalizedUserId);
+  pushInsert("document_key", normalizedDocumentKey);
+  pushInsert("document_version", LEGAL_DOCUMENT_VERSION);
+  pushInsert("metadata", metadataJson, "::jsonb");
+
+  await database.query(
+    `INSERT INTO ${tableName} (${insertColumns.join(", ")}) VALUES (${insertParams.join(", ")})`,
+    insertValues
+  );
 }
 
 async function recordCoreLegalAcceptancesFromRequest(database, userId, body = {}) {

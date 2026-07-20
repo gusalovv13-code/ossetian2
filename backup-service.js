@@ -16,6 +16,7 @@ export const DEFAULT_BACKUP_TABLES = Object.freeze([
   "seller_reviews",
   "saved_searches",
   "legal_acceptances",
+  "legal_acceptances_v2",
   "product_feature_requests",
   "payment_orders",
   "reports",
