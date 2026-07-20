@@ -2896,25 +2896,34 @@ async function initDb(db = pool) {
       UNIQUE(user_id, document_key, document_version)
     );
   `);
-  // Совместимость со старыми production-БД: CREATE TABLE IF NOT EXISTS
-  // не добавляет недостающие колонки и ограничения в уже существующую таблицу.
-  await db.query(`ALTER TABLE legal_acceptances ADD COLUMN IF NOT EXISTS document_version TEXT DEFAULT '1.0';`);
-  await db.query(`ALTER TABLE legal_acceptances ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;`);
-  await db.query(`ALTER TABLE legal_acceptances ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ DEFAULT NOW();`);
-  await db.query(`UPDATE legal_acceptances SET document_version = '1.0' WHERE document_version IS NULL OR document_version = '';`);
-  await db.query(`
-    DELETE FROM legal_acceptances older
-    USING legal_acceptances newer
-    WHERE older.ctid < newer.ctid
-      AND older.user_id = newer.user_id
-      AND older.document_key = newer.document_key
-      AND older.document_version = newer.document_version;
-  `);
-  await db.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_legal_acceptances_unique
-    ON legal_acceptances(user_id, document_key, document_version);
-  `);
-  await db.query(`CREATE INDEX IF NOT EXISTS idx_legal_acceptances_user ON legal_acceptances(user_id, accepted_at DESC);`);
+  // Совместимость со старыми production-БД. Эти изменения вспомогательные и
+  // не должны блокировать весь каталог, если старая таблица занята другим
+  // процессом или конкретная миграция получает lock timeout.
+  // Уникальный индекс здесь намеренно не создаём: recordLegalAcceptance()
+  // использует UPDATE + conditional INSERT и не зависит от ON CONFLICT.
+  const legalCompatibilityMigrations = [
+    `ALTER TABLE legal_acceptances ADD COLUMN IF NOT EXISTS document_version TEXT DEFAULT '1.0';`,
+    `ALTER TABLE legal_acceptances ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;`,
+    `ALTER TABLE legal_acceptances ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ DEFAULT NOW();`,
+    `UPDATE legal_acceptances SET document_version = '1.0' WHERE document_version IS NULL OR document_version = '';`,
+    // Индекс полезен для новых/чистых БД, но его ошибка (например, из-за
+    // legacy-дубликатов) теперь лишь логируется и не выключает весь API.
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_legal_acceptances_unique ON legal_acceptances(user_id, document_key, document_version);`,
+    `CREATE INDEX IF NOT EXISTS idx_legal_acceptances_user ON legal_acceptances(user_id, accepted_at DESC);`
+  ];
+
+  for (const migrationSql of legalCompatibilityMigrations) {
+    try {
+      await db.query(migrationSql);
+    } catch (error) {
+      // Настоящий обрыв соединения должен по-прежнему запускать reconnect.
+      if (isRetryableDatabaseError(error)) throw error;
+      console.warn(
+        `Optional legal_acceptances migration skipped [${getDatabaseErrorCode(error) || 'no-code'}]:`,
+        error?.message || error
+      );
+    }
+  }
 
   // v1.19.2: отдельная верификация бизнеса удалена; старые таблицы в существующей БД не используются.
 
